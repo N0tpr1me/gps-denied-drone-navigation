@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ROS / colcon / catkin
+install/
+log/
+devel/
+logs/
+.catkin_workspace
+*.bag
+*.db3
+*.mcap
+
+# PX4 / Gazebo build outputs and sim logs
+px4_build/
+PX4-Autopilot/build/
+*.ulg
+*.tlog
+*.bin
+sim_logs/
+gazebo_logs/
+.gazebo/
+
+# RL training outputs and model checkpoints
+runs/
+outputs/
+checkpoints/
+wandb/
+mlruns/
+tensorboard/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.safetensors
+
+# Data
+data/raw/
+datasets/
+
+# Secrets and env
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
