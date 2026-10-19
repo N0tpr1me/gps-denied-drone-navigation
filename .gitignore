@@ -48,6 +48,7 @@ tensorboard/
 *.pth
 *.ckpt
 *.onnx
+!viz/models/*.onnx
 *.h5
 *.safetensors
 

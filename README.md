@@ -12,4 +12,4 @@ Focus: civilian inspection and logistics.
 
 ## Status
 
-Early setup. Structure, dependencies and run instructions will be added as the project takes shape.
+Early setup. See `CLAUDE.md` for the working rules and `docs/decisions.md` for open choices.
