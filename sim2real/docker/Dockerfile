@@ -29,13 +29,17 @@ WORKDIR ${PX4_DIR}
 RUN bash Tools/setup/ubuntu.sh --no-nuttx \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
+# Structure Hold module (sim2real/px4/): wired into the tree before the build.
+COPY px4/ /opt/structure_hold/px4/
+RUN /opt/structure_hold/px4/install.sh "${PX4_DIR}"
+
 RUN make px4_sitl_default \
     && rm -rf /root/.ccache
 
 RUN python3 -m pip install --break-system-packages "mavsdk==${MAVSDK_VERSION}" \
     && rm -rf /root/.cache/pip
 
-COPY entrypoint.sh hover_test.py /opt/sitl/
+COPY docker/entrypoint.sh docker/hover_test.py /opt/sitl/
 RUN chmod +x /opt/sitl/entrypoint.sh
 
 # MAVLink: 14540 offboard/API (MAVSDK), 14550 ground station.

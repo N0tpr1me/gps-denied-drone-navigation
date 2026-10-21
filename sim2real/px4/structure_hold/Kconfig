@@ -1,0 +1,6 @@
+menuconfig MODULES_STRUCTURE_HOLD
+	bool "structure_hold"
+	default n
+	---help---
+		Structure Hold flight mode: gust-robust, GPS-free hold near a structure
+		with a classical watchdog that hands back to stock PX4.

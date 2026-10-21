@@ -43,3 +43,16 @@ jobs:
               | grep -iE '^(co-authored-by:.*(claude|anthropic)|claude-session:)|generated with \[?claude code'; then
             echo "Commit messages must not carry Claude attribution (project rule)."; exit 1
           fi
+
+  px4-module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Watchdog of the Structure Hold PX4 module: plain C++, no PX4 tree needed.
+      - name: Watchdog unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog
+          ./test_watchdog
+      - name: Shell scripts parse
+        run: bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh
