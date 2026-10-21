@@ -15,7 +15,8 @@ shift || true
 
 case "${cmd}" in
     build)
-        docker build -t "${IMAGE}" "$@" "${HERE}"
+        # Context is sim2real/ so the image can pick up the PX4 module in ../px4.
+        docker build -t "${IMAGE}" -f "${HERE}/Dockerfile" "$@" "${HERE}/.."
         ;;
     sitl|shell)
         docker run --rm -it --name px4-sitl "${IMAGE}" "${cmd}" "$@"
