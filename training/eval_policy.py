@@ -5,16 +5,22 @@
 
 Inputs (``params``): ``policy`` (path to ``policy.onnx`` or ``policy.pt``, with its
 ``policy.json`` next to it; relative to the repo root), ``num_envs``, ``episodes``,
-``score_envs``, ``sim``, and ``env`` (a ``StructureHoldConfig`` mapping: evaluate on harder
-wind or worse estimates than training by changing it here). Leave ``env`` out to evaluate on
-the config the policy was trained with (read from ``policy.json``).
+``score_envs``, ``sim``, ``seeds`` (a list; each seed builds identically seeded envs for the
+policy and the PD, so both fly the same episodes: same hold points, wind, jumps and
+dropouts; defaults to the config's ``seed``) and ``env`` (a ``StructureHoldConfig``
+mapping: evaluate on harder wind or worse estimates than training by changing it here).
+Leave ``env`` out to evaluate on the config the policy was trained with (read from
+``policy.json``). Use ``eval.env`` from the training config to score on the standard
+condition rather than the hardened training one.
 
-Outputs: ``metrics.jsonl`` with one line per scored episode of each controller,
-``summary.json`` with both headlines and the wording for ``experiments/LOG.md``.
+Outputs: ``metrics.jsonl`` with one line per scored episode of each controller and one
+``summary`` line per seed, ``summary.json`` with the pooled headlines over all seeds (crash
+rates with their binomial standard error) and the wording for ``experiments/LOG.md``.
 """
 
 from __future__ import annotations
 
+import math
 import sys
 import traceback
 from pathlib import Path
@@ -30,6 +36,36 @@ from training.runlib import RunWriter, entry_args, load_yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def pool(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pool per-seed headlines: rates weighted by episodes ended, means by episodes scored,
+    worst values as the max, plus the binomial standard error of the crash rate."""
+    ended = sum(r["episodes_ended"] for r in results)
+    scored = sum(r["episodes_scored"] for r in results)
+
+    def rate(key: str) -> float:
+        return (sum(r[key] * r["episodes_ended"] for r in results) / ended) if ended else math.nan
+
+    def mean(key: str) -> float:
+        vals = [(r[key], r["episodes_scored"]) for r in results
+                if r["episodes_scored"] and math.isfinite(r[key])]
+        n = sum(w for _, w in vals)
+        return sum(v * w for v, w in vals) / n if n else math.nan
+
+    crash = rate("crash_rate")
+    return {
+        "episodes_ended": ended,
+        "episodes_scored": scored,
+        "crash_rate": crash,
+        "crash_rate_se": math.sqrt(crash * (1 - crash) / ended) if ended else math.nan,
+        "contact_rate": rate("contact_rate"),
+        "p95_m_mean": mean("p95_m_mean"),
+        "rms_m_mean": mean("rms_m_mean"),
+        "p95_m_worst": max((r["p95_m_worst"] for r in results), default=math.nan),
+        "worst_toward_surface_m": max((r["worst_toward_surface_m"] for r in results),
+                                      default=math.nan),
+    }
+
+
 def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     p = cfg["params"]
     policy_path = Path(p["policy"])
@@ -38,22 +74,37 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     meta = read_metadata(policy_path)
     env_cfg = StructureHoldConfig.from_dict(p["env"] if p.get("env") else meta["env_cfg"])
     num_envs, episodes = int(p.get("num_envs", 256)), int(p.get("episodes", 1))
+    seeds = [int(s) for s in (p.get("seeds") or [cfg["seed"]])]
     print(f"eval: {policy_path.name} ({meta['input']['history']}-step history), {num_envs} envs "
-          f"x {episodes} episode(s) of {env_cfg.episode_length_s} s, device {device}", flush=True)
-    pol, base, wording = evaluate.compare(
-        env_cfg, lambda env: load_controller(policy_path, env.num_envs, device),
-        num_envs=num_envs, episodes=episodes, score_envs=int(p.get("score_envs", 32)),
-        seed=int(cfg["seed"]), device=device, sim=str(p.get("sim", "torch")),
-        on_episode=lambda name, row: writer.metric(0, controller=name, **row),
-    )
-    print(f"eval: {wording}", flush=True)
+          f"x {episodes} episode(s) of {env_cfg.episode_length_s} s, seeds {seeds}, "
+          f"device {device}", flush=True)
+    per_seed: dict[str, list[dict[str, Any]]] = {"policy": [], "baseline": []}
+    for seed in seeds:
+        pol, base, wording = evaluate.compare(
+            env_cfg, lambda env: load_controller(policy_path, env.num_envs, device),
+            num_envs=num_envs, episodes=episodes, score_envs=int(p.get("score_envs", 32)),
+            seed=seed, device=device, sim=str(p.get("sim", "torch")),
+            on_episode=lambda name, row, seed=seed: writer.metric(seed, controller=name, **row),
+        )
+        print(f"eval: seed {seed}: {wording}", flush=True)
+        for name, r in (("policy", pol), ("baseline", base)):
+            per_seed[name].append(r)
+            writer.metric(seed, summary=name, **{k: r[k] for k in evaluate.HEADLINE_KEYS},
+                          episodes_ended=r["episodes_ended"])
+    pol, base = pool(per_seed["policy"]), pool(per_seed["baseline"])
     if pol["episodes_scored"] == 0:
         raise RuntimeError("no episode finished, so nothing was scored; run longer")
+    wording = evaluate.vs_baseline(pol, base) + (
+        f"; {pol['episodes_ended']} identical episodes each over {len(seeds)} seed(s), "
+        f"crash rate s.e. {pol['crash_rate_se']:.1%} / {base['crash_rate_se']:.1%}")
+    print(f"eval: pooled: {wording}", flush=True)
+    keys = (*evaluate.HEADLINE_KEYS, "crash_rate_se", "episodes_ended")
     headline = {
         "policy": str(policy_path.relative_to(REPO_ROOT) if policy_path.is_relative_to(REPO_ROOT)
                       else policy_path),
-        **{f"policy_{k}": pol[k] for k in evaluate.HEADLINE_KEYS},
-        **{f"pd_{k}": base[k] for k in evaluate.HEADLINE_KEYS},
+        "seeds": len(seeds),
+        **{f"policy_{k}": pol[k] for k in keys},
+        **{f"pd_{k}": base[k] for k in keys},
     }
     return {"headline": headline, "vs_baseline": wording}
 
