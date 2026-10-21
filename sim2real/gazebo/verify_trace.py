@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,11 @@ COLUMNS = ("step", "t", "x", "y", "z", "vx", "vy", "vz", "wx", "wy", "wz", "shel
 
 def read_trace(path: str | Path) -> dict[str, np.ndarray]:
     """The plugin's CSV as column name -> array."""
-    data = np.genfromtxt(path, delimiter=",", names=True, dtype=np.float64)
+    # invalid_raise=False drops a final row cut short if Gazebo was killed mid-write.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data = np.genfromtxt(path, delimiter=",", names=True, dtype=np.float64,
+                             invalid_raise=False)
     if data.size == 0:
         raise ValueError(f"{path}: empty trace")
     data = np.atleast_1d(data)

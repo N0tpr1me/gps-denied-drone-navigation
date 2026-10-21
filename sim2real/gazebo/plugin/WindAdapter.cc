@@ -150,6 +150,9 @@ public:
                   << pos[2] << ',' << vel[0] << ',' << vel[1] << ',' << vel[2] << ','
                   << wind[0] << ',' << wind[1] << ',' << wind[2] << ',' << shelter << ','
                   << force[0] << ',' << force[1] << ',' << force[2] << '\n';
+      // Flush each row: the harness stops Gazebo with a signal, so a buffered tail would
+      // be lost and the last line cut mid-number.
+      this->trace.flush();
     }
     ++this->step;
   }
