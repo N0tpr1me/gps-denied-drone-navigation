@@ -133,6 +133,22 @@ class StructureHoldEnv:
         p = self.sim.state.pos if pos is None else pos
         return (self.wall_point - p) @ self.wall_normal
 
+    # ------------------------------------------------------------ curriculum hooks
+
+    @property
+    def dropout_max_s(self) -> float:
+        """The longest estimate dropout the corruptor currently draws, in seconds."""
+        return self.estimator.dropout_steps_max * self.dt
+
+    def set_dropout_max_s(self, seconds: float) -> float:
+        """Cap estimate dropouts at ``seconds`` from the next step on (a training curriculum
+        hook; dropouts already running keep their length). The cap is rounded down to whole
+        steps and never below ``cfg.estimate.dropout_min_s``. Returns the cap applied."""
+        lo = self.estimator.dropout_steps_min
+        hi = max(lo, math.floor(float(seconds) / self.dt + 1e-9))
+        self.estimator.dropout_steps_max = hi
+        return hi * self.dt
+
     def gust_windows(self, env_id: int) -> list[tuple[float, float]]:
         """(start, end) in episode seconds of each gust of that env's current episode."""
         assert self.wind is not None

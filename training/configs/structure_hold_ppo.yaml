@@ -19,6 +19,12 @@ params:
     estimate:
       jump_rate_hz: 0.1
       dropout_rate_hz: 0.1
+  curriculum:
+    # Dropouts are capped at 0.5 s when training starts and the cap grows linearly to the
+    # env's 3 s over the first 60% of the iterations (long dropouts are what still crashes
+    # policy v1). null turns the curriculum off.
+    dropout_max_s: 0.5
+    fraction: 0.6
   eval:
     num_envs: 256
     episodes: 1

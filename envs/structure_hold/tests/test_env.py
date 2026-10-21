@@ -175,3 +175,29 @@ def test_tilt_beyond_the_free_angle_costs_reward():
     assert abs(level - inside) < 0.2  # no tilt term inside the free cone (only drift)
     expected = cfg.reward.tilt * (math.cos(math.radians(45)) - math.cos(math.radians(60)))
     assert inside - beyond > 0.8 * expected
+
+
+def test_dropout_cap_limits_how_long_the_estimate_stays_stale():
+    cfg = StructureHoldConfig(
+        disturbance=still_air().disturbance,
+        estimate=EstimateCorruptionConfig(dropout_rate_hz=5.0, dropout_min_s=0.2,
+                                          dropout_max_s=3.0, jump_rate_hz=0.0),
+        start_offset_std_m=0.0, start_yaw_std_rad=0.0, episode_length_s=6.0,
+    )
+
+    def longest_dropout_steps(cap: float | None) -> int:
+        env = StructureHoldEnv(cfg, num_envs=64, seed=3)
+        if cap is not None:
+            applied = env.set_dropout_max_s(cap)
+            assert applied == pytest.approx(max(cap, cfg.estimate.dropout_min_s))
+            assert env.dropout_max_s == pytest.approx(applied)
+        longest = 0
+        for _ in range(env.max_episode_length - 1):
+            env.step(hover_action(env))
+            # steps still to go right after a dropout of L steps starts: L - 1
+            longest = max(longest, int(env.estimator.dropout_left.max()) + 1)
+        return longest
+
+    assert longest_dropout_steps(None) > 100  # up to 3 s with the config as is
+    assert 20 <= longest_dropout_steps(0.5) <= 50  # capped at 0.5 s
+    assert longest_dropout_steps(0.05) == 20  # never below dropout_min_s (0.2 s = 20 steps)
