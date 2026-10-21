@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 to 3.12: the core must import in Isaac Lab, the SITL image and the Mac.
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e .[dev]
+      - run: ruff check .
+      - run: pytest
+      - name: Launch smoke run on CPU
+        run: python -m training.launch --config training/configs/selfcheck.yaml --smoke --device cpu
+
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No tracked file over 50 MB
+        run: |
+          big=$(git ls-files -z | xargs -0 -r du -k | awk '$1 > 51200 {print $2}')
+          if [ -n "$big" ]; then echo "Files over 50 MB:"; echo "$big"; exit 1; fi
+      - name: No Claude attribution in commit messages
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          if git log --format=%B "origin/${{ github.base_ref }}..HEAD" \
+              | grep -iE '^(co-authored-by:.*(claude|anthropic)|claude-session:)|generated with \[?claude code'; then
+            echo "Commit messages must not carry Claude attribution (project rule)."; exit 1
+          fi

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dronenav"
+version = "0.0.1"
+description = "Structure Hold: gust-robust, GPS-free station keeping near structures for PX4 quadrotors"
+requires-python = ">=3.10"
+# Core code depends on NumPy and PyYAML only, so it imports inside Isaac Lab's
+# Python, the PX4 SITL image's system Python, and the dronenav conda env.
+dependencies = [
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Batched simulator and training. Not needed by the SITL harness.
+torch = ["torch>=2.2"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["envs*", "training*", "eval*"]
+
+[tool.pytest.ini_options]
+testpaths = ["envs", "training", "eval"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["runs", "outputs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
