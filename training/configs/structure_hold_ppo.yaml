@@ -1,0 +1,33 @@
+# Train a Structure Hold policy with rsl_rl PPO on the mock simulator and score it against
+# the cascaded PD yardstick. Defaults for every key live in training/train_ppo.py.
+#   python -m training.launch --config training/configs/structure_hold_ppo.yaml --smoke --device cpu
+name: structure_hold_ppo
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.5
+gpus: 1
+params:
+  num_envs: 1024
+  iterations: 1500
+  num_steps_per_env: 48
+  history: 3
+  sim: torch
+  env: {}            # training wind and estimate corruption are the env defaults
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+# Overrides applied with --smoke: a handful of PPO iterations on a few envs, a 2 s eval; done
+# in well under a minute on CPU. (launch.py's override is a shallow update, so nested blocks
+# are given whole.)
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    episode_length_s: 2.0
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4

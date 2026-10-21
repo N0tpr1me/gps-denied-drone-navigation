@@ -52,6 +52,8 @@ tensorboard/
 *.safetensors
 # Small exported policies for the browser demo (keep each under 50 MB)
 !viz/models/*.onnx
+# Small released Structure Hold policies with their policy.json (tens of KB each)
+!training/policies/*.onnx
 
 # Data
 data/raw/

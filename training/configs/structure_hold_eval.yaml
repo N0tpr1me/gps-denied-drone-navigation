@@ -1,0 +1,20 @@
+# Score an exported policy against the cascaded PD yardstick.
+#   python -m training.launch --config training/configs/structure_hold_eval.yaml --smoke --device cpu
+# Point `policy` at a run's policy.onnx (or policy.pt); the policy.json next to it supplies the
+# training env config unless `env` is given here.
+name: structure_hold_eval
+entrypoint: training.eval_policy
+seed: 1
+expected_hours: 0.05
+gpus: 1
+params:
+  policy: training/policies/structure_hold_v0.onnx
+  num_envs: 256
+  episodes: 1
+  score_envs: 32
+  sim: torch
+smoke:
+  num_envs: 8
+  score_envs: 4
+  env:
+    episode_length_s: 2.0

@@ -16,7 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # Batched simulator and training. Not needed by the SITL harness.
-torch = ["torch>=2.2"]
+# rsl_rl is pinned: its VecEnv and config layout changed between majors (docs/decisions.md).
+# onnxruntime scores the exported policy.onnx, the file the PX4 module will run.
+torch = ["torch>=2.6", "rsl-rl-lib==5.5.1", "onnx>=1.16", "onnxruntime>=1.17"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
