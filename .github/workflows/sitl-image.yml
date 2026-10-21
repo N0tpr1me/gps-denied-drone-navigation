@@ -1,0 +1,29 @@
+name: sitl-image
+
+# Builds the PX4 SITL image on amd64 and flies the hover test. Slow (PX4 compile), so it
+# runs only when the image changes.
+on:
+  pull_request:
+    paths: ["sim2real/docker/**", ".github/workflows/sitl-image.yml"]
+  push:
+    branches: [main]
+    paths: ["sim2real/docker/**", ".github/workflows/sitl-image.yml"]
+  workflow_dispatch:
+
+jobs:
+  build-and-hover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: sim2real/docker/run.sh build
+      - name: Hover test
+        run: sim2real/docker/run.sh hover-test
+      - name: Upload run folder
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-hover-run
+          path: runs/
+          if-no-files-found: warn
