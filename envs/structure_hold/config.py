@@ -19,13 +19,24 @@ def _check_keys(cls: type, d: dict[str, Any], what: str) -> None:
 
 @dataclass(frozen=True)
 class RewardWeights:
-    alive: float = 1.0  # per step, so finishing the episode is worth something
-    pos: float = 1.0  # times true position error (m)
-    toward_wall: float = 1.0  # extra, times the error component toward the wall (m, >= 0)
-    vel: float = 0.05  # times true speed (m/s)
-    ang_vel: float = 0.01  # times body rate norm (rad/s)
+    """Per-step reward = alive - bounded penalties, minus ``crash`` once on a crash.
+
+    Every shaping term is bounded so a live step is always worth more than a crash: with
+    an unbounded error penalty a drone that has drifted past about 1 m earns less per step
+    than nothing and learns to end the episode by tilting over, which is exactly what it
+    did during estimate dropouts.
+    """
+
+    alive: float = 2.0  # per step; above the worst-case sum of the bounded penalties
+    pos: float = 1.5  # times 1 - exp(-error / pos_scale_m), so at most ``pos``
+    pos_scale_m: float = 1.0  # error at which the position penalty reaches 63 % of ``pos``
+    toward_wall: float = 0.5  # extra, times the error toward the wall clipped at 1 m
+    vel: float = 0.05  # times true speed clipped at 5 m/s
+    ang_vel: float = 0.01  # times body rate norm clipped at 10 rad/s
     action: float = 0.02  # times squared normalised rate command
     action_rate: float = 0.05  # times squared change in normalised action between steps
+    tilt: float = 2.0  # times (cos(tilt_free) - cos(tilt)) when tilted beyond tilt_free_deg
+    tilt_free_deg: float = 45.0  # no tilt penalty up to here (fighting 12 m/s wind needs ~30)
     crash: float = 20.0  # once, on contact, ground, tilt or leaving the box
 
     @classmethod

@@ -151,3 +151,27 @@ def test_baseline_holds_in_still_air_and_mild_wind():
             worst = max(worst, float((env.state.pos - env.hold_point).norm(dim=-1).max()))
     assert env.counts["timeout"] == 16 and env.counts["contact"] == 0
     assert worst < 0.5, f"baseline drifted {worst:.2f} m"
+
+
+def test_tilt_beyond_the_free_angle_costs_reward():
+    import math
+
+    from envs.sims import QuadState
+
+    cfg = StructureHoldConfig(disturbance=DisturbanceConfig(mean_speed=(0.0, 0.0), num_gusts=0,
+                                                            turb_sigma=(0.0, 0.0)),
+                              estimate=EstimateCorruptionConfig.clean())
+    env = StructureHoldEnv(cfg, num_envs=3, seed=0)
+    st = env.sim.state
+    quat = torch.zeros(3, 4)
+    for i, deg in enumerate((0.0, 30.0, 60.0)):  # level, inside the free cone, beyond it
+        half = math.radians(deg) / 2
+        quat[i] = torch.tensor([math.cos(half), 0.0, math.sin(half), 0.0])
+    env.sim.reset(torch.arange(3), QuadState(pos=env.hold_point.clone(), quat=quat,
+                                             vel=st.vel.clone(), ang_vel=st.ang_vel.clone()))
+    _, reward, dones, _ = env.step(hover_action(env))
+    assert not dones.any()
+    level, inside, beyond = reward.tolist()
+    assert abs(level - inside) < 0.2  # no tilt term inside the free cone (only drift)
+    expected = cfg.reward.tilt * (math.cos(math.radians(45)) - math.cos(math.radians(60)))
+    assert inside - beyond > 0.8 * expected

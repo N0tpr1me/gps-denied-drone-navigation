@@ -12,11 +12,23 @@ params:
   num_steps_per_env: 48
   history: 3
   sim: torch
-  env: {}            # training wind and estimate corruption are the env defaults
+  env:
+    # Train on 5x more frequent estimate jumps and dropouts than the standard condition so
+    # the policy meets enough of them; the wind is the default. Scoring uses the standard
+    # condition (eval.env below), the same the PD yardstick and every LOG.md line use.
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
   eval:
     num_envs: 256
     episodes: 1
     score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250   # score checkpoints 0, 250, ... and the last one; export the safest
+    select_envs: 128
 # Overrides applied with --smoke: a handful of PPO iterations on a few envs, a 2 s eval; done
 # in well under a minute on CPU. (launch.py's override is a shallow update, so nested blocks
 # are given whole.)
@@ -31,3 +43,6 @@ smoke:
     num_envs: 8
     episodes: 1
     score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

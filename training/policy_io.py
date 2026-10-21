@@ -145,11 +145,13 @@ class _TorchActor:
         return self.actor(td)
 
 
-def load_controller(policy_path: Path, num_envs: int, device: str = "cpu") -> Controller:
+def load_controller(policy_path: Path, num_envs: int, device: str = "cpu",
+                    meta: dict[str, Any] | None = None) -> Controller:
     """A deterministic ``obs -> actions`` callable on the env's raw observation, from a
-    ``.onnx`` (run with onnxruntime, what the module ships) or ``.pt`` (rsl_rl checkpoint)."""
+    ``.onnx`` (run with onnxruntime, what the module ships) or ``.pt`` (rsl_rl checkpoint).
+    ``meta`` is the ``policy.json`` content; by default it is read from next to the file."""
     policy_path = Path(policy_path)
-    meta = read_metadata(policy_path)
+    meta = read_metadata(policy_path) if meta is None else meta
     history = int(meta["input"]["history"])
     actor: Any
     if policy_path.suffix == ".onnx":

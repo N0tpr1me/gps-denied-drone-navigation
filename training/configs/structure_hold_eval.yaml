@@ -8,7 +8,7 @@ seed: 1
 expected_hours: 0.05
 gpus: 1
 params:
-  policy: training/policies/structure_hold_v0.onnx
+  policy: training/policies/structure_hold_v1.onnx
   num_envs: 256
   episodes: 1
   score_envs: 32
