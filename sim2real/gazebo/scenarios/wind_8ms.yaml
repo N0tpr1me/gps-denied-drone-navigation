@@ -1,0 +1,15 @@
+# 8 m/s mean wind blowing into the wall, with two gusts and moderate turbulence.
+name: wind_8ms
+seed: 1
+spawn: {x: -2.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0
+disturbance:
+  mean_speed: 8.0
+  num_gusts: 2
+  gust_start: [15.0, 40.0]
+  gust_duration: [1.0, 2.0]
+  gust_speed: [2.0, 4.0]
+  turb_sigma: 1.0
+  turb_tau: 1.0
+hover: {altitude: 2.5, hover_s: 30.0}

@@ -15,7 +15,7 @@ shift || true
 
 case "${cmd}" in
     build)
-        # Context is sim2real/ so the image can pick up the PX4 module in ../px4.
+        # Context is sim2real/ so the image picks up the PX4 module (../px4) and the Gazebo world and wind plugin (../gazebo).
         docker build -t "${IMAGE}" -f "${HERE}/Dockerfile" "$@" "${HERE}/.."
         ;;
     sitl|shell)

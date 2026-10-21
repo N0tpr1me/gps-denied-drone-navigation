@@ -29,7 +29,10 @@ ulog = ["pyulog>=1.0"]
 include = ["envs*", "training*", "eval*"]
 
 [tool.pytest.ini_options]
-testpaths = ["envs", "training", "eval"]
+# sim2real is a namespace package (no __init__.py): pythonpath makes it importable. Only
+# sim2real/gazebo holds pytest modules; docker/ and px4/ hold flight scripts (*_test.py).
+testpaths = ["envs", "training", "eval", "sim2real/gazebo"]
+pythonpath = ["."]
 addopts = "-q"
 
 [tool.ruff]

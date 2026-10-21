@@ -1,0 +1,11 @@
+# Still air: the adapter runs but every applied force is exactly zero (still-air drag is
+# subtracted). The control for the wind scenarios.
+name: calm_0ms
+seed: 1
+spawn: {x: -2.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 2 m from the wall (x = 0), nose toward it
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+disturbance:
+  mean_speed: 0.0
+  num_gusts: 0
+  turb_sigma: 0.0
+hover: {altitude: 2.5, hover_s: 30.0}
