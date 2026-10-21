@@ -20,7 +20,10 @@ torch = ["torch>=2.2"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "pyulog>=1.0",
 ]
+# Reading PX4 .ulg flight logs (eval/ulog.py). Pure Python.
+ulog = ["pyulog>=1.0"]
 
 [tool.setuptools.packages.find]
 include = ["envs*", "training*", "eval*"]
