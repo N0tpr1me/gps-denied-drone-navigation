@@ -100,6 +100,7 @@ class StructureHoldEnv:
         self.wall_normal = torch.tensor(WALL_NORMAL_TOWARD, dtype=dt, device=dev)
         self.wall_point = torch.tensor(WALL_POINT, dtype=dt, device=dev)
         self.cos_max_tilt = math.cos(math.radians(cfg.max_tilt_deg))
+        self.cos_tilt_free = math.cos(math.radians(cfg.reward.tilt_free_deg))
 
         self.hold_point = torch.zeros(n, 3, dtype=dt, device=dev)
         self.episode_step = torch.zeros(n, dtype=torch.long, device=dev)
@@ -250,16 +251,21 @@ class StructureHoldEnv:
 
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward
-        toward = (err @ self.wall_normal).clamp(min=0.0)
+        toward = (err @ self.wall_normal).clamp(0.0, 1.0)
         d_action = actions - self.last_action
+        # Tilting past tilt_free_deg costs more the further it goes, so the policy learns to
+        # stay level when its estimate is stale or jumps instead of flipping to chase it.
+        over_tilt = (self.cos_tilt_free + gravity_body[:, 2]).clamp(min=0.0)
+        # Shaping terms are bounded (see RewardWeights) so living always beats crashing.
         reward = (
             w.alive
-            - w.pos * err.norm(dim=-1)
+            - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
             - w.toward_wall * toward
-            - w.vel * state.vel.norm(dim=-1)
-            - w.ang_vel * state.ang_vel.norm(dim=-1)
+            - w.vel * state.vel.norm(dim=-1).clamp(max=5.0)
+            - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
+            - w.tilt * over_tilt
             - w.crash * crash.to(self.dtype)
         )
         self.reward_buf = torch.nan_to_num(reward, nan=-w.crash)

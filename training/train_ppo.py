@@ -6,8 +6,9 @@ Inputs (the config's ``params``): ``num_envs``, ``iterations``, ``num_steps_per_
 ``history`` (observations stacked for the policy), ``sim`` (``torch`` or ``isaac``), ``env``
 (a ``StructureHoldConfig`` mapping), ``actor`` / ``critic`` (``hidden_dims``, ``activation``,
 ``init_std``), ``ppo`` (rsl_rl's PPO keyword arguments), ``save_interval`` and ``eval``
-(``num_envs``, ``episodes``, ``score_envs``: the post-training comparison with the PD
-yardstick on the training wind and estimate corruption).
+(``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
+the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
+harder estimate corruption than the standard condition the result is reported on).
 
 Outputs, in the run folder: ``metrics.jsonl`` (one line per PPO iteration: mean reward,
 episode length, crash rate, losses, action std, env steps per second; then one line per
@@ -62,7 +63,7 @@ DEFAULTS: dict[str, Any] = {
         "schedule": "adaptive",
         "desired_kl": 0.01,
     },
-    "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32},
+    "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {}},
 }
 
 
@@ -168,8 +169,9 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
           f"({onnx_path.stat().st_size / 1024:.0f} KB)", flush=True)
 
     e = p["eval"]
+    eval_cfg = StructureHoldConfig.from_dict(merge(p.get("env") or {}, e.get("env")))
     pol, base, wording = evaluate.compare(
-        env_cfg, lambda env: load_controller(onnx_path, env.num_envs, device),
+        eval_cfg, lambda env: load_controller(onnx_path, env.num_envs, device),
         num_envs=int(e["num_envs"]), episodes=int(e["episodes"]),
         score_envs=int(e["score_envs"]), seed=seed + 1000, device=device, sim=str(p["sim"]),
         on_episode=lambda name, row: writer.metric(int(p["iterations"]), controller=name, **row),
