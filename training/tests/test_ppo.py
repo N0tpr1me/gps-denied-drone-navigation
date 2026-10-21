@@ -173,7 +173,10 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     esummary = run_entry("training.eval_policy", ecfg, tmp_path / "eval")
     assert esummary["headline"]["policy_p95_m_mean"] > 0
     rows = [json.loads(x) for x in (tmp_path / "eval" / "metrics.jsonl").read_text().splitlines()]
-    assert {r["controller"] for r in rows} == {"policy", "baseline"}
+    assert {r["controller"] for r in rows if "controller" in r} == {"policy", "baseline"}
+    assert {r["summary"] for r in rows if "summary" in r} == {"policy", "baseline"}
+    assert esummary["headline"]["seeds"] == 2  # one summary row per seed and controller
+    assert sum("summary" in r for r in rows) == 4
 
 
 def test_eval_entrypoint_reports_a_missing_policy(tmp_path: Path):
