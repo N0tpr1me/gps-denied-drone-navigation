@@ -1,0 +1,5 @@
+# No corruption: PX4 flies on Gazebo's truth through the same vision path. The T7
+# reference run; its error is the floor every corrupted run is compared with.
+name: clean
+seed: 0
+estimate: clean

@@ -1,0 +1,5 @@
+# The envs.estimate defaults, i.e. the corruption the training env draws (docs/decisions.md
+# says where each number comes from). An empty mapping means "every default".
+name: vio_default
+seed: 1
+estimate: {}

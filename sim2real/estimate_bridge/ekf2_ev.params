@@ -1,0 +1,21 @@
+# PX4 parameters for GPS-free flight on external vision (the estimate bridge).
+# QGroundControl plain-text format: vehicle_id, component_id, name, value, type (6 int, 9 float).
+# Applied through PX4_PARAM_* environment variables by run_estimate.py (see params.py).
+#
+# EKF2_EV_CTRL 7: fuse EV horizontal position, vertical position and 3D velocity; no EV yaw
+#   (the bridge sends no attitude, heading comes from the magnetometer as before).
+# EKF2_HGT_REF 3: vision is the height reference (baro keeps aiding, EKF2_BARO_CTRL default).
+# EKF2_GPS_CTRL 0: nothing from GPS. SYS_HAS_GPS 0: no GPS preflight requirement.
+# EKF2_EV_DELAY: the mean of the vio_default profile's delay range (docs/decisions.md): the
+#   bridge stamps samples on arrival, as a VIO without timesync does, so this constant is
+#   all the EKF knows about the latency; the jitter around it is uncompensated on purpose.
+# EKF2_EV_NOISE_MD 1 with the stock EVP/EVV noise (0.1 m, 0.1 m/s): the bridge sends no
+#   covariance, so PX4 uses its own defaults, as a stock vehicle would.
+1	1	EKF2_EV_CTRL	7	6
+1	1	EKF2_HGT_REF	3	6
+1	1	EKF2_GPS_CTRL	0	6
+1	1	SYS_HAS_GPS	0	6
+1	1	EKF2_EV_DELAY	100.0	9
+1	1	EKF2_EV_NOISE_MD	1	6
+1	1	EKF2_EVP_NOISE	0.1	9
+1	1	EKF2_EVV_NOISE	0.1	9

@@ -39,7 +39,9 @@ Mac itself needs extra MAVLink forwarding, which later tasks add when they need 
 
 ## Notes
 
-- GPS is on, as in stock SITL. The EKF2 glue task turns it off and feeds external vision.
+- GPS is on, as in stock SITL. `sim2real/estimate_bridge` turns it off and feeds EKF2 a
+  corrupted external-vision estimate (`hover-test --local-position-only`, bridge started by
+  the entrypoint when `ESTIMATE_BRIDGE_PROFILE` is set).
 - `gz_x500` flies in Gazebo's `default` world; the wall-and-slab world arrives with the
   Gazebo tasks in `sim2real/gazebo/`.
 - The image is several GB. Remove it with `docker image rm structure-hold/px4-sitl:v1.17.0`.

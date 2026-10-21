@@ -29,9 +29,11 @@ import numpy as np
 
 @dataclass(frozen=True)
 class EstimateCorruptionConfig:
+    # Defaults are the VIO-like corruption the SITL benchmark and training share; each
+    # number is justified in docs/decisions.md (estimate corruption defaults row).
     # Latency of the estimate, drawn per env at reset, rounded to whole steps.
     delay_min_s: float = 0.05
-    delay_max_s: float = 0.05
+    delay_max_s: float = 0.15
     # White noise, per axis.
     pos_noise_std_m: float = 0.02
     vel_noise_std_mps: float = 0.05

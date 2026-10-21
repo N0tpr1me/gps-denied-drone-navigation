@@ -8,7 +8,9 @@ Pass means: armed and climbed to the target altitude, held it for the hover time
 (altitude within ``--alt-tol`` and horizontal drift within ``--drift-tol``), landed and
 disarmed. Gazebo's real-time factor is sampled during the hover and recorded.
 
-GPS stays on here (stock SITL); disabling it is the EKF2 glue task's job.
+GPS is on in stock SITL. With ``--local-position-only`` the flight waits for a local
+position instead of a global one, for GPS-free runs on the estimate bridge
+(sim2real/estimate_bridge), where PX4 never has a global position.
 Positions are PX4's local NED; only magnitudes are reported, so no frame conversion.
 """
 
@@ -59,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--alt-tol", type=float, default=0.5, help="max altitude error, m")
     p.add_argument("--drift-tol", type=float, default=1.0, help="max horizontal drift, m")
     p.add_argument("--ready-timeout-s", type=float, default=180.0)
+    p.add_argument("--local-position-only", action="store_true",
+                   help="wait for a local position only (no GPS, estimate bridge runs)")
     return p.parse_args()
 
 
@@ -115,13 +119,18 @@ async def sample_rtf(samples: HoverSamples, stop: asyncio.Event, period_s: float
             pass
 
 
-async def wait_until_ready(drone: System, timeout_s: float) -> float:
+async def wait_until_ready(drone: System, timeout_s: float, local_only: bool) -> float:
     start = time.monotonic()
     async for state in drone.core.connection_state():
         if state.is_connected:
             break
     async for health in drone.telemetry.health():
-        if health.is_global_position_ok and health.is_home_position_ok and health.is_armable:
+        # MAVSDK derives is_local_position_ok from GPS or a SYS_STATUS vision bit PX4 does
+        # not set for external vision, so GPS-free runs wait only for the preflight checks
+        # here; the local position itself is checked from the telemetry stream by fly().
+        position_ok = (True if local_only
+                       else health.is_global_position_ok and health.is_home_position_ok)
+        if position_ok and health.is_armable:
             return time.monotonic() - start
         if time.monotonic() - start > timeout_s:
             raise TimeoutError("vehicle never became armable")
@@ -144,7 +153,8 @@ async def fly(args: argparse.Namespace) -> dict:
     await drone.connect(system_address=MAVLINK_URL)
     result: dict = {"px4_tag": os.environ.get("PX4_TAG", "unknown"), "passed": False}
     ready_s = await asyncio.wait_for(
-        wait_until_ready(drone, args.ready_timeout_s), args.ready_timeout_s + 10
+        wait_until_ready(drone, args.ready_timeout_s, args.local_position_only),
+        args.ready_timeout_s + 10
     )
     result["ready_s"] = round(ready_s, 1)
 
