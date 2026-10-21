@@ -127,11 +127,13 @@ async def wait_until_ready(drone: System, timeout_s: float) -> float:
     raise RuntimeError("health stream ended")
 
 
-async def hover(tel: Telemetry, args: argparse.Namespace, samples: HoverSamples) -> None:
+async def hover(
+    tel: Telemetry, ground_down: float, args: argparse.Namespace, samples: HoverSamples
+) -> None:
     n0, e0 = tel.north, tel.east
     end = time.monotonic() + args.hover_s
     while time.monotonic() < end:
-        samples.altitude.append(-tel.down)
+        samples.altitude.append(ground_down - tel.down)
         samples.drift.append(math.hypot(tel.north - n0, tel.east - e0))
         await asyncio.sleep(0.1)
 
@@ -153,14 +155,18 @@ async def fly(args: argparse.Namespace) -> dict:
     wall_start = time.monotonic()
     try:
         await drone.action.set_takeoff_altitude(args.altitude)
+        # Altitude is measured from the ground point: the local origin's z drifts on the
+        # baro before takeoff (about 0.2 m), and PX4's takeoff altitude is above ground.
+        await wait_for(lambda: not math.isnan(tel.down), 10, "local position")
+        ground_down = tel.down
         await drone.action.arm()
         await drone.action.takeoff()
         climb_s = await wait_for(
-            lambda: -tel.down >= args.altitude - 0.2, 60, "takeoff altitude"
+            lambda: ground_down - tel.down >= args.altitude - 0.2, 60, "takeoff altitude"
         )
         result["climb_s"] = round(climb_s, 1)
 
-        await hover(tel, args, samples)
+        await hover(tel, ground_down, args, samples)
 
         await drone.action.land()
         result["land_s"] = round(await wait_for(lambda: not tel.in_air, 90, "touchdown"), 1)
