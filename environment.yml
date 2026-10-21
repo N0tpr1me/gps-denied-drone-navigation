@@ -1,0 +1,11 @@
+# conda env create -f environment.yml && conda activate dronenav
+# Works on the MacBook (Apple Silicon) and on Linux. Isaac Lab is NOT installed
+# here; on the GPU server it runs in its own Docker image (see docs/decisions.md).
+name: dronenav
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -e .[dev]

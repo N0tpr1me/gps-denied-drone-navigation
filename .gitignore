@@ -50,6 +50,8 @@ tensorboard/
 *.onnx
 *.h5
 *.safetensors
+# Small exported policies for the browser demo (keep each under 50 MB)
+!viz/models/*.onnx
 
 # Data
 data/raw/

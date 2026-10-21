@@ -1,0 +1,16 @@
+# Machine check: run this first on any new machine.
+#   python -m training.launch --config training/configs/selfcheck.yaml --smoke --device cpu
+name: selfcheck
+entrypoint: training.selfcheck
+seed: 0
+expected_hours: 0.01
+gpus: 1
+params:
+  samples: 2000
+  features: 8
+  noise: 0.1
+  learning_rate: 0.05
+  iterations: 2000
+# Overrides applied with --smoke.
+smoke:
+  iterations: 20
