@@ -1,0 +1,22 @@
+# Roll the Structure Hold env with the classical cascaded PD and score it with eval/metrics.
+#   python -m training.launch --config training/configs/structure_hold_rollout.yaml --smoke --device cpu
+name: structure_hold_rollout
+entrypoint: envs.structure_hold.run
+seed: 0
+expected_hours: 0.05
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  controller: baseline
+  score_envs: 16
+  sim: torch
+  env:
+    episode_length_s: 20.0
+    hold_distance: [1.0, 3.0]
+# Overrides applied with --smoke: a few seconds of a few envs, done in well under a minute.
+smoke:
+  num_envs: 16
+  score_envs: 4
+  env:
+    episode_length_s: 4.0
