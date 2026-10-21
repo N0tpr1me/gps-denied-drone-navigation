@@ -29,6 +29,12 @@ Every PPO default lives in `train_ppo.DEFAULTS`; a config overrides any of them 
 `params`. `env` takes a `StructureHoldConfig` mapping (wind, estimate corruption, reward
 weights, airframe); the defaults are the env's.
 
+`training.eval_policy` scores a `.onnx` or `.pt` and the PD yardstick on identically seeded
+envs for every seed in `seeds` (3 x 2048 episodes by default, about 15 min on 4 CPU cores),
+writes one `summary` row per seed and controller to `metrics.jsonl`, and pools them with a
+binomial standard error on the crash rate, so a crash-rate difference under two standard
+errors is noise.
+
 ## The exported policy
 
 A run folder ends with:
