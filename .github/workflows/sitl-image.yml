@@ -4,10 +4,10 @@ name: sitl-image
 # runs only when the image changes.
 on:
   pull_request:
-    paths: ["sim2real/docker/**", "sim2real/px4/**", ".github/workflows/sitl-image.yml"]
+    paths: ["sim2real/docker/**", "sim2real/px4/**", "sim2real/gazebo/**", ".github/workflows/sitl-image.yml"]
   push:
     branches: [main]
-    paths: ["sim2real/docker/**", "sim2real/px4/**", ".github/workflows/sitl-image.yml"]
+    paths: ["sim2real/docker/**", "sim2real/px4/**", "sim2real/gazebo/**", ".github/workflows/sitl-image.yml"]
   workflow_dispatch:
 
 jobs:

@@ -28,7 +28,8 @@ from pathlib import Path
 from mavsdk import System
 
 MAVLINK_URL = "udpin://0.0.0.0:14540"
-GZ_STATS_TOPIC = "/world/default/stats"
+# The world name follows PX4 (PX4_GZ_WORLD), so the wall-and-slab runs read the right stats.
+GZ_STATS_TOPIC = f"/world/{os.environ.get('PX4_GZ_WORLD', 'default')}/stats"
 RTF_PATTERN = re.compile(r"real_time_factor:\s*([0-9.eE+-]+)")
 
 

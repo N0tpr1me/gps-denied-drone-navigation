@@ -1,0 +1,15 @@
+# 4 m/s mean wind blowing into the wall, with two gusts and light turbulence.
+name: wind_4ms
+seed: 1
+spawn: {x: -2.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0   # mean wind toward +x, i.e. into the wall
+disturbance:
+  mean_speed: 4.0
+  num_gusts: 2
+  gust_start: [15.0, 40.0]
+  gust_duration: [1.0, 2.0]
+  gust_speed: [1.0, 3.0]
+  turb_sigma: 0.5
+  turb_tau: 1.0
+hover: {altitude: 2.5, hover_s: 30.0}

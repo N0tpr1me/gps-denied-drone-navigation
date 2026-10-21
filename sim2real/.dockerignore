@@ -1,0 +1,5 @@
+# Build context for sim2real/docker/Dockerfile is this folder.
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+gazebo/tests

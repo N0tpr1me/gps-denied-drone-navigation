@@ -42,6 +42,18 @@ RUN python3 -m pip install --break-system-packages "mavsdk==${MAVSDK_VERSION}" \
 COPY docker/entrypoint.sh docker/hover_test.py /opt/sitl/
 RUN chmod +x /opt/sitl/entrypoint.sh
 
+# Wall-and-slab world and the StructureHoldWind system plugin (sim2real/gazebo). PX4 only
+# looks for worlds in its own tree, so the world is linked in there; the plugin path is
+# appended to PX4's by its gz_env.sh.
+COPY gazebo /opt/sitl/gazebo
+RUN cmake -S /opt/sitl/gazebo/plugin -B /tmp/gz_plugin_build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/gz_plugin_build -j"$(nproc)" \
+    && mkdir -p /opt/sitl/gazebo/lib \
+    && cp /tmp/gz_plugin_build/libStructureHoldWind.so /opt/sitl/gazebo/lib/ \
+    && rm -rf /tmp/gz_plugin_build \
+    && ln -s /opt/sitl/gazebo/worlds/wall_slab.sdf "${PX4_DIR}/Tools/simulation/gz/worlds/wall_slab.sdf"
+ENV GZ_SIM_SYSTEM_PLUGIN_PATH=/opt/sitl/gazebo/lib
+
 # MAVLink: 14540 offboard/API (MAVSDK), 14550 ground station.
 EXPOSE 14540/udp 14550/udp
 

@@ -29,7 +29,11 @@ ulog = ["pyulog>=1.0"]
 include = ["envs*", "training*", "eval*"]
 
 [tool.pytest.ini_options]
-testpaths = ["envs", "training", "eval"]
+# sim2real is a namespace package (no __init__.py): pythonpath makes it importable.
+testpaths = ["envs", "training", "eval", "sim2real"]
+pythonpath = ["."]
+# hover_test.py is a flight script that needs MAVSDK, not a pytest module.
+norecursedirs = ["sim2real/docker", ".*", "runs"]
 addopts = "-q"
 
 [tool.ruff]
