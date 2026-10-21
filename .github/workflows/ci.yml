@@ -18,11 +18,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e .[dev]
-      # CPU-only torch so the NumPy/PyTorch parity tests run instead of skipping.
+      # CPU-only PyTorch (no CUDA download) so the NumPy-vs-PyTorch parity tests run.
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e .[dev,torch]
       - run: ruff check .
-      - run: pytest
+      # -rs prints the reason for every skipped test, so silent skips show in the log.
+      - run: pytest -rs
       - name: Launch smoke run on CPU
         run: python -m training.launch --config training/configs/selfcheck.yaml --smoke --device cpu
 
