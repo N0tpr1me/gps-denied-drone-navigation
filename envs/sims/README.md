@@ -20,8 +20,9 @@ state = sim.step(thrust, torque_body, force_ext_world)
 - `torch_quad.py`: the CPU mock. Semi-implicit Euler at `dt / substeps`, exact quaternion
   increment, first-order motor lag, thrust clipped to `[0, max_thrust]` and torque to
   `±max_torque`. No drag (the disturbance force already includes it), no ground, no contact.
-  Deterministic for the same inputs. About 2,000 envs step in real time at 100 Hz on 4 CPU
-  cores (see `test_contract.py`).
+  Deterministic for the same inputs. On 4 CPU cores 4,096 envs step in 2.4 ms (sim alone)
+  and 9.7 ms with the whole Structure Hold env around it, so about 4,000 envs run in real
+  time at 100 Hz (`test_contract.py` checks a loose bound).
 - `rate_pid.py`: a body-rate PID in the shape of PX4's `RateControl` (normalised torque,
   D on the filtered measurement, integrator freeze on saturation, PX4 default gains), so the
   policy closes the same inner loop the onboard module will.

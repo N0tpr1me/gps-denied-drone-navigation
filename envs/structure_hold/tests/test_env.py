@@ -146,8 +146,8 @@ def test_baseline_holds_in_still_air_and_mild_wind():
     worst = 0.0
     for i in range(env.max_episode_length):
         obs, reward, dones, extras = env.step(controller(obs))
-        if i > 200:  # after settling from the start scatter
-            worst = max(worst, float((env.state.pos - env.hold_point).norm(dim=-1).max()))
         assert dones.any() == (i == env.max_episode_length - 1), f"crash at step {i}"
+        if i > 200 and not dones.any():  # settled, and not yet reset for the next episode
+            worst = max(worst, float((env.state.pos - env.hold_point).norm(dim=-1).max()))
     assert env.counts["timeout"] == 16 and env.counts["contact"] == 0
     assert worst < 0.5, f"baseline drifted {worst:.2f} m"
