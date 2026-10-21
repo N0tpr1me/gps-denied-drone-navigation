@@ -26,6 +26,7 @@ Full reasoning: the Structure Hold build plan and execution plan (project docs, 
 | PX4 pinned tag | TBD (T5) | | |
 | Shared core code is NumPy + PyYAML only, Python 3.10 to 3.12; PyTorch only in the batched sim and training | Decided | 2026-10-21 | Must import in Isaac Lab, the SITL image and the Mac |
 | One run on one GPU at a time; `training/launch.py` gates on `nvidia-smi`, refuses >1 GPU or >1 h without `--approved` | Decided | 2026-10-21 | Compute plan; project rules |
+| Metrics: one scorer for sim, SITL and real logs (`eval/metrics.py`, defined in `docs/metrics.md`); scored on TRUE position (ground truth / mocap), never the EKF estimate; 100 Hz resampling; recovery = from gust end to within 10 cm held 1 s; contact radius 0.25 m until the airframe is fixed | Decided | 2026-10-21 | Changing a default changes every result, so it changes only with a row here |
 
 ## Ideas parked (scope creep goes here, not into code)
 
