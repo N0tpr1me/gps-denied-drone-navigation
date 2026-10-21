@@ -1,9 +1,11 @@
 """A classical cascaded controller on the env's observation: the mock's yardstick.
 
-Position -> velocity -> acceleration -> tilt -> body rates, PD at each level, on the
-*estimated* state the policy also sees. It is the thing a learned policy has to beat in the
-mock before anything is claimed, and it proves the task is holdable. It is not the tuned-PX4
-baseline (that is PX4 itself in SITL, eval/); its gains are plain hand values.
+Position -> acceleration -> tilt -> body rates on the *estimated* state the policy also
+sees: PD on position with an integrator against steady wind (PX4's velocity-loop
+integrator does the same job), then a P attitude loop that outputs body rates. It is the
+thing a learned policy has to beat in the mock before anything is claimed, and it proves the
+task is holdable. It is not the tuned-PX4 baseline (that is PX4 itself in SITL, eval/); its
+gains are plain hand values.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from envs.structure_hold.env import OBS, StructureHoldEnv
 class BaselineGains:
     pos: float = 2.0  # 1/s^2: acceleration per metre of error
     vel: float = 2.5  # 1/s: acceleration per m/s
+    integral: float = 0.6  # 1/s^3: acceleration per metre-second of accumulated error
+    max_integral: float = 3.0  # m/s^2 the integrator may contribute
     max_acc: float = 6.0  # m/s^2 horizontal and vertical command limit
     tilt: float = 8.0  # rad/s per rad of tilt error
     yaw: float = 3.0  # rad/s per rad of heading error
@@ -32,6 +36,7 @@ class CascadedPd:
         self.mass = env.cfg.quad.mass
         self.max_thrust = env.cfg.quad.max_thrust
         self.max_rate = env.cfg.max_rate_rad_s
+        self.err_integral = torch.zeros(env.num_envs, 3, dtype=env.dtype, device=env.device)
 
     def __call__(self, obs: torch.Tensor) -> torch.Tensor:
         g = self.g
@@ -42,7 +47,15 @@ class CascadedPd:
         n = obs.shape[0]
 
         # Acceleration setpoint in the world (= structure) frame, then the thrust vector.
-        acc = (-g.pos * err - g.vel * vel).clamp(-g.max_acc, g.max_acc)
+        # The integrator restarts with each episode and only acts once the start transient
+        # is over, so it does not wind up while the drone is still far from the hold point.
+        self.err_integral[self.env.episode_step == 0] = 0.0
+        near = err.norm(dim=-1, keepdim=True) < 1.0
+        self.err_integral += torch.where(near, err, torch.zeros_like(err)) * self.env.dt
+        lim = g.max_integral / max(g.integral, 1e-9)
+        self.err_integral.clamp_(-lim, lim)
+        acc = -g.pos * err - g.vel * vel - g.integral * self.err_integral
+        acc = acc.clamp(-g.max_acc, g.max_acc)
         f_world = acc * self.mass
         f_world[:, 2] += self.mass * GRAVITY
         f_norm = f_world.norm(dim=-1, keepdim=True).clamp(min=1e-6)
