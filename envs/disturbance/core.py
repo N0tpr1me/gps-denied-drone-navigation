@@ -1,0 +1,283 @@
+"""Wind and near-wall disturbance model: the force the air puts on the quadrotor.
+
+One model, shared by the batched PyTorch simulator, Isaac Lab and the Gazebo SITL world, so
+every simulator sees the same air. It has two halves:
+
+- ``sample_params`` draws one episode's disturbance per env from a ``DisturbanceConfig``
+  and a seed (NumPy, run once at reset).
+- ``disturbance_force`` is a pure function of those parameters, time, position and
+  velocity. It holds no state, so the answer does not depend on the simulator's step size
+  or on how often it is called, and a Gazebo plugin and a training env that share a seed
+  see identical wind.
+
+Wind at time t is the sum of a mean wind, scheduled gust steps, and turbulence. The
+turbulence is a sum of sinusoids with random phases whose spectrum follows a first-order
+Gauss-Markov process (correlation time ``tau``), scaled so its standard deviation is exactly
+the sampled ``sigma``. Near a surface the wind is sheltered by a factor
+
+    g(d) = 1 - (1 - g0) * exp(-d / L)
+
+where d is the distance from the surface along its normal. The force is drag on the air
+velocity relative to the drone:
+
+    v_rel = g(d) * wind(t) - velocity
+    F = k_lin * v_rel + k_quad * |v_rel| * v_rel
+
+The force includes the drag from the drone's own motion through still air, so a simulator
+using it must not add its own translational drag. A simulator that already models body drag
+(Gazebo) applies ``disturbance_force(...) - drag_force(-velocity, ...)`` instead.
+
+Frames and units follow docs/conventions.md: world ENU, SI units, arrays ``(num_envs, ...)``.
+
+Not modelled yet: the yaw torque near the wall (the published case shows it changing sign,
+but one data point is not enough to fit it), ground effect, and an overhead slab. The fan rig
+in Phase 3 fits the parameters; until then the ranges are wide on purpose.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, fields
+from typing import Any
+
+import numpy as np
+
+# Nominal near-wall term, fitted to the one published data point: a 2.14 kg quadrotor
+# hovering in a 10 m/s headwind toward a wall felt a horizontal disturbance of 2.78 N at
+# 5 m from the wall and 0.40 N at 0.5 m. With full shelter at the wall (g0 = 0) and pure
+# quadratic drag, F(d) = k_quad * 10**2 * g(d)**2. The two points give L and k_quad
+# (bisection on g(0.5) / g(5) = sqrt(0.40 / 2.78); the test reproduces both forces).
+NOMINAL_WALL_DECAY = 1.0604895349199683  # L, m
+NOMINAL_WALL_FLOOR = 0.0  # g0, wind fraction left at the surface
+NOMINAL_K_QUAD = 0.028305045198112888  # N / (m/s)^2, for the 2.14 kg airframe
+
+
+def _pair(value: Any, name: str) -> tuple[float, float]:
+    lo, hi = (float(value), float(value)) if np.isscalar(value) else map(float, value)
+    if lo > hi:
+        raise ValueError(f"{name}: range ({lo}, {hi}) has min > max")
+    return lo, hi
+
+
+@dataclass(frozen=True)
+class DisturbanceConfig:
+    """Ranges the per-env disturbance is drawn from. Each range is ``(min, max)``, uniform.
+
+    A single number in ``from_dict`` means a fixed value. Defaults follow the build plan:
+    mean wind 0 to 12 m/s, gust steps, filtered turbulence, a randomised near-wall term.
+    """
+
+    # Mean wind: horizontal speed, direction uniform over the compass, no vertical mean.
+    mean_speed: tuple[float, float] = (0.0, 12.0)
+    # Gust steps: a gust adds a constant horizontal wind for its duration, then stops.
+    num_gusts: int = 2
+    gust_start: tuple[float, float] = (2.0, 50.0)  # s from episode start
+    gust_duration: tuple[float, float] = (0.5, 3.0)  # s
+    gust_speed: tuple[float, float] = (0.0, 5.0)  # m/s
+    # Turbulence: standard deviation per axis (vertical is a fraction of horizontal).
+    turb_sigma: tuple[float, float] = (0.0, 1.5)  # m/s, horizontal
+    turb_vertical_ratio: tuple[float, float] = (0.5, 0.5)
+    turb_tau: tuple[float, float] = (0.5, 3.0)  # s, correlation time
+    turb_components: int = 32
+    turb_omega: tuple[float, float] = (0.02, 30.0)  # rad/s, band the sinusoids cover
+    # Drag on the air velocity relative to the drone.
+    k_lin: tuple[float, float] = (0.0, 0.0)  # N / (m/s)
+    k_quad: tuple[float, float] = (0.8 * NOMINAL_K_QUAD, 1.2 * NOMINAL_K_QUAD)
+    # Near-wall shelter.
+    wall_decay: tuple[float, float] = (0.5 * NOMINAL_WALL_DECAY, 2.0 * NOMINAL_WALL_DECAY)
+    wall_floor: tuple[float, float] = (0.0, 0.3)
+
+    def __post_init__(self) -> None:
+        for f in fields(self):
+            if f.type.startswith("tuple"):
+                object.__setattr__(self, f.name, _pair(getattr(self, f.name), f.name))
+        if self.num_gusts < 0 or self.turb_components < 1:
+            raise ValueError("num_gusts must be >= 0 and turb_components >= 1")
+        if self.turb_omega[0] <= 0 or self.turb_tau[0] <= 0 or self.wall_decay[0] <= 0:
+            raise ValueError("turb_omega, turb_tau and wall_decay must be positive")
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> DisturbanceConfig:
+        d = dict(d or {})
+        unknown = set(d) - {f.name for f in fields(cls)}
+        if unknown:
+            raise ValueError(f"unknown disturbance config keys: {sorted(unknown)}")
+        return cls(**d)
+
+    @classmethod
+    def nominal(cls) -> DisturbanceConfig:
+        """The published case: no gusts, no turbulence, nominal drag and wall term."""
+        return cls(
+            num_gusts=0,
+            turb_sigma=(0.0, 0.0),
+            k_quad=(NOMINAL_K_QUAD, NOMINAL_K_QUAD),
+            wall_decay=(NOMINAL_WALL_DECAY, NOMINAL_WALL_DECAY),
+            wall_floor=(NOMINAL_WALL_FLOOR, NOMINAL_WALL_FLOOR),
+        )
+
+
+@dataclass
+class DisturbanceParams:
+    """One episode's disturbance for ``num_envs`` envs. Fields are NumPy arrays, or torch
+    tensors after ``envs.disturbance.torch_adapter.to_torch``."""
+
+    mean_wind: Any  # (N, 3) m/s
+    gust_start: Any  # (N, K) s
+    gust_duration: Any  # (N, K) s
+    gust_wind: Any  # (N, K, 3) m/s
+    turb_amp: Any  # (N, 3, M) m/s
+    turb_omega: Any  # (N, M) rad/s
+    turb_phase: Any  # (N, 3, M) rad
+    k_lin: Any  # (N,)
+    k_quad: Any  # (N,)
+    wall_point: Any  # (N, 3) m, a point on the surface
+    wall_normal: Any  # (N, 3) unit, from the surface into the free air
+    has_wall: Any  # (N,) bool; False means free air
+    wall_decay: Any  # (N,) m
+    wall_floor: Any  # (N,)
+
+    @property
+    def num_envs(self) -> int:
+        return self.mean_wind.shape[0]
+
+
+def sample_params(
+    cfg: DisturbanceConfig,
+    num_envs: int,
+    seed: int | np.random.Generator,
+    wall_point: Any = None,
+    wall_normal: Any = None,
+) -> DisturbanceParams:
+    """Draw one episode's disturbance per env. Same config and seed give the same params.
+
+    ``wall_point`` and ``wall_normal`` place one flat surface per env (shape ``(3,)`` or
+    ``(N, 3)``); leave them out for free air. The normal points away from the surface,
+    towards the drone, so it is minus the structure frame's x axis.
+    """
+    rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
+    n, k, m = num_envs, cfg.num_gusts, cfg.turb_components
+
+    def u(r: tuple[float, float], *shape: int) -> np.ndarray:
+        return rng.uniform(r[0], r[1], size=(n, *shape))
+
+    def horizontal(speed: np.ndarray) -> np.ndarray:
+        heading = rng.uniform(0.0, 2.0 * math.pi, size=speed.shape)
+        return np.stack([speed * np.cos(heading), speed * np.sin(heading), 0.0 * speed], -1)
+
+    mean_wind = horizontal(u(cfg.mean_speed))
+    gust_start = u(cfg.gust_start, k)
+    gust_duration = u(cfg.gust_duration, k)
+    gust_wind = horizontal(u(cfg.gust_speed, k))
+
+    # Turbulence: log-spaced frequencies, jittered inside their bins so no two envs share a
+    # period; amplitudes follow the Gauss-Markov spectrum 1 / (1 + (omega * tau)^2) and are
+    # normalised so the variance, sum(a^2) / 2, is exactly sigma^2 on each axis.
+    edges = np.geomspace(cfg.turb_omega[0], cfg.turb_omega[1], m + 1)
+    omega = edges[:-1] + (edges[1:] - edges[:-1]) * rng.uniform(size=(n, m))
+    tau = u(cfg.turb_tau)
+    weight = (edges[1:] - edges[:-1]) / (1.0 + (omega * tau[:, None]) ** 2)
+    shape = np.sqrt(2.0 * weight / weight.sum(-1, keepdims=True))  # (N, M)
+    sigma_h = u(cfg.turb_sigma)
+    sigma = np.stack([sigma_h, sigma_h, sigma_h * u(cfg.turb_vertical_ratio)], -1)
+    turb_amp = sigma[:, :, None] * shape[:, None, :]
+    turb_phase = rng.uniform(0.0, 2.0 * math.pi, size=(n, 3, m))
+
+    has_wall = wall_normal is not None
+    normal = np.broadcast_to(
+        np.asarray(wall_normal if has_wall else (1.0, 0.0, 0.0), dtype=float), (n, 3)
+    )
+    norm = np.linalg.norm(normal, axis=-1, keepdims=True)
+    if np.any(norm < 1e-9):
+        raise ValueError("wall_normal must be non-zero")
+    point = np.broadcast_to(
+        np.asarray(wall_point if wall_point is not None else (0.0, 0.0, 0.0), dtype=float),
+        (n, 3),
+    )
+
+    return DisturbanceParams(
+        mean_wind=mean_wind,
+        gust_start=gust_start,
+        gust_duration=gust_duration,
+        gust_wind=gust_wind,
+        turb_amp=turb_amp,
+        turb_omega=omega,
+        turb_phase=turb_phase,
+        k_lin=u(cfg.k_lin),
+        k_quad=u(cfg.k_quad),
+        wall_point=point.copy(),
+        wall_normal=normal / norm,
+        has_wall=np.full(n, has_wall),
+        wall_decay=u(cfg.wall_decay),
+        wall_floor=u(cfg.wall_floor),
+    )
+
+
+# The functions below are written once for any array module ``xp`` (NumPy or torch): they
+# use only operators, broadcasting, ``.sum(dim)``, ``.clip(min=)`` and ``xp.cos``,
+# ``xp.exp``, ``xp.sqrt``. The torch adapter calls the same code, so the two cannot drift.
+
+
+def _time_column(t: Any, ndim: int) -> Any:
+    # Scalar t broadcasts as is; per-env t of shape (N,) gets trailing axes to match.
+    if t.ndim == 0:
+        return t
+    return t.reshape(t.shape[0], *([1] * (ndim - 1)))
+
+
+def _wind(xp: Any, p: DisturbanceParams, t: Any) -> Any:
+    t1 = _time_column(t, 2)  # against (N, K)
+    on = (t1 >= p.gust_start) & (t1 < p.gust_start + p.gust_duration)
+    gusts = (on[..., None] * p.gust_wind).sum(1)
+    arg = p.turb_omega[:, None, :] * _time_column(t, 3) + p.turb_phase
+    turbulence = (p.turb_amp * xp.cos(arg)).sum(-1)
+    return p.mean_wind + gusts + turbulence
+
+
+def _wall_distance(p: DisturbanceParams, pos: Any) -> Any:
+    return ((pos - p.wall_point) * p.wall_normal).sum(-1)
+
+
+def _shelter(xp: Any, p: DisturbanceParams, pos: Any) -> Any:
+    d = _wall_distance(p, pos).clip(min=0.0)
+    return 1.0 - p.has_wall * (1.0 - p.wall_floor) * xp.exp(-d / p.wall_decay)
+
+
+def _drag(xp: Any, v_rel: Any, k_lin: Any, k_quad: Any) -> Any:
+    speed = xp.sqrt((v_rel * v_rel).sum(-1))
+    return (k_lin + k_quad * speed)[:, None] * v_rel
+
+
+def _force(xp: Any, p: DisturbanceParams, t: Any, pos: Any, vel: Any) -> Any:
+    air = _shelter(xp, p, pos)[:, None] * _wind(xp, p, t)
+    return _drag(xp, air - vel, p.k_lin, p.k_quad)
+
+
+def _arr(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.float64)
+
+
+def wind_velocity(p: DisturbanceParams, t: Any) -> np.ndarray:
+    """Free-stream wind (N, 3) in m/s at time ``t`` (scalar or (N,)), before any shelter."""
+    return _wind(np, p, _arr(t))
+
+
+def wall_distance(p: DisturbanceParams, pos: Any) -> np.ndarray:
+    """Signed distance (N,) in m from each env's surface; meaningless where ``has_wall`` is
+    False."""
+    return _wall_distance(p, _arr(pos))
+
+
+def shelter_factor(p: DisturbanceParams, pos: Any) -> np.ndarray:
+    """Fraction (N,) of the free-stream wind that reaches ``pos``: 1 in free air."""
+    return _shelter(np, p, _arr(pos))
+
+
+def drag_force(v_rel: Any, k_lin: Any, k_quad: Any) -> np.ndarray:
+    """Drag (N, 3) in N for air velocity ``v_rel`` (N, 3) relative to the drone."""
+    return _drag(np, _arr(v_rel), _arr(k_lin), _arr(k_quad))
+
+
+def disturbance_force(p: DisturbanceParams, t: Any, pos: Any, vel: Any) -> np.ndarray:
+    """Aerodynamic force (N, 3) in N, world ENU, on drones at ``pos`` (N, 3) m moving at
+    ``vel`` (N, 3) m/s, at time ``t`` s (scalar or (N,))."""
+    return _force(np, p, _arr(t), _arr(pos), _arr(vel))

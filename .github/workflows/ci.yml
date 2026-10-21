@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e .[dev]
+      # CPU-only torch so the NumPy/PyTorch parity tests run instead of skipping.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: ruff check .
       - run: pytest
       - name: Launch smoke run on CPU
