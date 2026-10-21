@@ -28,7 +28,8 @@ EVAL_CONFIG = REPO / "training" / "configs" / "structure_hold_eval.yaml"
 
 SMALL = {"num_envs": 8, "iterations": 2, "num_steps_per_env": 8, "save_interval": 1,
          "env": {"episode_length_s": 1.0}, "eval": {"num_envs": 4, "episodes": 1,
-                                                    "score_envs": 2}}
+                                                    "score_envs": 2, "select_every": 1,
+                                                    "select_envs": 4}}
 
 
 def smoke_params(**over):
@@ -158,7 +159,10 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     summary = run_entry("training.train_ppo", cfg, tmp_path / "train")
     head = summary["headline"]
     assert {"policy_p95_m_mean", "policy_crash_rate", "pd_p95_m_mean", "pd_crash_rate",
-            "train_reward_mean"} <= set(head)
+            "train_reward_mean", "selected_iteration"} <= set(head)
+    assert head["selected_iteration"] in (0, 1)  # chosen among checkpoint 0 and the final
+    meta = json.loads((tmp_path / "train" / "policy.json").read_text())
+    assert meta["selected_iteration"] == head["selected_iteration"]
     assert "PD" in summary["vs_baseline"]
     assert head["pd_crash_rate"] == 0.0  # the yardstick holds a 1 s episode
 

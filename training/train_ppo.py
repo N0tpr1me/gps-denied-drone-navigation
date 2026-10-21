@@ -8,7 +8,11 @@ Inputs (the config's ``params``): ``num_envs``, ``iterations``, ``num_steps_per_
 ``init_std``), ``ppo`` (rsl_rl's PPO keyword arguments), ``save_interval`` and ``eval``
 (``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
 the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
-harder estimate corruption than the standard condition the result is reported on).
+harder estimate corruption than the standard condition the result is reported on;
+``select_every`` and ``select_envs``: the saved checkpoints at that iteration stride, plus
+the final one, are scored on a selection seed and the one with the lowest crash rate, then
+lowest p95, is the policy exported and reported. PPO keeps sharpening the hold after the
+policy has already become careful, so the last iteration is often not the safest.)
 
 Outputs, in the run folder: ``metrics.jsonl`` (one line per PPO iteration: mean reward,
 episode length, crash rate, losses, action std, env steps per second; then one line per
@@ -63,7 +67,8 @@ DEFAULTS: dict[str, Any] = {
         "schedule": "adaptive",
         "desired_kl": 0.01,
     },
-    "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {}},
+    "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
+             "select_every": 250, "select_envs": 128},
 }
 
 
@@ -145,6 +150,41 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
     return runner, vec, env_cfg, train_cfg
 
 
+def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: StructureHoldConfig,
+                      p: dict[str, Any], seed: int, device: str, writer: RunWriter) -> int:
+    """Score the final policy and the saved checkpoints every ``eval.select_every``
+    iterations on a selection seed; load the best (lowest crash rate, then p95) into the
+    runner and return its iteration."""
+    e = p["eval"]
+    last = int(p["iterations"]) - 1
+    every = int(e.get("select_every", 0) or 0)
+    candidates = {last: None}  # the policy now in the runner
+    if every > 0:
+        for it in range(0, last, every):
+            path = run_dir / "tb" / f"model_{it}.pt"
+            if path.exists() and it != last:
+                candidates[it] = path
+    if len(candidates) == 1:
+        return last
+    scores: dict[int, tuple[float, float]] = {}
+    for it, path in candidates.items():
+        if path is None:
+            path = run_dir / "tb" / "model_final.pt"
+            runner.save(str(path))
+        env = StructureHoldEnv(eval_cfg, int(e.get("select_envs", 128)), seed=seed + 2000,
+                               device=device, sim=str(p["sim"]))
+        ctl = load_controller(path, env.num_envs, device, meta=meta)
+        h = evaluate.score_controller(env, ctl, int(e["episodes"]), int(e["score_envs"]))
+        scores[it] = (h["crash_rate"], h["p95_m_mean"])
+        writer.metric(it, selection_crash_rate=h["crash_rate"], selection_p95_m=h["p95_m_mean"])
+        print(f"ppo: checkpoint {it}: crash {h['crash_rate']:.3f}, p95 {h['p95_m_mean']:.2f} m",
+              flush=True)
+    best = min(scores, key=lambda it: scores[it])
+    if best != last:
+        runner.load(str(run_dir / "tb" / f"model_{best}.pt"))
+    return best
+
+
 def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) -> dict[str, Any]:
     p = merge(DEFAULTS, cfg.get("params"))
     seed = int(cfg["seed"])
@@ -160,16 +200,18 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
     train_s = time.perf_counter() - t0
     reward = statistics.mean(runner.logger.rewbuffer) if runner.logger.rewbuffer else float("nan")
 
+    e = p["eval"]
+    eval_cfg = StructureHoldConfig.from_dict(merge(p.get("env") or {}, e.get("env")))
     meta = policy_metadata(env_cfg, int(p["history"]), train_cfg, {
         "seed": seed, "iterations": int(p["iterations"]), "num_envs": vec.num_envs,
         "actor_params": n_params, "train_reward_mean": reward,
     })
+    chosen = select_checkpoint(runner, run_dir, meta, eval_cfg, p, seed, device, writer)
+    meta["selected_iteration"] = chosen
     onnx_path = export_policy(runner, run_dir, meta)
-    print(f"ppo: trained in {train_s:.0f} s, exported {onnx_path.name} "
+    print(f"ppo: trained in {train_s:.0f} s, exported iteration {chosen} as {onnx_path.name} "
           f"({onnx_path.stat().st_size / 1024:.0f} KB)", flush=True)
 
-    e = p["eval"]
-    eval_cfg = StructureHoldConfig.from_dict(merge(p.get("env") or {}, e.get("env")))
     pol, base, wording = evaluate.compare(
         eval_cfg, lambda env: load_controller(onnx_path, env.num_envs, device),
         num_envs=int(e["num_envs"]), episodes=int(e["episodes"]),
@@ -181,6 +223,7 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
         "train_reward_mean": reward,
         "train_s": train_s,
         "actor_params": n_params,
+        "selected_iteration": chosen,
         **{f"policy_{k}": pol[k] for k in evaluate.HEADLINE_KEYS},
         **{f"pd_{k}": base[k] for k in ("p95_m_mean", "crash_rate")},
     }
