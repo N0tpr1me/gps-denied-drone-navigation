@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from envs.disturbance import DisturbanceConfig  # noqa: E402
+from envs.estimate import EstimateCorruptionConfig  # noqa: E402
+from envs.structure_hold import (  # noqa: E402
+    NUM_ACTIONS,
+    NUM_OBS,
+    OBS,
+    StructureHoldConfig,
+    StructureHoldEnv,  # noqa: E402
+)
+from envs.structure_hold.baseline import CascadedPd  # noqa: E402
+
+
+def still_air(**kw) -> StructureHoldConfig:
+    return StructureHoldConfig(
+        disturbance=DisturbanceConfig(mean_speed=(0.0, 0.0), num_gusts=0, turb_sigma=(0.0, 0.0)),
+        estimate=EstimateCorruptionConfig.clean(),
+        start_offset_std_m=0.0,
+        start_yaw_std_rad=0.0,
+        **kw,
+    )
+
+
+def hover_action(env: StructureHoldEnv) -> torch.Tensor:
+    a = torch.zeros(env.num_envs, NUM_ACTIONS)
+    a[:, 3] = 2.0 * env.cfg.quad.hover_thrust / env.cfg.quad.max_thrust - 1.0
+    return a
+
+
+def test_shapes_and_vecenv_interface():
+    env = StructureHoldEnv(StructureHoldConfig(episode_length_s=1.0), num_envs=5, seed=1)
+    assert (env.num_obs, env.num_actions, env.max_episode_length) == (NUM_OBS, NUM_ACTIONS, 100)
+    obs, extras = env.get_observations()
+    assert obs.shape == (5, NUM_OBS) and "observations" in extras
+    obs, reward, dones, extras = env.step(torch.zeros(5, NUM_ACTIONS))
+    assert obs.shape == (5, NUM_OBS) and reward.shape == (5,) and dones.shape == (5,)
+    assert dones.dtype == torch.bool and extras["time_outs"].shape == (5,)
+    assert torch.isfinite(obs).all() and torch.isfinite(reward).all()
+    with pytest.raises(ValueError, match="actions"):
+        env.step(torch.zeros(5, 3))
+
+
+def test_hold_point_is_between_one_and_three_metres_from_the_wall():
+    env = StructureHoldEnv(still_air(), num_envs=64, seed=3)
+    clearance = env.clearance()
+    assert (clearance >= 1.0).all() and (clearance <= 3.0).all()
+    assert torch.allclose(env.hold_point[:, 0], -clearance)
+    obs, _ = env.get_observations()
+    assert torch.allclose(obs[:, OBS["pos_err"]], torch.zeros(64, 3), atol=1e-6)
+    # Level and facing the wall: gravity straight down in the body, heading +x.
+    assert torch.allclose(obs[:, OBS["gravity_body"]], torch.tensor([0.0, 0, -1]).expand(64, 3))
+    assert torch.allclose(obs[:, OBS["heading"]], torch.tensor([1.0, 0.0]).expand(64, 2))
+
+
+def test_hover_in_still_air_holds_and_times_out():
+    env = StructureHoldEnv(still_air(episode_length_s=2.0), num_envs=4, seed=0)
+    start = env.state.pos.clone()
+    for i in range(env.max_episode_length):
+        obs, reward, dones, extras = env.step(hover_action(env))
+        if i < env.max_episode_length - 1:
+            assert not dones.any()
+            assert torch.allclose(env.state.pos, start, atol=1e-3)
+    assert dones.all() and extras["time_outs"].all()
+    assert extras["episode"]["crash_rate"] == 0.0
+    assert env.counts["timeout"] == 4 and env.counts["contact"] == 0
+    assert (obs[:, OBS["last_action"]] == 0).all()  # a fresh episode's first observation
+
+
+def test_flying_into_the_wall_is_a_contact_and_resets_that_env_only():
+    env = StructureHoldEnv(still_air(episode_length_s=5.0), num_envs=3, seed=0)
+    env.sim.reset(torch.tensor([1]), env.state._replace(
+        pos=torch.tensor([[-0.2, 0.0, 2.0]]), quat=env.state.quat[1:2],
+        vel=torch.zeros(1, 3), ang_vel=torch.zeros(1, 3)))
+    obs, reward, dones, extras = env.step(hover_action(env))
+    assert dones.tolist() == [False, True, False]
+    assert not extras["time_outs"][1]
+    assert reward[1] < -env.cfg.reward.crash + 2.0 and reward[0] > reward[1]
+    assert env.counts["contact"] == 1
+    assert env.clearance()[1] >= 1.0  # env 1 restarted at a fresh hold point
+    assert env.episode_step.tolist() == [1, 0, 1]
+
+
+def test_nonfinite_state_is_counted_reset_and_never_shown_to_the_policy():
+    env = StructureHoldEnv(still_air(), num_envs=2, seed=0)
+    env.sim._state.pos[0, 0] = float("nan")
+    obs, reward, dones, _ = env.step(hover_action(env))
+    assert dones.tolist() == [True, False]
+    assert env.counts["nonfinite"] == 1
+    assert torch.isfinite(obs).all() and torch.isfinite(reward).all()
+    assert env.state.finite().all()
+
+
+def test_estimate_corruption_reaches_the_observation():
+    cfg = still_air()
+    cfg = StructureHoldConfig(
+        disturbance=cfg.disturbance,
+        estimate=EstimateCorruptionConfig(delay_min_s=0.0, delay_max_s=0.0, pos_noise_std_m=0.5,
+                                          jump_rate_hz=0.0, dropout_rate_hz=0.0),
+        start_offset_std_m=0.0, start_yaw_std_rad=0.0,
+    )
+    env = StructureHoldEnv(cfg, num_envs=32, seed=0)
+    obs, *_ = env.step(hover_action(env))
+    assert obs[:, OBS["pos_err"]].std() > 0.2  # noisy estimate, though the drone sits still
+    assert torch.allclose(env.state.pos, env.hold_point, atol=1e-3)  # truth is unaffected
+
+
+def test_wind_pushes_the_hovering_drone():
+    cfg = StructureHoldConfig(
+        disturbance=DisturbanceConfig(mean_speed=(8.0, 8.0), num_gusts=0, turb_sigma=(0.0, 0.0)),
+        estimate=EstimateCorruptionConfig.clean(), episode_length_s=1.0,
+    )
+    env = StructureHoldEnv(cfg, num_envs=8, seed=0)
+    start = env.state.pos.clone()
+    for _ in range(50):
+        env.step(hover_action(env))
+    assert (env.state.pos - start).norm(dim=-1).min() > 0.05
+    assert env.wind_force.norm(dim=-1).min() > 0.1
+
+
+def test_same_seed_same_rollout_different_seed_differs():
+    def run(seed: int) -> torch.Tensor:
+        env = StructureHoldEnv(StructureHoldConfig(), num_envs=4, seed=seed)
+        for _ in range(30):
+            obs, *_ = env.step(hover_action(env))
+        return obs.clone()
+
+    assert torch.equal(run(7), run(7))
+    assert not torch.equal(run(7), run(8))
+
+
+def test_baseline_holds_in_still_air_and_mild_wind():
+    cfg = StructureHoldConfig(
+        disturbance=DisturbanceConfig(mean_speed=(0.0, 4.0), num_gusts=1, gust_speed=(0.0, 2.0),
+                                      gust_start=(1.0, 2.0), turb_sigma=(0.0, 0.5)),
+        estimate=EstimateCorruptionConfig(jump_rate_hz=0.0, dropout_rate_hz=0.0),
+        episode_length_s=6.0,
+    )
+    env = StructureHoldEnv(cfg, num_envs=16, seed=0)
+    controller = CascadedPd(env)
+    obs, _ = env.get_observations()
+    worst = 0.0
+    for i in range(env.max_episode_length):
+        obs, reward, dones, extras = env.step(controller(obs))
+        if i > 200:  # after settling from the start scatter
+            worst = max(worst, float((env.state.pos - env.hold_point).norm(dim=-1).max()))
+        assert dones.any() == (i == env.max_episode_length - 1), f"crash at step {i}"
+    assert env.counts["timeout"] == 16 and env.counts["contact"] == 0
+    assert worst < 0.5, f"baseline drifted {worst:.2f} m"
