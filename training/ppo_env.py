@@ -13,6 +13,12 @@ two things to ``envs.structure_hold.StructureHoldEnv`` without touching it:
   estimate is sharper while the deployed policy stays honest (asymmetric actor-critic).
 
 Episode bookkeeping (``extras["time_outs"]``, ``extras["episode"]``) passes through.
+
+``DropoutCurriculum`` is the one training-time curriculum: the longest estimate dropout
+starts short and grows linearly to the env config's value over the first part of training,
+so the policy learns to coast through a stale estimate on easy cases before the long ones
+(the remaining crash cause after the bounded reward) arrive. The wrapper applies it from
+its own step count, so the runner needs no hook.
 """
 
 from __future__ import annotations
@@ -64,11 +70,36 @@ class ObsHistory:
         return self.buf.reshape(self.buf.shape[0], self.size)
 
 
-class StructureHoldVecEnv:
-    """rsl_rl ``VecEnv`` view of a ``StructureHoldEnv``."""
+class DropoutCurriculum:
+    """Dropout cap in seconds as a function of the training iteration: ``start_s`` at
+    iteration 0, rising linearly to ``end_s`` at ``iterations`` and flat after that."""
 
-    def __init__(self, env: StructureHoldEnv, history: int = 3):
+    def __init__(self, start_s: float, end_s: float, iterations: int):
+        if start_s <= 0 or end_s < start_s or iterations < 1:
+            raise ValueError("curriculum needs 0 < start_s <= end_s and iterations >= 1")
+        self.start_s, self.end_s, self.iterations = float(start_s), float(end_s), int(iterations)
+
+    def value(self, iteration: int) -> float:
+        f = min(max(iteration / self.iterations, 0.0), 1.0)
+        return self.start_s + f * (self.end_s - self.start_s)
+
+
+class StructureHoldVecEnv:
+    """rsl_rl ``VecEnv`` view of a ``StructureHoldEnv``.
+
+    ``curriculum`` with ``steps_per_iteration`` (the runner's ``num_steps_per_env``) moves the
+    env's dropout cap as training proceeds; ``curriculum_state()`` reports it for logging.
+    """
+
+    def __init__(self, env: StructureHoldEnv, history: int = 3,
+                 curriculum: DropoutCurriculum | None = None, steps_per_iteration: int = 1):
         self.env = env
+        self.curriculum = curriculum
+        self.steps_per_iteration = max(1, int(steps_per_iteration))
+        self.env_steps = 0
+        self.iteration = 0
+        if curriculum is not None:
+            env.set_dropout_max_s(curriculum.value(0))
         self.cfg = env.cfg
         self.num_envs = env.num_envs
         self.num_actions = env.num_actions
@@ -122,4 +153,13 @@ class StructureHoldVecEnv:
     def step(self, actions: torch.Tensor):
         obs, reward, dones, extras = self.env.step(actions)
         self.history.push(obs, dones)
+        self.env_steps += 1
+        iteration = self.env_steps // self.steps_per_iteration
+        if iteration != self.iteration:
+            self.iteration = iteration
+            if self.curriculum is not None:
+                self.env.set_dropout_max_s(self.curriculum.value(iteration))
         return self.observations(), reward, dones, extras
+
+    def curriculum_state(self) -> dict[str, float]:
+        return {"dropout_max_s": self.env.dropout_max_s}

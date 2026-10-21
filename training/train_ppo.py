@@ -5,7 +5,10 @@
 Inputs (the config's ``params``): ``num_envs``, ``iterations``, ``num_steps_per_env``,
 ``history`` (observations stacked for the policy), ``sim`` (``torch`` or ``isaac``), ``env``
 (a ``StructureHoldConfig`` mapping), ``actor`` / ``critic`` (``hidden_dims``, ``activation``,
-``init_std``), ``ppo`` (rsl_rl's PPO keyword arguments), ``save_interval`` and ``eval``
+``init_std``), ``ppo`` (rsl_rl's PPO keyword arguments), ``save_interval``, ``curriculum``
+(``dropout_max_s``: the dropout cap training starts at, growing linearly to the env's
+``estimate.dropout_max_s`` over the first ``fraction`` of the iterations; ``null`` is off),
+and ``eval``
 (``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
 the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
 harder estimate corruption than the standard condition the result is reported on;
@@ -38,7 +41,7 @@ from envs.structure_hold.config import StructureHoldConfig
 from envs.structure_hold.env import StructureHoldEnv
 from training import evaluate
 from training.policy_io import export_policy, load_controller, policy_metadata
-from training.ppo_env import StructureHoldVecEnv
+from training.ppo_env import DropoutCurriculum, StructureHoldVecEnv
 from training.runlib import RunWriter, entry_args, load_yaml
 
 DEFAULTS: dict[str, Any] = {
@@ -67,6 +70,7 @@ DEFAULTS: dict[str, Any] = {
         "schedule": "adaptive",
         "desired_kl": 0.01,
     },
+    "curriculum": {"dropout_max_s": None, "fraction": 0.6},
     "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
              "select_every": 250, "select_envs": 128},
 }
@@ -100,6 +104,16 @@ def build_train_cfg(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def make_curriculum(p: dict[str, Any]) -> DropoutCurriculum | None:
+    c = p.get("curriculum") or {}
+    if c.get("dropout_max_s") is None:
+        return None
+    env_cfg = StructureHoldConfig.from_dict(p.get("env"))
+    iterations = max(1, round(float(c.get("fraction", 0.6)) * int(p["iterations"])))
+    return DropoutCurriculum(float(c["dropout_max_s"]), env_cfg.estimate.dropout_max_s,
+                             iterations)
+
+
 def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer: RunWriter):
     from rsl_rl.runners import OnPolicyRunner
     from rsl_rl.utils.logger import Logger
@@ -120,6 +134,7 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
                 "env_steps_per_s": self.cfg["num_steps_per_env"] * self.num_envs
                 / max(collect_time + learn_time, 1e-9),
                 **{f"loss_{k}": float(v) for k, v in loss_dict.items()},
+                **vec.curriculum_state(),
             }
             super().log(it, start_it, total_it, collect_time, learn_time, loss_dict,
                         learning_rate, action_std, rnd_weight, print_minimal=True, **kw)
@@ -144,7 +159,8 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
     torch.manual_seed(seed)
     env = StructureHoldEnv(env_cfg, int(p["num_envs"]), seed=seed, device=device,
                            sim=str(p["sim"]))
-    vec = StructureHoldVecEnv(env, history=int(p["history"]))
+    vec = StructureHoldVecEnv(env, history=int(p["history"]), curriculum=make_curriculum(p),
+                              steps_per_iteration=int(p["num_steps_per_env"]))
     train_cfg = build_train_cfg(p)
     runner = Runner(vec, train_cfg, str(log_dir), device)
     return runner, vec, env_cfg, train_cfg

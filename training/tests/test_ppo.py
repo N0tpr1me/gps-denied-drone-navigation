@@ -19,7 +19,12 @@ from envs.structure_hold.config import StructureHoldConfig  # noqa: E402
 from envs.structure_hold.env import NUM_OBS, StructureHoldEnv  # noqa: E402
 from training import train_ppo  # noqa: E402
 from training.policy_io import export_policy, load_controller, policy_metadata  # noqa: E402
-from training.ppo_env import PRIVILEGED_OBS, ObsHistory, StructureHoldVecEnv  # noqa: E402
+from training.ppo_env import (  # noqa: E402
+    PRIVILEGED_OBS,
+    DropoutCurriculum,
+    ObsHistory,
+    StructureHoldVecEnv,
+)
 from training.runlib import RunWriter  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -66,6 +71,28 @@ def test_vecenv_groups_shapes_and_privileged_truth():
     assert torch.allclose(env.episode_time, torch.tensor([5, 6, 7, 8]) * env.dt)
 
 
+def test_dropout_curriculum_grows_the_cap_with_the_iteration():
+    c = DropoutCurriculum(start_s=0.5, end_s=3.0, iterations=10)
+    assert c.value(0) == 0.5 and c.value(5) == 1.75 and c.value(10) == 3.0 and c.value(99) == 3.0
+    with pytest.raises(ValueError):
+        DropoutCurriculum(start_s=4.0, end_s=3.0, iterations=10)
+
+    env = StructureHoldEnv(StructureHoldConfig(episode_length_s=1.0), num_envs=2, seed=0)
+    vec = StructureHoldVecEnv(env, history=2, curriculum=c, steps_per_iteration=4)
+    assert env.dropout_max_s == pytest.approx(0.5)  # applied before the first step
+    for _ in range(4):
+        vec.step(torch.zeros(2, 4))
+    assert env.dropout_max_s == pytest.approx(0.75)  # iteration 1
+    for _ in range(40):
+        vec.step(torch.zeros(2, 4))
+    assert env.dropout_max_s == pytest.approx(3.0)  # back at the config's value
+    assert vec.curriculum_state() == {"dropout_max_s": pytest.approx(3.0)}
+
+    p = smoke_params(curriculum={"dropout_max_s": 0.5, "fraction": 0.5}, iterations=20)
+    assert train_ppo.make_curriculum(p).iterations == 10
+    assert train_ppo.make_curriculum(smoke_params()) is None  # off by default
+
+
 # ---------------------------------------------------------------- training and export
 
 
@@ -91,7 +118,8 @@ def test_actor_is_small_and_metrics_are_written(trained):
     assert (trained["run_dir"] / "policy.pt").stat().st_size < 5_000_000
     rows = trained["metrics"]
     assert [r["step"] for r in rows] == [0, 1]
-    assert {"reward_mean", "loss_value", "action_std", "env_steps_per_s"} <= set(rows[0])
+    assert {"reward_mean", "loss_value", "action_std", "env_steps_per_s",
+            "dropout_max_s"} <= set(rows[0])
     assert (trained["run_dir"] / "policy.json").exists()
     assert (trained["run_dir"] / "tb" / "model_1.pt").exists()  # rsl_rl's periodic save
 

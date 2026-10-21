@@ -29,6 +29,18 @@ Every PPO default lives in `train_ppo.DEFAULTS`; a config overrides any of them 
 `params`. `env` takes a `StructureHoldConfig` mapping (wind, estimate corruption, reward
 weights, airframe); the defaults are the env's.
 
+Two knobs aimed at the crash rate rather than the hold error:
+
+* `curriculum.dropout_max_s` (off by default) caps estimate dropouts at that length when
+  training starts and raises the cap linearly to the env's `estimate.dropout_max_s` over the
+  first `curriculum.fraction` of the iterations (`DropoutCurriculum` in `ppo_env.py`; the
+  cap in force is the `dropout_max_s` column of `metrics.jsonl`). Long dropouts are what
+  still crashes policy v1, but the first run with the curriculum was worse (see
+  `docs/decisions.md`), so it stays an option, not the default.
+* `eval.select_every` scores the saved checkpoints on a selection seed and exports the one
+  with the lowest crash rate, then lowest p95, because PPO keeps sharpening the hold after
+  the policy has become careful.
+
 `training.eval_policy` scores a `.onnx` or `.pt` and the PD yardstick on identically seeded
 envs for every seed in `seeds` (3 x 2048 episodes by default, about 15 min on 4 CPU cores),
 writes one `summary` row per seed and controller to `metrics.jsonl`, and pools them with a
