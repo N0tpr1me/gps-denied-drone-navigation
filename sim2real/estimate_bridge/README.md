@@ -73,3 +73,10 @@ Profile keys: `name`, `seed`, `divisor` (corruptor every N-th 50 Hz sample), `es
   vision source. Check `ekf.json` → `vision.rate_hz` ≈ 50 if in doubt.
 - The gz Python bindings (`gz.transport13`, `gz.msgs10`) and pymavlink are in the image
   already; the host needs only the repo's `[dev]` extras.
+
+## What EKF2 did with the corruption (runs of 21 Oct 2026, `experiments/LOG.md`)
+
+- **Dropouts** (0.2 to 3 s, nothing sent): EKF2 dead-reckons on the IMU (`cs_inertial_dead_reckoning` 15 to 17 % of the flight) and resumes vision fusion when samples return, resetting horizontal position to vision (3 xy resets per 60 s run). A 2.5 s dropout during the takeoff tripped PX4's position-loss failsafe (`COM_POS_FS_DELAY` 1 s): Land for about a second, then Takeoff resumed and the hover completed. That is the stock failover a real drone shows when its VIO drops out longer than the failsafe delay; it is logged, not hidden.
+- **Jumps and bias**: with `EKF2_EVP_NOISE` 0.1 m the 5 sigma gate is 0.5 m, so the bias walk and small jumps pass as ordinary measurements (0 rejected in these runs; innovation max 0.08 m); the estimate follows the corrupted stream and sits about 0.07 m off truth. A jump above the gate would be rejected until it decays or the fusion times out and resets to vision.
+- **Delay**: samples stamped on arrival plus `EKF2_EV_DELAY` 100 ms; EKF2 reports a 154 ms stamp-to-sample offset (delay plus its fusion horizon), no visible lag effect in a hover.
+- **Cost of the corruption on stock PX4 at 8 m/s**: p95 error 0.145 m (clean) to 0.219 m (vio_default), worst excursion toward the wall 0.30 to 0.36 m.
