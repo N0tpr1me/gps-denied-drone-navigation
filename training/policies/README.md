@@ -7,6 +7,7 @@
 | `structure_hold_v1.onnx` + `.json` | `20261021-220953_structure_hold_ppo_s0_3a46cff` (bounded reward with tilt penalty, trained on 5x the standard dropout and jump rates, checkpoint 750 of 1500 selected for the lowest crash rate on a selection seed) | p95 0.52 m vs PD 0.71 m; crash rate 8.9 % vs 6.6 % on the reporting seed (4.7 % on the selection seed; 256 episodes give about +/- 3 points). Crashes are now drifts out of the 3 m box during long dropouts, no tilt-overs. |
 
 | `structure_hold_v2.onnx` + `.json` | `20261022-002309_structure_hold_ppo_h15_s0_0f6e87f` continued by `20261022-005714_structure_hold_ppo_h15_resume_s0_a4cddb5` (15-step history, 3000 iterations as two resumed 30 min runs, checkpoint 2999 selected) | **Current release.** Trained and scored on the 50 to 150 ms estimate delay default (PR #14), which v1 never saw: v1 crashes 32.6 % there. 3 seeds x 2048 episodes (run `20261022-012927`): p95 0.54 m vs PD 0.82 m; crash rate 8.4 % +/- 0.4 vs 4.0 % +/- 0.3. Takes 300 inputs (15 x 20), 23.7k parameters. |
+| (not released) | `20261022-035818_structure_hold_ppo_s0_bd49d14` continued by `20261022-043117_structure_hold_ppo_resume_s0_c296f30` (v2 recipe retrained on the dead-reckoning estimate, checkpoint 2750) | 3 seeds (run `20261022-050300`): p95 0.59 m, crash 7.3 % +/- 0.3. v2 rescored under the same dead-reckoning estimate (run `20261022-050718`): p95 0.51 m, crash 6.7 % +/- 0.3, PD 0.83 m / 4.6 % +/- 0.3. v2 stays the release. |
 
 v1 and the comparison below were measured at the earlier fixed 50 ms delay.
 
