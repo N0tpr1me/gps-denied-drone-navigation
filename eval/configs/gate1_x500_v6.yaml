@@ -1,4 +1,4 @@
-# Gate 1 x500 test set (gate1_x500.yaml) for the v6 candidate: v5 continued for 1000
+# Gate 1 x500 test set (gate1_x500.yaml) for policy v6: v5 continued for 1000
 # iterations (run 20261022-223115, checkpoint 1500). Same seeds, cells and rules; v5, v3 and
 # the PD were scored on these episodes in run 20261022-214627.
 #   python -m training.launch --config eval/configs/gate1_x500_v6.yaml --device cpu
@@ -10,7 +10,7 @@ gpus: 1
 params:
   controllers:
     - name: v6
-      policy: runs/20261022-223115_structure_hold_ppo_v5_resume_s0_ca3b52d/policy.onnx  # v6 candidate: run 4, iteration 1500
+      policy: training/policies/structure_hold_v6.onnx  # run 20261022-223115, iteration 1500
   gate_controller: v6
   seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
   num_envs: 1024
