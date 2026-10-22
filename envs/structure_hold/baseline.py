@@ -25,7 +25,7 @@ class BaselineGains:
     integral: float = 0.6  # 1/s^3: acceleration per metre-second of accumulated error
     max_integral: float = 3.0  # m/s^2 the integrator may contribute
     max_acc: float = 6.0  # m/s^2 horizontal and vertical command limit
-    tilt: float = 8.0  # rad/s per rad of tilt error
+    tilt: float = 4.0  # rad/s per rad of tilt error (8 before the rate-loop lag; it oscillated)
     yaw: float = 3.0  # rad/s per rad of heading error
 
 

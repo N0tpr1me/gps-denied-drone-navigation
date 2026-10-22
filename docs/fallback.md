@@ -38,16 +38,18 @@ fix (0 while fixes arrive):
 | Constant | Value | Note |
 | --- | --- | --- |
 | `T_FB` | 0.5 s | sweep below; 0.25 s is as good, 1 s halves the gain, 2 s does nothing |
-| `K_BRAKE` | 2.5 1/s | the PD yardstick's velocity gain |
+| `K_BRAKE` | 1.5 1/s | 2.5 (the PD's velocity gain) oscillated once the mock's rate loop lagged 100 to 200 ms like PX4's; 1.5 brakes 1.5 m/s to a hover in about 1 s |
 | `A_MAX` | 6 m/s² | horizontal and vertical command limit |
-| `K_TILT` | 8 rad/s per rad | attitude P gain, as the yardstick |
+| `K_TILT` | 4 rad/s per rad | attitude P gain, as the yardstick (8 before the rate-loop lag) |
 | `K_YAW` | 3 rad/s per rad | heading P gain, as the yardstick |
 
-The thresholds and gains are the mock airframe's (0.8 kg, 16 N, 6 rad/s rate limit); scale
+The thresholds and gains are the mock airframe's (0.8 kg, 16 N, 2 rad/s rate limit since v3, 6 rad/s when measured here); scale
 `K_TILT` / `K_YAW` with the real rate loop and keep `A_MAX` below what the airframe can tilt
 to in the wind it is rated for.
 
 ## What it buys and costs
+
+Measured with the mock before the rate-loop lag and the 2 rad/s action limit (v3 work, 2026-10-22) and with `K_BRAKE` 2.5, `K_TILT` 8; the v3 rows in `training/policies/README.md` carry the re-measurement under the lagged plant.
 
 3 seeds x 2048 identical 20 s episodes, standard wind and corruption, dead-reckoning
 estimate (dropouts 0.2 to 3 s at 0.02 Hz, jumps 0.02 Hz, delay 50 to 150 ms). Crash rate

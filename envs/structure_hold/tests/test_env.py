@@ -247,3 +247,24 @@ def test_facing_away_from_the_wall_and_yawing_cost_reward():
     w = cfg.reward
     assert reward[0] - reward[1] == pytest.approx(w.heading * 1.0, abs=0.05)  # 1 - cos(90 deg)
     assert reward[0] - reward[2] == pytest.approx(w.yaw_rate * 2.0, abs=0.05)
+
+
+def test_rate_setpoint_lags_the_command_with_the_episode_time_constant():
+    cfg = still_air(rate_lag_s=(0.2, 0.2))
+    env = StructureHoldEnv(cfg, num_envs=2, seed=0)
+    a = hover_action(env)
+    a[:, 2] = 1.0  # full yaw rate command
+    env.step(a)
+    assert env.rate_sp[0, 2] == pytest.approx(cfg.max_rate_rad_s * cfg.dt / 0.2)
+    for _ in range(19):
+        env.step(a)
+    # after one time constant the setpoint has covered 1 - (1 - dt/tau)^(tau/dt) of the way
+    want = cfg.max_rate_rad_s * (1 - (1 - cfg.dt / 0.2) ** 20)
+    assert env.rate_sp[0, 2] == pytest.approx(want, rel=1e-4)
+    assert env.state.ang_vel[0, 2] < cfg.max_rate_rad_s * 0.9  # the body lags further still
+
+    env = StructureHoldEnv(still_air(rate_lag_s=(0.0, 0.0)), num_envs=1, seed=0)
+    env.step(a[:1])
+    assert env.rate_sp[0, 2] == pytest.approx(env.cfg.max_rate_rad_s)  # no lag
+    with pytest.raises(ValueError):
+        StructureHoldConfig(rate_lag_s=(0.3, 0.1))

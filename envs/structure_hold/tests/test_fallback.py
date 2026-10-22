@@ -17,8 +17,10 @@ from envs.structure_hold.tests.test_env import hover_action, still_air
 def quiet_env(num_envs: int = 2) -> StructureHoldEnv:
     cfg = StructureHoldConfig(
         disturbance=still_air().disturbance,
+        # No dead-reckoning bias, so braking the estimate to zero brakes the true motion.
         estimate=EstimateCorruptionConfig(dropout_rate_hz=0.0, jump_rate_hz=0.0,
-                                          delay_min_s=0.0, delay_max_s=0.0),
+                                          delay_min_s=0.0, delay_max_s=0.0,
+                                          dropout_accel_bias_mps2=0.0),
         start_offset_std_m=0.0, start_yaw_std_rad=0.0,
     )
     return StructureHoldEnv(cfg, num_envs=num_envs, seed=0)
@@ -45,11 +47,11 @@ def test_fallback_takes_over_after_the_threshold_brakes_and_hands_back():
     vel = torch.tensor([[0.0, 1.5, 0.0]]).expand(2, 3).clone()  # 1.5 m/s along the wall
     env.sim.reset(torch.arange(2), QuadState(pos=st.pos.clone(), quat=st.quat.clone(),
                                              vel=vel, ang_vel=st.ang_vel.clone()))
-    env.estimator.dropout_left[1] = 150  # env 1 loses its estimate for 1.5 s; env 0 never
+    env.estimator.dropout_left[1] = 250  # env 1 loses its estimate for 2.5 s; env 0 never
     obs, _ = env.get_observations()
     hover = hover_action(env)
     active_steps = 0
-    for _ in range(149):
+    for _ in range(249):
         a = wrapped(obs)
         assert torch.equal(a[0], hover[0])  # the fresh env is untouched
         if bool(wrapped.active[1]):
@@ -59,9 +61,9 @@ def test_fallback_takes_over_after_the_threshold_brakes_and_hands_back():
             assert torch.equal(a[1], hover[1])
             assert wrapped.stale_s[1] < rule.threshold_s
         obs, *_ = env.step(a)
-    assert bool(wrapped.active[1]) and active_steps == pytest.approx(100, abs=2)
+    assert bool(wrapped.active[1]) and active_steps == pytest.approx(200, abs=2)
     speed = env.state.vel.norm(dim=-1)
-    assert speed[1] < 0.3 and speed[0] > 1.0  # braked to a hover, the hover-only env coasts
+    assert speed[1] < 0.3 and not bool(wrapped.active[0])  # braked to a hover; env 0 untouched
     # Fresh again: hand back on the first fresh observation.
     for _ in range(5):
         obs, *_ = env.step(wrapped(obs))

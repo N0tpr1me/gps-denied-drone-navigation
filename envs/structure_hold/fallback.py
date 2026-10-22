@@ -31,9 +31,10 @@ Controller = Callable[[torch.Tensor], torch.Tensor]
 @dataclass(frozen=True)
 class FallbackRule:
     threshold_s: float = 1.0  # take over once the estimate has been stale this long
-    brake_vel: float = 2.5  # 1/s: acceleration per m/s of dead-reckoned velocity
+    brake_vel: float = 1.5  # 1/s: acceleration per m/s of dead-reckoned velocity (2.5 oscillated
+    # once the rate loop lagged; 1.5 brakes 1.5 m/s to a hover in about 1 s)
     max_acc: float = 6.0  # m/s^2 command limit
-    tilt: float = 8.0  # rad/s per rad of tilt error (as the PD yardstick)
+    tilt: float = 4.0  # rad/s per rad of tilt error (as the PD yardstick)
     yaw: float = 3.0  # rad/s per rad of heading error
 
     @classmethod
