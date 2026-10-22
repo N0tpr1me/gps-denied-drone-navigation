@@ -50,6 +50,27 @@ def test_fly_scores_each_first_episode_once_and_pd_is_deterministic():
     assert all(r["length_s"] == pytest.approx(1.0) and not r["crash"] for r in rows[0])
 
 
+def test_command_roughness_is_reported_so_a_limit_cycle_shows():
+    """p95 can miss a thrust/rate cycle around the hold point; the roughness columns do not."""
+    cfg = StructureHoldConfig.from_dict({"episode_length_s": 1.0})
+    env = StructureHoldEnv(cfg, 4, seed=0)
+    pd = CascadedPd(env)
+    steps = [0]
+
+    def chatter(obs):
+        a = pd(obs)
+        a[:, 3] += 0.2 * (-1.0) ** steps[0]
+        steps[0] += 1
+        return a
+
+    calm = gate1.describe(gate1.fly(env, pd), np.zeros((10, 4), dtype=int))
+    env = StructureHoldEnv(cfg, 4, seed=0)
+    pd = CascadedPd(env)
+    rough = gate1.describe(gate1.fly(env, chatter), np.zeros((10, 4), dtype=int))
+    assert rough["thrust_roughness_1_s_mean"] > 5 * calm["thrust_roughness_1_s_mean"]
+    assert np.isfinite(calm["rate_roughness_rad_s2_mean"])
+
+
 def test_paired_and_judge():
     def rows(p95, crash):
         return [{"p95_m": a, "crash": bool(c)} for a, c in zip(p95, crash, strict=True)]

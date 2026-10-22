@@ -142,7 +142,8 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
             m = compute_metrics(trace, surface, gusts=[g for g in gusts[i] if g[0] < t[-1]],
                                 contact_radius_m=cfg.contact_radius_m)
             row.update({k: m[k] for k in ("p95_m", "rms_m", "max_m", "worst_toward_surface_m",
-                                          "contacts", "rate_roughness_rad_s2")})
+                                          "contacts", "rate_roughness_rad_s2",
+                                          "thrust_roughness_1_s")})
         rows.append(row)
     return rows
 
@@ -223,6 +224,11 @@ def _crash(rows: list[dict[str, Any]]) -> np.ndarray:
     return np.array([r["crash"] for r in rows], dtype=float)
 
 
+def _mean_of(rows: list[dict[str, Any]], key: str) -> float:
+    x = np.array([r.get(key, math.nan) for r in rows], dtype=float)
+    return float(np.nanmean(x)) if np.isfinite(x).any() else math.nan
+
+
 def describe(rows: list[dict[str, Any]], idx: np.ndarray) -> dict[str, Any]:
     """Headline numbers of one controller in one cell, with 95 % intervals."""
     p95, crash = _p95(rows), _crash(rows)
@@ -245,6 +251,9 @@ def describe(rows: list[dict[str, Any]], idx: np.ndarray) -> dict[str, Any]:
         "worst_toward_surface_m": float(np.nanmax(worst)),
         "contact_rate": sum(1 for r in rows if r["reason"] == "contact") / n,
         "heading_err_deg_mean": float(np.mean([r["heading_err_deg"] for r in rows])),
+        # Reported, not judged: a limit cycle in the commands shows up here, not in p95.
+        "rate_roughness_rad_s2_mean": _mean_of(rows, "rate_roughness_rad_s2"),
+        "thrust_roughness_1_s_mean": _mean_of(rows, "thrust_roughness_1_s"),
     }
 
 
@@ -399,8 +408,9 @@ def markdown(report: dict[str, Any]) -> str:
         f"Seeds {report['seeds']}, {report['num_envs']} episodes per cell and seed; "
         f"judged: `{gate}`. Intervals are 95 %.",
         "",
-        "| Cell | Controller | p95 (m) | Crash | Worst toward wall (m) | Heading (deg) |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Cell | Controller | p95 (m) | Crash | Worst toward wall (m) | Heading (deg) "
+        "| Roughness, rates (rad/s2) / thrust (1/s) |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for c in report["cells"]:
         for name in names:
@@ -409,7 +419,9 @@ def markdown(report: dict[str, Any]) -> str:
                 f"| {c['label']} | {name} | {d['p95_m_mean']:.3f} "
                 f"[{d['p95_ci'][0]:.3f}, {d['p95_ci'][1]:.3f}] | {d['crash_rate']:.1%} "
                 f"[{d['crash_ci'][0]:.1%}, {d['crash_ci'][1]:.1%}] | "
-                f"{d['worst_toward_surface_m']:.2f} | {d['heading_err_deg_mean']:.1f} |")
+                f"{d['worst_toward_surface_m']:.2f} | {d['heading_err_deg_mean']:.1f} | "
+                f"{d.get('rate_roughness_rad_s2_mean', math.nan):.0f} / "
+                f"{d.get('thrust_roughness_1_s_mean', math.nan):.1f} |")
     lines += ["", f"| Cell | {gate} p95 vs PD | Crash difference | Hold | Safety | Verdict |",
               "| --- | --- | --- | --- | --- | --- |"]
     for c in report["cells"]:
