@@ -147,6 +147,34 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
     return rows
 
 
+def module_thrust_scale(meta: dict[str, Any], env: StructureHoldEnv) -> float:
+    """How much more hover-relative thrust one unit of the policy's thrust action is worth
+    on the module than in ``env``: the module turns the action into newtons with the
+    policy's own max thrust and maps them through the hover point with the policy's own
+    mass (``sim2real/px4``: ``thrust_n / (MASS_KG * g) * hover_thrust``). 1 when the policy
+    trained on the env's airframe."""
+    pq = meta["env_cfg"]["quad"]
+    return (pq["max_thrust"] / pq["mass"]) / (env.cfg.quad.max_thrust / env.cfg.quad.mass)
+
+
+class ModuleThrustScale:
+    """Fly a policy trained on another airframe the way the PX4 module flies it: its thrust
+    action rescaled by ``module_thrust_scale`` (clipped to the action range, which on the
+    x500 only cuts commands past the module's own 0.9 clamp), and the previous-action
+    observation mapped back so the policy sees its own action."""
+
+    def __init__(self, inner: Callable[[torch.Tensor], torch.Tensor], k: float):
+        self.inner, self.k = inner, float(k)
+        self.j = OBS["last_action"].start + 3
+
+    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
+        obs = obs.clone()
+        obs[:, self.j] = (obs[:, self.j] + 1.0) / self.k - 1.0
+        a = self.inner(obs).clone()
+        a[:, 3] = ((a[:, 3] + 1.0) * self.k - 1.0).clamp(-1.0, 1.0)
+        return a
+
+
 def make_factory(spec: dict[str, Any], device: str) -> Callable[[StructureHoldEnv], Any]:
     """``(env) -> controller`` for a ``controllers`` entry (or the PD)."""
     if spec.get("policy") is None:
@@ -160,12 +188,13 @@ def make_factory(spec: dict[str, Any], device: str) -> Callable[[StructureHoldEn
 
     def factory(env: StructureHoldEnv):
         out = meta["output"]
-        if (abs(out["max_rate_rad_s"] - env.cfg.max_rate_rad_s) > 1e-9
-                or abs(out["max_thrust_n"] - env.cfg.quad.max_thrust) > 1e-9):
-            raise ValueError(f"{path.name} scales actions for {out['max_rate_rad_s']} rad/s and "
-                             f"{out['max_thrust_n']} N, the protocol env for "
-                             f"{env.cfg.max_rate_rad_s} rad/s and {env.cfg.quad.max_thrust} N")
+        if abs(out["max_rate_rad_s"] - env.cfg.max_rate_rad_s) > 1e-9:
+            raise ValueError(f"{path.name} scales rates for {out['max_rate_rad_s']} rad/s, the "
+                             f"protocol env for {env.cfg.max_rate_rad_s} rad/s")
         ctl = load_controller(path, env.num_envs, device, meta=meta)
+        k = module_thrust_scale(meta, env)
+        if abs(k - 1.0) > 1e-9:
+            ctl = ModuleThrustScale(ctl, k)
         if rule is not None:
             ctl = StaleFallback(env, ctl, rule)
         return YawGuard(env, ctl) if spec.get("yaw_guard") else ctl

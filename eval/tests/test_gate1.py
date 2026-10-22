@@ -68,7 +68,36 @@ def test_paired_and_judge():
     assert not gate1.judge({}, worse, gate1.DEFAULT_RULES)["safety"]
 
 
-@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml"])
+def test_a_policy_from_another_airframe_flies_through_the_module_thrust_mapping():
+    """v3 (0.8 kg, 16 N) on the x500: the env must get the command the module would send."""
+    meta = json.loads((REPO / "training/policies/structure_hold_v3.json").read_text())
+    env = StructureHoldEnv(StructureHoldConfig.from_dict({"airframe": "gz_x500"}), 2, seed=0)
+    k = gate1.module_thrust_scale(meta, env)
+    assert k == pytest.approx((16.0 / 0.8) / (34.194 / 2.0643), rel=1e-3)
+    seen = []
+
+    def inner(obs):
+        seen.append(obs[:, gate1.OBS["last_action"].start + 3].clone())
+        a = torch.zeros(obs.shape[0], 4)
+        a[:, 3] = torch.tensor([-0.5, 0.0])
+        return a
+
+    ctl = gate1.ModuleThrustScale(inner, k)
+    obs, _ = env.reset()
+    for _ in range(2):
+        a = ctl(obs)
+        obs, *_ = env.step(a)
+    ctl(obs)
+    # Module: u = thrust_n / (MASS_KG g) * hover, with v3's own newtons and mass.
+    q, g = meta["env_cfg"]["quad"], 9.80665
+    u_module = 0.5 * (torch.tensor([-0.5, 0.0]) + 1.0) * q["max_thrust"] / (q["mass"] * g)
+    u_env = 0.5 * (a[:, 3] + 1.0) * env.cfg.quad.max_thrust * env.thrust_cmd_per_n
+    u_hover = env.thrust_cmd_per_n * env.cfg.quad.mass * g
+    torch.testing.assert_close(u_env, u_module * u_hover)
+    torch.testing.assert_close(seen[-1], torch.tensor([-0.5, 0.0]))  # its own action
+
+
+@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml"])
 def test_smoke_run_writes_report(tmp_path, config):
     run_dir = tmp_path / "run"
     out = subprocess.run(

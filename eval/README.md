@@ -14,11 +14,15 @@ Metrics, baselines and the PX4 SITL benchmark harness.
   get Wilson intervals, mean p95 and the policy-vs-PD differences get bootstrap intervals,
   and each cell gets the hold and safety verdicts. The stress config varies one thing that
   will differ on the real drone at a time (airframe, motor lag, estimate delay, long
-  dropouts, near-wall yaw moment). Needs torch (`pip install -e .[torch]`).
+  dropouts, near-wall yaw moment). `configs/gate1_x500.yaml` is the same test set on the
+  PX4 Gazebo x500 (`airframe: gz_x500`); a policy trained on another airframe flies there
+  through the module's thrust mapping for its own mass (`ModuleThrustScale`), as on PX4.
+  Needs torch (`pip install -e .[torch]`).
 
 ```
 python -m training.launch --config eval/configs/gate1.yaml --device cpu          # ~30 min
 python -m training.launch --config eval/configs/gate1_stress.yaml --device cpu   # ~40 min
+python -m training.launch --config eval/configs/gate1_x500.yaml --device cpu     # ~30 min
 ```
 
 To judge another policy, add it under `params.controllers` and set `gate_controller`.

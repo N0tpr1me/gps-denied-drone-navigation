@@ -27,6 +27,7 @@ expects.
 | Reward | alive bonus minus bounded penalties on true position error (saturating over `pos_scale_m`, extra for the component toward the wall), speed (`stale_vel`, off by default, adds to the speed penalty while the estimate is stale), body rates, action size, action change and tilt beyond `reward.tilt_free_deg`; a crash costs `reward.crash` once. Every term is bounded so a live step always beats a crash (`config.py`). |
 | Episode ends | contact (clearance ≤ 0.25 m), ground, tilt over 80°, true error over 3 m, a non-finite state (counted, never silently dropped), or the clock (`episode_length_s`). |
 | Randomness | one seed drives the NumPy generator (hold point, start pose, wind) and the estimator's torch generator. Same seed, same rollout. |
+| Airframe | `airframe` names a vehicle (`airframes.py`): `placeholder` (0.8 kg 5-inch-class, the default, policies up to v4) or `gz_x500` (the PX4 Gazebo x500, 2.06 kg, derived from its SDF, PX4's airframe file and the tuned rate gains: mass, inertia, thrust curve, PX4's control allocation, motor lag). `actuation` carries how PX4's normalised commands become force and torque. `airframe_rand` and `wall_yaw_torque` spread the airframe per episode around it. |
 
 `baseline.py` is a classical cascaded PD on the same observation: the mock's yardstick and
 proof that the task is holdable. It is not the tuned-PX4 baseline, which is PX4 itself in

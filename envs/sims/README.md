@@ -33,7 +33,8 @@ state = sim.step(thrust, torque_body, force_ext_world)
   checklist and parity: `docs/isaac-lab.md`.
 
 The default `QuadParams` is a placeholder 5-inch-class airframe (0.8 kg, 2:1 thrust to
-weight) until the airframe is chosen (docs/decisions.md).
+weight). The PX4 Gazebo x500's numbers are a named airframe of the task
+(`envs/structure_hold/airframes.py`, `airframe: gz_x500`).
 
 Tests: `pytest envs/sims`. `tests/test_isaac_quad.py` checks the Isaac backend's own code
 step for step against the mock over a PhysX stand-in (`tests/fake_physx.py`), so it runs

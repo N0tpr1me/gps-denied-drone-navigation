@@ -31,7 +31,10 @@ Observation (``num_obs`` = 20), everything the onboard module can know:
 | 19 | estimate age, capped at 1 s | s |
 
 Action (``num_actions`` = 4), each in [-1, 1]: body rate setpoints (roll, pitch, yaw) as a
-fraction of ``max_rate_rad_s``, and thrust mapped linearly onto ``[0, max_thrust]``.
+fraction of ``max_rate_rad_s``, and thrust mapped linearly onto ``[0, max_thrust]`` newtons
+of ``cfg.quad``. Those newtons reach the airframe as the PX4 module sends them: through the
+hover point (``thrust_n / (mass * g) * hover_thrust``), then, when ``cfg.actuation`` says so,
+the module's clamp and the vehicle's thrust curve (``envs/structure_hold/airframes.py``).
 
 Randomness: one NumPy generator (per-episode draws: hold point, start pose, wind params),
 one torch generator (estimate corruption) and a second NumPy generator for the airframe
@@ -55,7 +58,7 @@ from envs.disturbance import sample_params
 from envs.disturbance import torch_adapter as wind
 from envs.estimate.torch_adapter import TorchEstimateCorruptor
 from envs.sims import QuadState, RatePid, make_sim
-from envs.sims.torch_quad import quat_from_yaw, quat_rotate, quat_rotate_inverse
+from envs.sims.torch_quad import GRAVITY, quat_from_yaw, quat_rotate, quat_rotate_inverse
 from envs.structure_hold.config import StructureHoldConfig
 
 OBS = {
@@ -104,7 +107,13 @@ class StructureHoldEnv:
 
         n, dev, dt = self.num_envs, self.device, self.dtype
         self.sim = make_sim(sim, cfg.quad, n, cfg.dt, device=device)
-        self.rate_pid = RatePid(cfg.rate_pid, cfg.quad.max_torque, n, cfg.dt, dev, dt)
+        # PX4's unit torque on this airframe, and where the airframe saturates before it.
+        act = cfg.actuation
+        per_unit = act.torque_per_unit or cfg.quad.max_torque
+        sat = (None if act.torque_per_unit is None else
+               tuple(min(1.0, m / u) for m, u in zip(cfg.quad.max_torque, per_unit,
+                                                             strict=True)))
+        self.rate_pid = RatePid(cfg.rate_pid, per_unit, n, cfg.dt, dev, dt, sat_limit=sat)
         self.estimator = TorchEstimateCorruptor(cfg.estimate, n, cfg.dt, seed, dev, dt)
         self.wall_normal = torch.tensor(WALL_NORMAL_TOWARD, dtype=dt, device=dev)
         self.wall_point = torch.tensor(WALL_POINT, dtype=dt, device=dev)
@@ -131,6 +140,12 @@ class StructureHoldEnv:
         # Per-episode airframe (cfg.airframe_rand): thrust per unit action relative to the
         # nominal airframe (mass scale x hover-thrust error), and the drawn scales for logs.
         self.thrust_gain = torch.ones(n, dtype=dt, device=dev)
+        # With cfg.actuation: the normalised command per policy newton (the module's hover
+        # mapping on this env's airframe) and the airframe's max thrust in newtons.
+        self.thrust_via_module = act.thrust_via_module
+        self.thrust_cmd_per_n = torch.full((n,), self._cmd_per_newton(1.0, 1.0, 0.0),
+                                           dtype=dt, device=dev)
+        self.max_thrust_act = torch.full((n,), cfg.quad.max_thrust, dtype=dt, device=dev)
         self.mass_scale = torch.ones(n, dtype=dt, device=dev)
         self.inertia_scale = torch.ones(n, dtype=dt, device=dev)
         self.yaw_torque_peak = torch.zeros(n, dtype=dt, device=dev)  # signed, N m
@@ -236,6 +251,16 @@ class StructureHoldEnv:
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
 
+    def _cmd_per_newton(self, mass_scale: Any, tw_scale: Any, hover_err: Any) -> Any:
+        """The module's normalised thrust per policy newton: ``hover_thrust / (MASS_KG * g)``
+        with ``MASS_KG`` the nominal mass and the hover thrust this airframe's (through its
+        thrust curve), off by ``hover_err``."""
+        q, act = self.cfg.quad, self.cfg.actuation
+        hover_frac = np.minimum(1.0, 1.0 / (np.asarray(tw_scale, dtype=np.float64)
+                                            * q.max_thrust / (q.mass * GRAVITY)))
+        u_hover = act.command_for_fraction(hover_frac)
+        return u_hover * (1.0 + np.asarray(hover_err, dtype=np.float64)) / (q.mass * GRAVITY)
+
     def _draw_airframe(self, env_ids: torch.Tensor) -> None:
         """Per-episode airframe and near-wall yaw moment, from their own generator. Nothing
         is drawn (and the sim keeps ``cfg.quad``) while both are off."""
@@ -256,6 +281,8 @@ class StructureHoldEnv:
                 max_thrust=q.max_thrust * mass * tw, motor_tau=tau,
             )
             self.thrust_gain[env_ids] = t(mass * (1.0 + hover_err))
+            self.thrust_cmd_per_n[env_ids] = t(self._cmd_per_newton(mass, tw, hover_err))
+            self.max_thrust_act[env_ids] = t(q.max_thrust * mass * tw)
             self.mass_scale[env_ids] = t(mass)
             self.inertia_scale[env_ids] = t(inertia)
         wy = cfg.wall_yaw_torque
@@ -296,7 +323,12 @@ class StructureHoldEnv:
         self.rate_sp += self.rate_lag_alpha[:, None] * (rate_cmd - self.rate_sp)
         # Thrust as the module sends it: through the hover point, so x thrust_gain on an
         # airframe other than the nominal one (1 unless cfg.airframe_rand is on).
-        thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust * self.thrust_gain
+        thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust
+        if self.thrust_via_module:
+            u = (thrust * self.thrust_cmd_per_n).clamp(*cfg.actuation.thrust_cmd_range)
+            thrust = self.max_thrust_act * cfg.actuation.thrust_fraction(u)
+        else:
+            thrust = thrust * self.thrust_gain
         torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel

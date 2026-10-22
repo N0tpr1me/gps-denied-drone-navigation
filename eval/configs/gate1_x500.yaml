@@ -1,0 +1,67 @@
+# Gate 1 protocol on the gz x500 (envs/structure_hold/airframes.py), the vehicle the module
+# is benchmarked on in Gazebo: same held-out seeds, cells and rules as gate1.yaml, only the
+# airframe changes. A policy trained on another airframe (v3: 0.8 kg, 16 N) flies through
+# the module's thrust mapping for its own mass, as on PX4 (eval.gate1.ModuleThrustScale).
+# Gate 1 protocol, nominal test set (docs/gate1.md): the judged policy and the cascaded PD
+# fly the same held-out episodes in 6 fixed cells (mean wind 0 / 4 / 8 m/s x hold point
+# 1 m / 2 m from the wall), 3 held-out seeds each. Standard estimate corruption.
+#   python -m training.launch --config eval/configs/gate1.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/gate1.yaml --device cpu
+name: gate1_x500
+entrypoint: eval.gate1
+seed: 9001  # unused: the protocol seeds are params.seeds
+expected_hours: 0.6
+gpus: 1
+params:
+  controllers:
+    - name: v3
+      policy: training/policies/structure_hold_v3.onnx
+  gate_controller: v3
+  seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
+  num_envs: 1024
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    # The standard estimate corruption (eval rates, not the 5x training rates), stated in
+    # full so a later change of a default cannot silently move the test set.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Held-out gust schedule: both gusts start inside the 20 s episode (training draws
+      # starts up to 50 s). Gust speed and length stay inside the training ranges.
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  cells:
+    - {name: w0_d1, label: "0 m/s, 1 m", env: {disturbance: {mean_speed: 0.0}, hold_distance: 1.0}}
+    - {name: w0_d2, label: "0 m/s, 2 m", env: {disturbance: {mean_speed: 0.0}, hold_distance: 2.0}}
+    - {name: w4_d1, label: "4 m/s, 1 m", env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0}}
+    - {name: w4_d2, label: "4 m/s, 2 m", env: {disturbance: {mean_speed: 4.0}, hold_distance: 2.0}}
+    - {name: w8_d1, label: "8 m/s, 1 m", headline: true, env: {disturbance: {mean_speed: 8.0}, hold_distance: 1.0}}
+    - {name: w8_d2, label: "8 m/s, 2 m", env: {disturbance: {mean_speed: 8.0}, hold_distance: 2.0}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9001]
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 2.0
