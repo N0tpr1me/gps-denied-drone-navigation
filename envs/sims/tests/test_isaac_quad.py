@@ -2,8 +2,8 @@
 
 The physics inside Isaac Lab is checked against the mock by the parity check
 (``eval/sim_parity.py``) on a machine that has Isaac Lab; these tests make sure everything
-this repo adds around PhysX (frames, clipping, motor lag, resets, origins, the lazy import)
-is right on every CI run.
+this repo adds around PhysX (frames, clipping, motor lag, per-env airframes, the external
+moment, resets, origins, the lazy import) is right on every CI run.
 """
 
 from __future__ import annotations
@@ -87,6 +87,67 @@ def test_glue_matches_the_mock_step_for_step():
             worst = max(worst, float((x - y).abs().max()))
     assert worst < 1e-3, worst
     assert torch.allclose(mock.thrust, isaac.thrust) and torch.allclose(mock.torque, isaac.torque)
+
+
+def random_airframe(n: int, g: torch.Generator, p: QuadParams) -> dict:
+    """Wider than any training range, every knob per env, unequal inertia scales."""
+    u = lambda lo, hi, *shape: lo + (hi - lo) * torch.rand(n, *shape, generator=g)  # noqa: E731
+    mass = p.mass * u(0.6, 1.6)
+    return {"mass": mass, "inertia": torch.tensor(p.inertia) * u(0.5, 2.0, 3),
+            "max_thrust": mass * 9.80665 * u(1.3, 2.5),
+            "max_torque": torch.tensor(p.max_torque) * u(0.5, 1.2, 3),
+            "motor_tau": u(0.0, 0.08)}
+
+
+def test_glue_matches_the_mock_on_per_env_airframes_and_an_external_moment():
+    """Every env its own airframe, some changed again mid-run, a few on the nominal one,
+    commands into the per-env limits and an external body moment: the glue, with mass and
+    inertia going through the PhysX stand-in, tracks the mock to float32 rounding."""
+    g = torch.Generator().manual_seed(1)
+    n, params = 64, QuadParams()
+    mock = make_sim("torch", params, n, DT)
+    isaac = glue(params, n)
+    everyone = torch.arange(n)
+    frames = random_airframe(n, g, params)
+    for sim in (mock, isaac):
+        sim.set_airframe(everyone, **frames)
+        sim.set_airframe([5, 6])  # back to QuadParams
+    start = random_start(n, g)
+    mock.reset(state=start)
+    isaac.reset(state=start)
+    assert torch.allclose(isaac.world.mass, 1.0 / mock.inv_mass)
+    worst = 0.0
+    for k in range(150):
+        thrust = mock.hover_thrust * (1 + 0.8 * torch.randn(n, generator=g))
+        torque = 0.6 * torch.tensor(params.max_torque) * torch.randn(n, 3, generator=g)
+        force = 0.5 * torch.randn(n, 3, generator=g)
+        moment = 0.02 * torch.randn(n, 3, generator=g)
+        a = mock.step(thrust, torque, force, moment)
+        b = isaac.step(thrust, torque, force, moment)
+        if k == 70:  # new airframes for a few envs mid-episode, and a reset for others
+            ids = torch.tensor([3, 17, 40])
+            new = {key: v[:3] for key, v in random_airframe(3, g, params).items()}
+            mock.set_airframe(ids, **new)
+            isaac.set_airframe(ids, **new)
+            s = random_start(2, g)
+            mock.reset([8, 9], s)
+            isaac.reset([8, 9], s)
+        for x, y in zip(a, b, strict=True):
+            worst = max(worst, float((x - y).abs().max()))
+    assert worst < 1e-3, worst
+    for name in ("inv_mass", "hover_thrust", "inertia", "max_thrust", "max_torque", "lag",
+                 "thrust", "torque"):
+        assert torch.allclose(getattr(mock, name), getattr(isaac, name)), name
+
+
+def test_set_airframe_puts_mass_and_inertia_into_physx():
+    sim = glue(QuadParams(), 4)
+    sim.set_airframe([1, 3], mass=[1.0, 1.2], inertia=[[0.004, 0.005, 0.007]] * 2)
+    assert sim.world.mass.tolist() == pytest.approx([0.8, 1.0, 0.8, 1.2])
+    assert torch.diagonal(sim.world.inertia[3]).tolist() == pytest.approx([0.004, 0.005, 0.007])
+    assert torch.diagonal(sim.world.inertia[0]).tolist() == pytest.approx([0.0035, 0.0035, 0.006])
+    sim.set_airframe()
+    assert sim.world.mass.tolist() == pytest.approx([0.8] * 4)
 
 
 def test_state_is_relative_to_each_env_origin():

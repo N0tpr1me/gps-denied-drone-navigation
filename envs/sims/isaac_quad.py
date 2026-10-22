@@ -1,10 +1,11 @@
 """Isaac Lab backend behind the simulator seam (``make_sim("isaac", ...)``).
 
-Same two calls and the same ``QuadState`` as the mock (``torch_quad.py``):
+Same calls and the same ``QuadState`` as the mock (``torch_quad.py``):
 
     sim = IsaacQuadSim(QuadParams(), num_envs=4096, dt=0.01, device="cuda")
     sim.reset()                                     # all envs level at the origin
-    state = sim.step(thrust, torque_body, force_ext_world)
+    sim.set_airframe(env_ids, mass=..., inertia=...)   # optional, per env (randomisation)
+    state = sim.step(thrust, torque_body, force_ext_world)   # [, torque_ext_body]
 
 How it maps onto Isaac Lab (pinned to Isaac Lab 2.3.2 on Isaac Sim 5.1.0, docs/isaac-lab.md):
 
@@ -14,11 +15,13 @@ How it maps onto Isaac Lab (pinned to Isaac Lab 2.3.2 on Isaac Sim 5.1.0, docs/i
   physics step. The task's Crazyflie articulation is not used: its four propeller links add
   mass, inertia and spin that the mock does not have, and the seam's contract is "a backend
   moves one rigid body". Mass and diagonal inertia are written into PhysX from
-  ``QuadParams`` and read back; a mismatch fails loudly.
+  ``QuadParams`` (or, per env, from ``set_airframe``) and read back; a mismatch fails loudly.
 - Everything the mock adds on top of rigid-body physics is done here in torch with the
   mock's own formulas, so the two backends share it exactly: thrust clipped to
   ``[0, max_thrust]`` and torque to ``±max_torque``, then the first-order motor lag
-  ``motor_tau`` per physics sub-step. Physics runs at ``dt / substeps``, as the mock does.
+  ``motor_tau`` per physics sub-step, all per env as ``set_airframe`` leaves them; then the
+  optional external body torque (an aerodynamic moment, neither clipped nor lagged).
+  Physics runs at ``dt / substeps``, as the mock does.
 - No drag, no damping, no sleeping, no collisions, no ground: PhysX's default angular
   damping (0.05) and sleep thresholds are switched off, gravity is the mock's 9.80665 m/s^2,
   gyroscopic forces are on (the mock integrates Euler's equation with the gyro term).
@@ -40,9 +43,9 @@ from __future__ import annotations
 
 import atexit
 import importlib.util
-import math
 from typing import Any
 
+import numpy as np
 import torch
 
 from envs.sims.quad_state import QuadState
@@ -88,10 +91,10 @@ def parameter_map(params: QuadParams, dt: float) -> list[tuple[str, Any, str]]:
         ("mass", params.mass, "PhysX rigid body mass (set_masses, read back)"),
         ("inertia", params.inertia, "PhysX diagonal inertia, principal axes = body FLU "
          "(set_inertias + set_coms, read back)"),
-        ("max_thrust", params.max_thrust, "clip in IsaacQuadSim.step, as the mock"),
-        ("max_torque", params.max_torque, "clip in IsaacQuadSim.step, as the mock"),
-        ("motor_tau", params.motor_tau, "first-order lag in torch per physics sub-step, "
-         "as the mock"),
+        ("max_thrust", params.max_thrust, "per-env clip in IsaacQuadSim.step, as the mock"),
+        ("max_torque", params.max_torque, "per-env clip in IsaacQuadSim.step, as the mock"),
+        ("motor_tau", params.motor_tau, "per-env first-order lag in torch per physics "
+         "sub-step, as the mock"),
         ("substeps", params.substeps, f"PhysX dt = {dt} / {params.substeps} = "
          f"{dt / params.substeps:g} s, one wrench write per sub-step"),
         ("(gravity)", GRAVITY, "SimulationCfg.gravity = (0, 0, -g)"),
@@ -104,8 +107,9 @@ class IsaacQuadSim:
     """``num_envs`` quadrotors as PhysX rigid bodies in Isaac Lab. Same API as TorchQuadSim.
 
     ``world`` is for tests only: an object with the ``_PhysxWorld`` methods (``origins``,
-    ``write_state``, ``step``, ``read``, ``closed``) that stands in for PhysX, so the glue
-    in this class (frames, clipping, motor lag, resets) is tested without Isaac Lab.
+    ``set_mass_properties``, ``write_state``, ``step``, ``read``, ``closed``) that stands in
+    for PhysX, so the glue in this class (frames, clipping, motor lag, per-env airframes,
+    resets) is tested without Isaac Lab.
     """
 
     backend = "isaac"
@@ -140,9 +144,15 @@ class IsaacQuadSim:
                 )
             world = _PhysxWorld(params, self.num_envs, self.h, str(self.device))
         self.world = world
-        self.max_torque = torch.tensor(params.max_torque, dtype=dtype, device=self.device)
-        # Motor lag as an exact first-order step, identical to the mock.
-        self.lag = 1.0 if params.motor_tau == 0 else 1.0 - math.exp(-self.h / params.motor_tau)
+        # Per-env airframe, (N,) or (N, 3), with the mock's names; every env starts as params.
+        n, dev = self.num_envs, self.device
+        self.inertia = torch.zeros(n, 3, dtype=dtype, device=dev)
+        self.max_torque = torch.zeros(n, 3, dtype=dtype, device=dev)
+        self.inv_mass = torch.zeros(n, dtype=dtype, device=dev)
+        self.hover_thrust = torch.zeros(n, dtype=dtype, device=dev)
+        self.max_thrust = torch.zeros(n, dtype=dtype, device=dev)
+        self.lag = torch.zeros(n, dtype=dtype, device=dev)
+        self.set_airframe()
         self._state = QuadState.hover(self.num_envs, device=self.device, dtype=dtype)
         self.thrust = torch.zeros(self.num_envs, dtype=dtype, device=self.device)
         self.torque = torch.zeros(self.num_envs, 3, dtype=dtype, device=self.device)
@@ -159,6 +169,45 @@ class IsaacQuadSim:
         if ids.dtype == torch.bool:
             ids = ids.nonzero(as_tuple=False).squeeze(-1)
         return ids.long()
+
+    def set_airframe(self, env_ids: Any = None, *, mass: Any = None, inertia: Any = None,
+                     max_thrust: Any = None, max_torque: Any = None,
+                     motor_tau: Any = None) -> None:
+        """Same call as ``TorchQuadSim.set_airframe``: ``env_ids`` (default all) fly another
+        airframe from the next step on; each argument is a scalar or one value (row) per
+        listed env, and one left out returns to ``QuadParams``. Mass and inertia go into
+        PhysX (read back); limits and motor lag stay here, as in the mock."""
+        self._check_open()
+        ids = self._ids(env_ids)
+        n = int(ids.numel())
+        if n == 0:
+            return
+        p = self.params
+
+        def rows(value: Any, default: Any, width: int | None) -> np.ndarray:
+            v = np.asarray(default if value is None else value, dtype=np.float64)
+            shape = (n,) if width is None else (n, width)
+            return np.broadcast_to(v, shape).copy()
+
+        m = rows(mass, p.mass, None)
+        inertia_ = rows(inertia, p.inertia, 3)
+        thrust = rows(max_thrust, p.max_thrust, None)
+        torque = rows(max_torque, p.max_torque, 3)
+        tau = rows(motor_tau, p.motor_tau, None)
+        if (m <= 0).any() or (inertia_ <= 0).any() or (thrust <= 0).any() or (torque <= 0).any():
+            raise ValueError("mass, inertia, max_thrust and max_torque must be positive")
+        if (tau < 0).any():
+            raise ValueError("motor_tau must be >= 0")
+        # Derived in float64 and cast once, exactly as the mock does.
+        lag = np.where(tau > 0, 1.0 - np.exp(-self.h / np.where(tau > 0, tau, 1.0)), 1.0)
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        self.world.set_mass_properties(ids, t(m), t(inertia_))
+        self.inv_mass[ids] = t(1.0 / m)
+        self.hover_thrust[ids] = t(m * GRAVITY)
+        self.inertia[ids] = t(inertia_)
+        self.max_thrust[ids] = t(thrust)
+        self.max_torque[ids] = t(torque)
+        self.lag[ids] = t(lag)
 
     def _check_open(self) -> None:
         if self.world.closed:
@@ -192,28 +241,35 @@ class IsaacQuadSim:
         self._state.quat[ids] = q
         self._state.vel[ids] = new.vel
         self._state.ang_vel[ids] = new.ang_vel
-        self.thrust[ids] = self.params.hover_thrust
+        self.thrust[ids] = self.hover_thrust[ids]
         self.torque[ids] = 0.0
 
-    def step(self, thrust: Any, torque_body: Any, force_ext_world: Any) -> QuadState:
-        """Advance every env by ``dt``; shapes and units as ``TorchQuadSim.step``."""
+    def step(self, thrust: Any, torque_body: Any, force_ext_world: Any,
+             torque_ext_body: Any = None) -> QuadState:
+        """Advance every env by ``dt``; shapes and units as ``TorchQuadSim.step``, including
+        the optional ``(N, 3)`` external body torque added after the mixer and the lag."""
         self._check_open()
         p = self.params
         thrust_cmd = torch.as_tensor(thrust, dtype=self.dtype, device=self.device)
         torque_cmd = torch.as_tensor(torque_body, dtype=self.dtype, device=self.device)
         f_ext = torch.as_tensor(force_ext_world, dtype=self.dtype, device=self.device)
+        tau_ext = (None if torque_ext_body is None else
+                   torch.as_tensor(torque_ext_body, dtype=self.dtype, device=self.device))
         if thrust_cmd.shape != (self.num_envs,):
             raise ValueError(f"thrust must be ({self.num_envs},), got {tuple(thrust_cmd.shape)}")
-        for name, x in (("torque_body", torque_cmd), ("force_ext_world", f_ext)):
-            if x.shape != (self.num_envs, 3):
+        for name, x in (("torque_body", torque_cmd), ("force_ext_world", f_ext),
+                        ("torque_ext_body", tau_ext)):
+            if x is not None and x.shape != (self.num_envs, 3):
                 raise ValueError(f"{name} must be ({self.num_envs}, 3), got {tuple(x.shape)}")
-        thrust_cmd = thrust_cmd.clamp(0.0, p.max_thrust)
+        thrust_cmd = torch.minimum(thrust_cmd.clamp(min=0.0), self.max_thrust)
         torque_cmd = torch.maximum(torch.minimum(torque_cmd, self.max_torque), -self.max_torque)
 
+        lag, lag3 = self.lag, self.lag[:, None]
         for _ in range(p.substeps):
-            self.thrust = self.thrust + self.lag * (thrust_cmd - self.thrust)
-            self.torque = self.torque + self.lag * (torque_cmd - self.torque)
-            force_b, torque_b = body_wrench(self._state.quat, self.thrust, self.torque, f_ext)
+            self.thrust = self.thrust + lag * (thrust_cmd - self.thrust)
+            self.torque = self.torque + lag3 * (torque_cmd - self.torque)
+            torque = self.torque if tau_ext is None else self.torque + tau_ext
+            force_b, torque_b = body_wrench(self._state.quat, self.thrust, torque, f_ext)
             self.world.step(force_b, torque_b)
             self._state = QuadState(*self.world.read())
         return self._state
@@ -302,33 +358,42 @@ class _PhysxWorld:
         self.sim.reset()
         self.body = self.scene["quad"]
         self.origins = self.scene.env_origins.clone()
-        self._set_mass_properties(params)
+        # Centre of mass at the body origin, principal axes = body FLU, for every env. PhysX
+        # lays a COM pose out as (x, y, z, qx, qy, qz, qw).
+        view = self.body.root_physx_view
+        shape = view.get_coms().shape
+        coms = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]).repeat(num_envs, 1)
+        view.set_coms(coms.reshape(shape), torch.arange(num_envs, dtype=torch.int32))
+        everyone = torch.arange(num_envs)
+        self.set_mass_properties(everyone, torch.full((num_envs,), params.mass),
+                                 torch.tensor(params.inertia).expand(num_envs, 3))
         _ACTIVE = self
 
-    def _set_mass_properties(self, params: QuadParams) -> None:
-        """Mass, diagonal inertia and a centred, axis-aligned COM frame, then read back.
-        PhysX's tensor API takes these on the CPU with int32 indices."""
+    def set_mass_properties(self, ids: torch.Tensor, mass: torch.Tensor,
+                            inertia: torch.Tensor) -> None:
+        """Mass (n,) and diagonal inertia (n, 3) for envs ``ids``, then read back. PhysX's
+        tensor API takes full-size CPU tensors plus int32 indices of the rows to apply."""
         view = self.body.root_physx_view
-        idx = torch.arange(self.num_envs, dtype=torch.int32)
-        masses = view.get_masses().clone()
-        masses[:] = params.mass
-        view.set_masses(masses, idx)
-        inertias = view.get_inertias().clone()
-        flat = inertias.reshape(self.num_envs, 9)
-        flat.zero_()
-        flat[:, 0], flat[:, 4], flat[:, 8] = params.inertia
-        view.set_inertias(flat.reshape(inertias.shape), idx)
-        coms = view.get_coms().clone().reshape(self.num_envs, 7)  # (x, y, z, qx, qy, qz, qw)
-        coms[:] = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
-        view.set_coms(coms.reshape(view.get_coms().shape), idx)
-        got_m = view.get_masses().reshape(self.num_envs)
-        got_i = view.get_inertias().reshape(self.num_envs, 9)[:, [0, 4, 8]]
-        want_i = torch.tensor(params.inertia, dtype=got_i.dtype).expand_as(got_i)
-        if not (torch.allclose(got_m, torch.full_like(got_m, params.mass), rtol=1e-5)
-                and torch.allclose(got_i, want_i, rtol=1e-5)):
+        idx = ids.detach().to("cpu", torch.int32)
+        rows = idx.long()
+        current = view.get_masses()
+        masses = current.clone().reshape(self.num_envs)
+        masses[rows] = mass.detach().cpu().to(masses.dtype)
+        view.set_masses(masses.reshape(current.shape), idx)
+        current = view.get_inertias()
+        flat = current.clone().reshape(self.num_envs, 9)
+        flat[rows] = 0.0
+        diag = inertia.detach().cpu().to(flat.dtype)
+        flat[rows, 0], flat[rows, 4], flat[rows, 8] = diag[:, 0], diag[:, 1], diag[:, 2]
+        view.set_inertias(flat.reshape(current.shape), idx)
+        got_m = view.get_masses().reshape(self.num_envs)[rows]
+        got_i = view.get_inertias().reshape(self.num_envs, 9)[rows][:, [0, 4, 8]]
+        want_m = mass.detach().cpu().to(got_m.dtype)
+        if not (torch.allclose(got_m, want_m, rtol=1e-5)
+                and torch.allclose(got_i, diag.to(got_i.dtype), rtol=1e-5)):
             raise RuntimeError(
-                f"PhysX did not take the mass properties: mass {got_m[0].item()} (want "
-                f"{params.mass}), inertia {got_i[0].tolist()} (want {list(params.inertia)})"
+                f"PhysX did not take the mass properties: mass {got_m[:3].tolist()} (want "
+                f"{want_m[:3].tolist()}), inertia {got_i[0].tolist()} (want {diag[0].tolist()})"
             )
 
     def write_state(self, ids: torch.Tensor, pos: torch.Tensor, quat: torch.Tensor,

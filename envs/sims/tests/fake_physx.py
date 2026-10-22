@@ -29,9 +29,10 @@ class FakePhysxWorld:
                  device: str | torch.device = "cpu", spacing: float = 2.0):
         self.closed = False
         self.h = float(physics_dt)
-        self.mass = params.mass
         dev = torch.device(device)
-        self.inertia = torch.diag(torch.tensor(params.inertia, device=dev))
+        self.mass = torch.full((num_envs,), params.mass, device=dev)
+        self.inertia = torch.diag(torch.tensor(params.inertia, device=dev)).expand(
+            num_envs, 3, 3).clone()
         idx = torch.arange(num_envs, device=dev, dtype=torch.float32)
         # Isaac Lab puts env origins on a grid; any non-zero offsets exercise the subtraction.
         self.origins = torch.stack([spacing * (idx % 8), spacing * (idx // 8),
@@ -44,6 +45,10 @@ class FakePhysxWorld:
         self.gravity = torch.tensor([0.0, 0.0, -GRAVITY], device=dev)
         self.steps = 0
 
+    def set_mass_properties(self, ids, mass, inertia) -> None:
+        self.mass[ids] = mass
+        self.inertia[ids] = torch.diag_embed(inertia)
+
     def write_state(self, ids, pos, quat, vel_w, ang_vel_w) -> None:
         self.pos_w[ids] = pos + self.origins[ids]
         self.quat[ids] = quat
@@ -52,7 +57,7 @@ class FakePhysxWorld:
 
     def step(self, force_b: torch.Tensor, torque_b: torch.Tensor) -> None:
         r = rotation_matrix(self.quat)
-        acc = (r @ force_b[..., None])[..., 0] / self.mass + self.gravity
+        acc = (r @ force_b[..., None])[..., 0] / self.mass[:, None] + self.gravity
         self.vel_w = self.vel_w + acc * self.h
         self.pos_w = self.pos_w + self.vel_w * self.h
         i_w = r @ self.inertia @ r.transpose(-1, -2)
