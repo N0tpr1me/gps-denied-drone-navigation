@@ -20,6 +20,10 @@ cd sim2real/docker
 ./run.sh shell        # bash in the image
 ```
 
+`with-sitl <command>` (entrypoint mode) starts SITL and the bridge, runs any command beside
+them and copies the ulog to `/out`; `eval/baselines/autotune.py` uses it with the repo's
+`entrypoint.sh` mounted, so no rebuild is needed.
+
 `hover-test` writes `runs/<time>_sitl_hover_<commit>/` at the repo root (ignored by git):
 
 - `summary.json`: pass/fail per check, climb and landing times, altitude error and

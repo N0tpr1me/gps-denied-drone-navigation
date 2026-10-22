@@ -1,0 +1,35 @@
+# Tuned-PX4 baseline v1 (T8): stock PX4 v1.17.0 on the gz_x500, GPS-free on external vision,
+# tuned for wind 1 m from a wall. Frozen: every later result is compared against this file.
+# QGroundControl plain-text format (vehicle_id, component_id, name, value, type 6 int / 9 float),
+# applied at boot as PX4_PARAM_* by sim2real/estimate_bridge/run_estimate.py --params.
+# How each value was chosen, and stock-vs-tuned results: docs/baseline.md.
+#
+# 1. EKF2 on vision, GPS off: unchanged from sim2real/estimate_bridge/ekf2_ev.params (the
+#    estimate path is part of the benchmark, not tuned here).
+# 2. Attitude and rate loops: PX4's autotune (mc_autotune_attitude_control) identified roll
+#    and pitch in still air (runs 20261022-164248 and -164440, same gains to 1 %); yaw never met
+#    its convergence test within 20 s, so the module saved nothing and yaw stays stock. The
+#    roll/pitch values below are the module's parallel-form result for run 20261022-164248.
+# 3. Horizontal position and velocity loops: hand-tuned for wind on tuning seeds 11/12 (not the
+#    evaluation seeds 1-3). Stock MPC_XY_P 0.95, MPC_XY_VEL_P_ACC 1.8, MPC_XY_VEL_I_ACC 0.4,
+#    MPC_XY_VEL_D_ACC 0.2. The higher integral gain is what rejects the mean wind and gusts.
+1	1	EKF2_EV_CTRL	7	6
+1	1	EKF2_HGT_REF	3	6
+1	1	EKF2_GPS_CTRL	0	6
+1	1	SYS_HAS_GPS	0	6
+1	1	EKF2_EV_DELAY	100.0	9
+1	1	EKF2_EV_NOISE_MD	1	6
+1	1	EKF2_EVP_NOISE	0.1	9
+1	1	EKF2_EVV_NOISE	0.1	9
+1	1	MC_ROLLRATE_P	0.1466	9
+1	1	MC_ROLLRATE_I	0.1958	9
+1	1	MC_ROLLRATE_D	0.0029	9
+1	1	MC_ROLL_P	6.5	9
+1	1	MC_PITCHRATE_P	0.1102	9
+1	1	MC_PITCHRATE_I	0.1466	9
+1	1	MC_PITCHRATE_D	0.00212	9
+1	1	MC_PITCH_P	6.5	9
+1	1	MPC_XY_P	1.5	9
+1	1	MPC_XY_VEL_P_ACC	3.0	9
+1	1	MPC_XY_VEL_I_ACC	2.0	9
+1	1	MPC_XY_VEL_D_ACC	0.3	9
