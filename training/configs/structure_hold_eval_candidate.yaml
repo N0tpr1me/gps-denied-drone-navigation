@@ -13,7 +13,7 @@ gpus: 1
 # condition (the policy.json env config carries the hardened training corruption, so the
 # standard jump and dropout rates are restated here). Takes about 15 min on 4 CPU cores.
 params:
-  policy: runs/20261022-005714_structure_hold_ppo_h15_resume_s0_a4cddb5/policy.onnx
+  policy: runs/20261022-031613_structure_hold_ppo_stale_resume_s0_42c0be0/policy.onnx
   num_envs: 2048
   episodes: 1
   score_envs: 64

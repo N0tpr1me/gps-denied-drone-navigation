@@ -273,11 +273,12 @@ class StructureHoldEnv:
         # stay level when its estimate is stale or jumps instead of flipping to chase it.
         over_tilt = (self.cos_tilt_free + gravity_body[:, 2]).clamp(min=0.0)
         # Shaping terms are bounded (see RewardWeights) so living always beats crashing.
+        speed_w = w.vel + w.stale_vel * est.stale.to(self.dtype)  # slow down on a dropout
         reward = (
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
             - w.toward_wall * toward
-            - w.vel * state.vel.norm(dim=-1).clamp(max=5.0)
+            - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
