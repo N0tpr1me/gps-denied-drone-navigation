@@ -1,0 +1,32 @@
+# Score policy v2 wrapped in the brake-and-hover fallback (envs/structure_hold/fallback.py)
+# against the PD yardstick; edit `fallback.threshold_s` per sweep point (0.5, 1, 2 s).
+#   python -m training.launch --config training/configs/structure_hold_eval.yaml --smoke --device cpu
+# Point `policy` at a run's policy.onnx (or policy.pt); the policy.json next to it supplies the
+# training env config unless `env` is given here.
+name: structure_hold_eval_fallback
+entrypoint: training.eval_policy
+seed: 1
+expected_hours: 0.3
+gpus: 1
+# The decisive comparison: 3 seeds x 2048 identical episodes per controller on the standard
+# condition (the policy.json env config carries the hardened training corruption, so the
+# standard jump and dropout rates are restated here). Takes about 15 min on 4 CPU cores.
+params:
+  policy: training/policies/structure_hold_v2.onnx
+  num_envs: 2048
+  episodes: 1
+  score_envs: 64
+  seeds: [1, 2, 3]
+  fallback:
+    threshold_s: 0.5
+  sim: torch
+  env:
+    estimate:
+      jump_rate_hz: 0.02
+      dropout_rate_hz: 0.02
+smoke:
+  num_envs: 8
+  score_envs: 4
+  seeds: [1, 2]
+  env:
+    episode_length_s: 2.0

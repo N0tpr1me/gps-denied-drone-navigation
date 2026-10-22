@@ -1,4 +1,5 @@
-"""Position/velocity estimate corruption (delay, noise, bias walk, jumps, dropouts).
+"""Position/velocity estimate corruption (delay, noise, bias walk, jumps, dropouts that
+dead-reckon or hold).
 
 NumPy core in ``core``; ``torch_adapter`` (needs PyTorch) runs the same update on tensors.
 """
