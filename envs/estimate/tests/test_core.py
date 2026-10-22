@@ -107,7 +107,8 @@ def test_jump_decays_with_time_constant_or_persists():
 
 def test_dropouts_hold_output_flag_stale_and_last_within_range():
     n, steps = 100, 3000
-    cfg = only(pos_noise_std_m=0.01, dropout_rate_hz=0.3, dropout_min_s=0.2, dropout_max_s=3.0)
+    cfg = only(pos_noise_std_m=0.01, dropout_rate_hz=0.3, dropout_min_s=0.2, dropout_max_s=3.0,
+               dropout_mode="hold")
     pos, vel = ramp(steps, n)
     out = run(EstimateCorruptor(cfg, n, DT, seed=6), pos, vel)
     stale, started = out["stale"], out["dropout_started"]
@@ -122,10 +123,12 @@ def test_dropouts_hold_output_flag_stale_and_last_within_range():
                 j += 1
             if j < steps:  # skip dropouts cut off by the end of the run
                 lengths.append(j - k)
-            # Output frozen at the last fresh value, age counting up.
+            # Output frozen at the last value, age counting up (it carries on when a dropout
+            # starts right after another: the output has been stale the whole time).
             held = np.broadcast_to(out["pos"][k - 1, env], (j - k, 3))
             np.testing.assert_array_equal(out["pos"][k:j, env], held)
-            np.testing.assert_allclose(out["age"][k:j, env], DT * np.arange(1, j - k + 1))
+            if not stale[k - 1, env]:
+                np.testing.assert_allclose(out["age"][k:j, env], DT * np.arange(1, j - k + 1))
     durations = np.array(lengths) * DT
     assert durations.min() >= 0.2 - 1e-9 and durations.max() <= 3.0 + 1e-9
     assert durations.min() < 0.3 and durations.max() > 2.9
@@ -176,3 +179,35 @@ def test_step_before_reset_and_bad_configs_raise():
         )
     cfg = EstimateCorruptionConfig.from_dict({"pos_noise_std_m": 0.1, "jump_decay_s": None})
     assert cfg.pos_noise_std_m == 0.1 and cfg.jump_decay_s is None
+
+
+def test_dead_reckoned_dropout_tracks_true_motion_and_drifts_with_the_bias():
+    n, steps = 64, 300
+    bias = 0.5
+    cfg = only(dropout_rate_hz=1e4, dropout_min_s=3.0, dropout_max_s=3.0,
+               dropout_accel_bias_mps2=bias)  # one 3 s dropout starting at the first step
+    _, vel = ramp(steps, n)
+    pos = np.cumsum(vel, axis=0) * DT  # a trajectory consistent with its velocity
+    model = EstimateCorruptor(cfg, n, DT, seed=4)
+    out = run(model, pos, vel)
+    assert out["stale"][1:].all() and out["dropout_started"][0].all()
+    # Velocity error is the bias times the age; position error grows with age squared.
+    age = out["age"]
+    v_err = out["vel"] - vel
+    p_err = out["pos"] - pos
+    per_env_bias = v_err[-1] / age[-1][:, None]
+    np.testing.assert_allclose(v_err, per_env_bias[None] * age[..., None], atol=1e-9)
+    assert abs(per_env_bias.std() - bias) < 0.15 * bias  # drawn as N(0, bias) per axis
+    expect_p = 0.5 * per_env_bias[None] * age[..., None] ** 2
+    np.testing.assert_allclose(p_err[-1], expect_p[-1], rtol=1e-2, atol=0.01)  # discrete sum
+    # Without the bias the dead reckoning is exact (no noise in this config).
+    exact = run(EstimateCorruptor(only(dropout_rate_hz=1e4, dropout_min_s=3.0,
+                                       dropout_max_s=3.0, dropout_accel_bias_mps2=0.0),
+                                  n, DT, seed=4), pos, vel)
+    np.testing.assert_allclose(exact["vel"], vel, atol=1e-9)
+    np.testing.assert_allclose(exact["pos"], pos, atol=1e-6)
+
+
+def test_bad_dropout_mode_raises():
+    with pytest.raises(ValueError, match="dropout_mode"):
+        EstimateCorruptor(only(dropout_mode="freeze"), 2, DT, seed=0)

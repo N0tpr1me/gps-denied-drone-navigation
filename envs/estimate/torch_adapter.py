@@ -63,6 +63,7 @@ class TorchEstimateCorruptor(EstimateCorruptor):
             vel=torch.randn((n, 3), **kw),
             dropout_event=torch.rand(n, **kw),
             dropout_len=torch.rand(n, **kw),
+            dropout_accel=torch.randn((n, 3), **kw),
         )
 
     def draw_delay_steps(self) -> torch.Tensor:

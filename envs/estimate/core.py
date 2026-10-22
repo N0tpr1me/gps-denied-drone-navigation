@@ -9,8 +9,13 @@ report, in this order:
 3. **Jumps** (relocalisation): Poisson events adding a step of 0.1 to 2 m in a random
    direction, which then decays back with time constant ``jump_decay_s``.
 4. **White noise** on position and velocity.
-5. **Dropouts**: Poisson events during which the output holds its last value and
-   ``stale`` is True, for 0.2 to 3 s.
+5. **Dropouts**: Poisson events of 0.2 to 3 s during which ``stale`` is True and the
+   output is not refreshed from the input. ``dropout_mode`` says what is reported instead:
+   ``"dead_reckon"`` (default) integrates the true acceleration like an IMU would, with a
+   constant acceleration bias drawn per dropout, so the velocity drifts by
+   ``bias * age`` and the position by ``bias * age^2 / 2`` (what an EKF reports when its
+   vision input stops); ``"hold"`` freezes the last fresh value (the earlier model, kept so
+   old numbers stay reproducible).
 
 Randomness comes only from the generator seeded in the constructor, or from a
 ``StepNoise`` passed to ``step`` (how the NumPy/PyTorch parity tests share draws). The
@@ -50,6 +55,10 @@ class EstimateCorruptionConfig:
     dropout_rate_hz: float = 0.02
     dropout_min_s: float = 0.2
     dropout_max_s: float = 3.0
+    # What is reported during a dropout: "dead_reckon" (IMU-style integration with a
+    # per-dropout constant acceleration bias, std per axis below) or "hold" (frozen).
+    dropout_mode: str = "dead_reckon"
+    dropout_accel_bias_mps2: float = 0.3
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EstimateCorruptionConfig:
@@ -78,6 +87,8 @@ class EstimateCorruptionConfig:
             raise ValueError(f"dt must be positive, got {dt}")
         for f in fields(self):
             value = getattr(self, f.name)
+            if isinstance(value, str):
+                continue
             if value is not None and not value >= 0:
                 raise ValueError(f"{f.name} must be >= 0, got {value}")
         for lo, hi in [
@@ -89,6 +100,10 @@ class EstimateCorruptionConfig:
                 raise ValueError(f"{lo} must be <= {hi}")
         if self.jump_decay_s is not None and not self.jump_decay_s > 0:
             raise ValueError("jump_decay_s must be positive or None")
+        if self.dropout_mode not in ("dead_reckon", "hold"):
+            raise ValueError("dropout_mode must be 'dead_reckon' or 'hold'")
+        if self.dropout_accel_bias_mps2 < 0:
+            raise ValueError("dropout_accel_bias_mps2 must be >= 0")
         lo, hi = _dropout_step_range(self, dt)
         if self.dropout_rate_hz > 0 and lo > hi:
             raise ValueError(
@@ -115,12 +130,13 @@ class StepNoise(NamedTuple):
     vel: Any  # standard normal, (N, 3)
     dropout_event: Any  # uniform [0, 1), (N,)
     dropout_len: Any  # uniform [0, 1), (N,)
+    dropout_accel: Any  # standard normal, (N, 3); the acceleration bias of a new dropout
 
 
 class EstimateSample(NamedTuple):
     pos: Any  # (N, 3) reported position, m, ENU
     vel: Any  # (N, 3) reported velocity, m/s, ENU
-    stale: Any  # (N,) bool, True while in a dropout (pos and vel are held)
+    stale: Any  # (N,) bool, True while in a dropout (pos and vel dead-reckoned or held)
     age: Any  # (N,) seconds since the output last refreshed (0 when fresh)
     jumped: Any  # (N,) bool, a jump started this step
     dropout_started: Any  # (N,) bool, a dropout started this step
@@ -161,6 +177,8 @@ class EstimateCorruptor:
         self.jump_offset = self._zeros((n, 3))
         self.held_pos = self._zeros((n, 3))
         self.held_vel = self._zeros((n, 3))
+        self.last_d_vel = self._zeros((n, 3))  # delayed true velocity one step ago
+        self.dropout_bias = self._zeros((n, 3))  # acceleration bias of the current dropout
         self.dropout_left = self._zeros((n,), integer=True)
         self.age = self._zeros((n,))
         self._started = self._zeros((n,), integer=True) > 0  # all False until reset
@@ -198,6 +216,7 @@ class EstimateCorruptor:
             vel=r.standard_normal((n, 3)),
             dropout_event=r.random(n),
             dropout_len=r.random(n),
+            dropout_accel=r.standard_normal((n, 3)),
         )
 
     def draw_delay_steps(self) -> np.ndarray:
@@ -228,6 +247,8 @@ class EstimateCorruptor:
         self.jump_offset = xp.where(m3, 0.0, self.jump_offset)
         self.held_pos = xp.where(m3, pos, self.held_pos)
         self.held_vel = xp.where(m3, vel, self.held_vel)
+        self.last_d_vel = xp.where(m3, vel, self.last_d_vel)
+        self.dropout_bias = xp.where(m3, 0.0, self.dropout_bias)
         self.dropout_left = xp.where(mask, 0, self.dropout_left)
         self.age = xp.where(mask, 0.0, self.age)
         self._started = self._started | mask
@@ -277,8 +298,20 @@ class EstimateCorruptor:
         started = (self.dropout_left == 0) & (nz.dropout_event < self.p_dropout)
         self.dropout_left = xp.where(started, length_steps, self.dropout_left)
         stale = self.dropout_left > 0
-        out_pos = xp.where(stale[:, None], self.held_pos, m_pos)
-        out_vel = xp.where(stale[:, None], self.held_vel, m_vel)
+        if cfg.dropout_mode == "dead_reckon":
+            # Integrate the (delayed) true acceleration from the last fresh output, with a
+            # constant acceleration bias drawn when the dropout starts.
+            self.dropout_bias = xp.where(
+                started[:, None], cfg.dropout_accel_bias_mps2 * nz.dropout_accel,
+                self.dropout_bias,
+            )
+            s_vel = self.held_vel + (d_vel - self.last_d_vel) + self.dropout_bias * self.dt
+            s_pos = self.held_pos + s_vel * self.dt
+        else:
+            s_pos, s_vel = self.held_pos, self.held_vel
+        self.last_d_vel = d_vel
+        out_pos = xp.where(stale[:, None], s_pos, m_pos)
+        out_vel = xp.where(stale[:, None], s_vel, m_vel)
         self.held_pos, self.held_vel = out_pos, out_vel
         self.dropout_left = xp.where(stale, self.dropout_left - 1, self.dropout_left)
         self.age = xp.where(stale, self.age + self.dt, 0.0)
