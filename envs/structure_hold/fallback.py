@@ -31,9 +31,10 @@ Controller = Callable[[torch.Tensor], torch.Tensor]
 @dataclass(frozen=True)
 class FallbackRule:
     threshold_s: float = 1.0  # take over once the estimate has been stale this long
-    brake_vel: float = 2.5  # 1/s: acceleration per m/s of dead-reckoned velocity
+    brake_vel: float = 1.5  # 1/s: acceleration per m/s of dead-reckoned velocity (2.5 oscillated
+    # once the rate loop lagged; 1.5 brakes 1.5 m/s to a hover in about 1 s)
     max_acc: float = 6.0  # m/s^2 command limit
-    tilt: float = 8.0  # rad/s per rad of tilt error (as the PD yardstick)
+    tilt: float = 4.0  # rad/s per rad of tilt error (as the PD yardstick)
     yaw: float = 3.0  # rad/s per rad of heading error
 
     @classmethod
@@ -78,3 +79,22 @@ class StaleFallback:
     def active_fraction(self) -> float:
         """Share of controller steps (over all envs) flown by the fallback."""
         return self.steps_active / max(1, self.steps * self.env.num_envs)
+
+
+class YawGuard:
+    """What the PX4 module flies when it ignores the policy's yaw output: the yaw action is
+    replaced by a P loop on the wall-facing heading, ``-yaw_gain * yaw_error / max_rate``,
+    as the PD yardstick and the fallback do. Wrap the policy (or the policy + fallback) to
+    score the mock under the same contract."""
+
+    def __init__(self, env: StructureHoldEnv, inner: Controller, yaw_gain: float = 3.0):
+        self.env, self.inner, self.yaw_gain = env, inner, yaw_gain
+        if hasattr(inner, "reset_history"):
+            self.reset_history = inner.reset_history  # type: ignore[attr-defined]
+
+    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
+        actions = self.inner(obs).clone()
+        heading = obs[:, OBS["heading"]]
+        yaw_err = torch.atan2(heading[:, 1], heading[:, 0])
+        actions[:, 2] = (-self.yaw_gain * yaw_err / self.env.cfg.max_rate_rad_s).clamp(-1.0, 1.0)
+        return actions

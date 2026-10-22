@@ -13,11 +13,13 @@ gpus: 1
 # condition (the policy.json env config carries the hardened training corruption, so the
 # standard jump and dropout rates are restated here). Takes about 15 min on 4 CPU cores.
 params:
-  policy: runs/20261022-043117_structure_hold_ppo_resume_s0_c296f30/policy.onnx
+  policy: runs/20261022-091541_structure_hold_ppo_resume_s0_5037862/policy.onnx
   num_envs: 2048
   episodes: 1
   score_envs: 64
   seeds: [1, 2, 3]
+  fallback:
+    threshold_s: 0.5
   sim: torch
   env:
     estimate:

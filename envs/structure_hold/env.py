@@ -106,6 +106,8 @@ class StructureHoldEnv:
         self.episode_step = torch.zeros(n, dtype=torch.long, device=dev)
         self.episode_time = torch.zeros(n, dtype=dt, device=dev)
         self.last_action = torch.zeros(n, NUM_ACTIONS, dtype=dt, device=dev)
+        self.rate_sp = torch.zeros(n, 3, dtype=dt, device=dev)  # lagged rate setpoint
+        self.rate_lag_alpha = torch.ones(n, dtype=dt, device=dev)  # dt / tau, 1 = no lag
         self.obs_buf = torch.zeros(n, NUM_OBS, dtype=dt, device=dev)
         self.reward_buf = torch.zeros(n, dtype=dt, device=dev)
         self.done_buf = torch.zeros(n, dtype=torch.bool, device=dev)
@@ -206,6 +208,9 @@ class StructureHoldEnv:
         self.episode_step[env_ids] = 0
         self.episode_time[env_ids] = 0.0
         self.last_action[env_ids] = 0.0
+        self.rate_sp[env_ids] = 0.0
+        tau = rng.uniform(*cfg.rate_lag_s, size=n)
+        self.rate_lag_alpha[env_ids] = t(np.where(tau > 0, cfg.dt / np.maximum(tau, cfg.dt), 1.0))
         self.episode_reward[env_ids] = 0.0
         self.estimate_pos[env_ids] = self.sim.state.pos[env_ids]
         self.estimate_vel[env_ids] = 0.0
@@ -228,10 +233,11 @@ class StructureHoldEnv:
             )
         actions = torch.nan_to_num(actions).clamp(-1.0, 1.0)
 
-        # Action -> rate loop -> simulator, with this step's wind.
-        rate_sp = actions[:, :3] * cfg.max_rate_rad_s
+        # Action -> lagged rate setpoint -> rate loop -> simulator, with this step's wind.
+        rate_cmd = actions[:, :3] * cfg.max_rate_rad_s
+        self.rate_sp += self.rate_lag_alpha[:, None] * (rate_cmd - self.rate_sp)
         thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust
-        torque = self.rate_pid(rate_sp, self.sim.state.ang_vel)
+        torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
         )
@@ -274,6 +280,10 @@ class StructureHoldEnv:
         over_tilt = (self.cos_tilt_free + gravity_body[:, 2]).clamp(min=0.0)
         # Shaping terms are bounded (see RewardWeights) so living always beats crashing.
         speed_w = w.vel + w.stale_vel * est.stale.to(self.dtype)  # slow down on a dropout
+        # Heading: 1 - cos(yaw error) to the wall-facing heading, from the body x axis.
+        fwd_world = quat_rotate(state.quat, torch.tensor(
+            [1.0, 0.0, 0.0], dtype=self.dtype, device=self.device).expand(self.num_envs, 3))
+        cos_yaw = fwd_world[:, 0] / fwd_world[:, :2].norm(dim=-1).clamp(min=1e-6)
         reward = (
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
@@ -283,6 +293,8 @@ class StructureHoldEnv:
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
             - w.tilt * over_tilt
+            - w.heading * (1.0 - cos_yaw)
+            - w.yaw_rate * state.ang_vel[:, 2].abs().clamp(max=10.0)
             - w.crash * crash.to(self.dtype)
         )
         self.reward_buf = torch.nan_to_num(reward, nan=-w.crash)

@@ -38,16 +38,18 @@ fix (0 while fixes arrive):
 | Constant | Value | Note |
 | --- | --- | --- |
 | `T_FB` | 0.5 s | sweep below; 0.25 s is as good, 1 s halves the gain, 2 s does nothing |
-| `K_BRAKE` | 2.5 1/s | the PD yardstick's velocity gain |
+| `K_BRAKE` | 1.5 1/s | 2.5 (the PD's velocity gain) oscillated once the mock's rate loop lagged 100 to 200 ms like PX4's; 1.5 brakes 1.5 m/s to a hover in about 1 s |
 | `A_MAX` | 6 m/s² | horizontal and vertical command limit |
-| `K_TILT` | 8 rad/s per rad | attitude P gain, as the yardstick |
+| `K_TILT` | 4 rad/s per rad | attitude P gain, as the yardstick (8 before the rate-loop lag) |
 | `K_YAW` | 3 rad/s per rad | heading P gain, as the yardstick |
 
-The thresholds and gains are the mock airframe's (0.8 kg, 16 N, 6 rad/s rate limit); scale
+The thresholds and gains are the mock airframe's (0.8 kg, 16 N, 2 rad/s rate limit since v3, 6 rad/s when measured here); scale
 `K_TILT` / `K_YAW` with the real rate loop and keep `A_MAX` below what the airframe can tilt
 to in the wind it is rated for.
 
 ## What it buys and costs
+
+Measured with the mock before the rate-loop lag and the 2 rad/s action limit (v3 work, 2026-10-22) and with `K_BRAKE` 2.5, `K_TILT` 8; the v3 rows in `training/policies/README.md` carry the re-measurement under the lagged plant.
 
 3 seeds x 2048 identical 20 s episodes, standard wind and corruption, dead-reckoning
 estimate (dropouts 0.2 to 3 s at 0.02 Hz, jumps 0.02 Hz, delay 50 to 150 ms). Crash rate
@@ -66,6 +68,22 @@ With `T_FB` 0.5 s the pair beats the PD on both numbers: 34 % lower p95 and 40 %
 crashes (60 % fewer than bare v2). The hold-error cost of the fallback is within run noise
 (+0.04 m p95 at 0.5 s, none at 0.25 s): the fallback flies 2 % of the steps and most of
 them are steps the bare policy would have spent drifting anyway.
+
+## Re-measured with policy v3 on the lagged plant (2026-10-22)
+
+With the rate-loop lag, the 2 rad/s action limit and the retuned gains (`K_BRAKE` 1.5,
+`K_TILT` 4), 3 seeds x 2048 episodes:
+
+| Controller | p95 hold error | crash rate | heading error |
+| --- | --- | --- | --- |
+| PD yardstick (retuned) | 0.95 m | 7.9 % | 2 deg |
+| v3 bare | 0.57 m | 2.9 % | 8 deg |
+| v3 + fallback, `T_FB` 0.5 s | 0.63 m | 4.0 % | 8 deg |
+
+v3 handles dropouts on its own and the fallback now costs it on both numbers, so v3 ships
+with the fallback off (`SH_FB_EN` 0). The rule stays in the module as an option for a policy
+that needs it (around v2 it halved the crash rate) and for flight-test safety if the real
+estimator's dropouts look different from the mock's.
 
 ## For the module
 

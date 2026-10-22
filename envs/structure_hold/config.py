@@ -38,9 +38,18 @@ class RewardWeights:
     stale_vel: float = 0.0  # times true speed clipped at 5 m/s, only while stale
     ang_vel: float = 0.01  # times body rate norm clipped at 10 rad/s
     action: float = 0.02  # times squared normalised rate command
-    action_rate: float = 0.05  # times squared change in normalised action between steps
+    # Smoothness: squared change in normalised action between steps. 0.15 (was 0.05) after
+    # v2 chattered between the rate limits on PX4 (docs/decisions.md, 2026-10-22).
+    action_rate: float = 0.15
     tilt: float = 2.0  # times (cos(tilt_free) - cos(tilt)) when tilted beyond tilt_free_deg
     tilt_free_deg: float = 45.0  # no tilt penalty up to here (fighting 12 m/s wind needs ~30)
+    # Heading hold: the camera must stay on the structure, and a policy with no heading
+    # term yawed freely (v2 commanded a saturated yaw rate on PX4, docs/decisions.md
+    # 2026-10-22). Target is the wall-facing heading (+x of the structure frame).
+    # 2.0: at 0.5 the first v3 run settled on a 30 deg offset (30 deg cost 0.07 per step, less
+    # than the position shaping it traded for); 2.0 makes 30 deg cost 0.27.
+    heading: float = 2.0  # times 1 - cos(yaw error): 0 facing the wall, at most 2 x heading
+    yaw_rate: float = 0.05  # times |yaw rate| clipped at 10 rad/s
     crash: float = 20.0  # once, on contact, ground, tilt or leaving the box
 
     @classmethod
@@ -62,7 +71,13 @@ class StructureHoldConfig:
     hold_height: tuple[float, float] = (2.0, 2.0)  # m above the origin
     start_offset_std_m: float = 0.2  # start position scatter around the hold point
     start_yaw_std_rad: float = 0.2  # start heading scatter about facing the wall (+x)
-    max_rate_rad_s: float = 6.0  # action 1.0 = this body rate
+    # Action 1.0 = this body rate. 2 rad/s: on PX4 dynamics a policy trained with 6 rad/s
+    # banged its roll and pitch commands between the limits and tipped over through the rate
+    # loop's lag; the module flew it once it clamped the commands to 1 to 2 rad/s.
+    max_rate_rad_s: float = 2.0
+    # The autopilot's rate loop does not follow a rate setpoint at once: a first-order lag
+    # with this time constant, drawn per episode (PX4 showed 100 to 200 ms). (0, 0) disables.
+    rate_lag_s: tuple[float, float] = (0.1, 0.2)
     max_pos_error_m: float = 3.0  # episode ends beyond this (true error)
     min_height_m: float = 0.3  # the ground, also a crash
     max_tilt_deg: float = 80.0
@@ -85,6 +100,9 @@ class StructureHoldConfig:
             raise ValueError("hold_distance must start outside the contact radius")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
+        lo, hi = self.rate_lag_s
+        if lo < 0 or lo > hi:
+            raise ValueError(f"rate_lag_s: need 0 <= min <= max, got {self.rate_lag_s}")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> StructureHoldConfig:

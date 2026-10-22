@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -224,3 +226,45 @@ def test_moving_fast_on_a_stale_estimate_costs_extra_reward():
     assert bool(env.estimate_stale[1]) and not bool(env.estimate_stale[0])
     expected = cfg.reward.stale_vel * 2.0
     assert reward[0] - reward[1] == pytest.approx(expected, abs=0.05)
+
+
+def test_facing_away_from_the_wall_and_yawing_cost_reward():
+    cfg = StructureHoldConfig(
+        disturbance=still_air().disturbance, estimate=EstimateCorruptionConfig.clean(),
+        start_offset_std_m=0.0, start_yaw_std_rad=0.0,
+    )
+    from envs.sims import QuadState
+    from envs.sims.torch_quad import quat_from_yaw
+
+    env = StructureHoldEnv(cfg, num_envs=3, seed=0)
+    st = env.sim.state
+    quat = quat_from_yaw(torch.tensor([0.0, math.pi / 2, 0.0]))  # env 1 faces along the wall
+    ang_vel = torch.zeros(3, 3)
+    ang_vel[2, 2] = 2.0  # env 2 faces the wall but yaws at 2 rad/s
+    env.sim.reset(torch.arange(3), QuadState(pos=st.pos.clone(), quat=quat, vel=st.vel.clone(),
+                                             ang_vel=ang_vel))
+    _, reward, *_ = env.step(hover_action(env))
+    w = cfg.reward
+    assert reward[0] - reward[1] == pytest.approx(w.heading * 1.0, abs=0.05)  # 1 - cos(90 deg)
+    assert reward[0] - reward[2] == pytest.approx(w.yaw_rate * 2.0, abs=0.05)
+
+
+def test_rate_setpoint_lags_the_command_with_the_episode_time_constant():
+    cfg = still_air(rate_lag_s=(0.2, 0.2))
+    env = StructureHoldEnv(cfg, num_envs=2, seed=0)
+    a = hover_action(env)
+    a[:, 2] = 1.0  # full yaw rate command
+    env.step(a)
+    assert env.rate_sp[0, 2] == pytest.approx(cfg.max_rate_rad_s * cfg.dt / 0.2)
+    for _ in range(19):
+        env.step(a)
+    # after one time constant the setpoint has covered 1 - (1 - dt/tau)^(tau/dt) of the way
+    want = cfg.max_rate_rad_s * (1 - (1 - cfg.dt / 0.2) ** 20)
+    assert env.rate_sp[0, 2] == pytest.approx(want, rel=1e-4)
+    assert env.state.ang_vel[0, 2] < cfg.max_rate_rad_s * 0.9  # the body lags further still
+
+    env = StructureHoldEnv(still_air(rate_lag_s=(0.0, 0.0)), num_envs=1, seed=0)
+    env.step(a[:1])
+    assert env.rate_sp[0, 2] == pytest.approx(env.cfg.max_rate_rad_s)  # no lag
+    with pytest.raises(ValueError):
+        StructureHoldConfig(rate_lag_s=(0.3, 0.1))

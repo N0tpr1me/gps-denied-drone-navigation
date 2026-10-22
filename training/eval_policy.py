@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.fallback import FallbackRule, StaleFallback
+from envs.structure_hold.fallback import FallbackRule, StaleFallback, YawGuard
 from training import evaluate
 from training.policy_io import load_controller, read_metadata
 from training.runlib import RunWriter, entry_args, load_yaml
@@ -61,6 +61,7 @@ def pool(results: list[dict[str, Any]]) -> dict[str, Any]:
         "crash_rate_se": math.sqrt(crash * (1 - crash) / ended) if ended else math.nan,
         "contact_rate": rate("contact_rate"),
         "p95_m_mean": mean("p95_m_mean"),
+        "heading_err_deg_mean": mean("heading_err_deg_mean"),
         "rms_m_mean": mean("rms_m_mean"),
         "p95_m_worst": max((r["p95_m_worst"] for r in results), default=math.nan),
         "worst_toward_surface_m": max((r["worst_toward_surface_m"] for r in results),
@@ -85,12 +86,15 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     rule = FallbackRule.from_dict(p["fallback"]) if p.get("fallback") else None
     wrappers: list[StaleFallback] = []
 
+    # `yaw_guard: true` scores what the PX4 module flies when it holds the heading itself.
+    yaw_guard = bool(p.get("yaw_guard", False))
+
     def make_policy(env):
         ctl = load_controller(policy_path, env.num_envs, device)
-        if rule is None:
-            return ctl
-        wrappers.append(StaleFallback(env, ctl, rule))
-        return wrappers[-1]
+        if rule is not None:
+            wrappers.append(StaleFallback(env, ctl, rule))
+            ctl = wrappers[-1]
+        return YawGuard(env, ctl) if yaw_guard else ctl
 
     if rule is not None:
         print(f"eval: fallback {rule}", flush=True)
@@ -119,6 +123,7 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
         "policy": str(policy_path.relative_to(REPO_ROOT) if policy_path.is_relative_to(REPO_ROOT)
                       else policy_path),
         "seeds": len(seeds),
+        "yaw_guard": yaw_guard,
         **({"fallback_threshold_s": rule.threshold_s,
             "fallback_active_fraction": float(np.mean([w.active_fraction for w in wrappers]))}
            if rule is not None else {}),
