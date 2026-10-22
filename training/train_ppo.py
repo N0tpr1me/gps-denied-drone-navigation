@@ -41,6 +41,7 @@ import torch
 
 from envs.structure_hold.config import StructureHoldConfig
 from envs.structure_hold.env import StructureHoldEnv
+from eval.gate1 import check_not_held_out
 from training import evaluate
 from training.policy_io import export_policy, load_controller, policy_metadata
 from training.ppo_env import DropoutCurriculum, StructureHoldVecEnv
@@ -208,6 +209,9 @@ def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: Str
 def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) -> dict[str, Any]:
     p = merge(DEFAULTS, cfg.get("params"))
     seed = int(cfg["seed"])
+    # Training, the quick eval (seed + 1000) and checkpoint selection (seed + 2000) never
+    # touch the Gate 1 test seeds (eval/gate1.py).
+    check_not_held_out(seed, seed + 1000, seed + 2000)
     runner, vec, env_cfg, train_cfg = make_runner(p, seed, device, run_dir / "tb", writer)
     n_params = sum(x.numel() for x in runner.alg.get_policy().parameters())
     print(f"ppo: {vec.num_envs} envs, {p['iterations']} iterations x {p['num_steps_per_env']} "

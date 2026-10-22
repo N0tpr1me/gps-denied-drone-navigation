@@ -1,0 +1,88 @@
+# Gate 1 protocol, stress set (docs/gate1.md): one thing that will differ on the real drone
+# at a time, on the held-out seeds, with the PD flying the same episodes. Base condition:
+# mean wind drawn 0 to 8 m/s, hold point 1 to 2 m from the wall, standard estimate
+# corruption, the held-out gust schedule. Cells marked `envelope: false` are beyond what
+# the module is meant to handle and are reported, not judged.
+#   python -m training.launch --config eval/configs/gate1_stress.yaml --smoke --device cpu
+name: gate1_stress
+entrypoint: eval.gate1
+seed: 9001  # unused: the protocol seeds are params.seeds
+expected_hours: 0.9
+gpus: 1
+params:
+  controllers:
+    - name: v3
+      policy: training/policies/structure_hold_v3.onnx
+  gate_controller: v3
+  seeds: [9001, 9002, 9003]
+  num_envs: 512
+  bootstrap: 2000
+  base_env:
+    # The standard estimate corruption (eval rates, not the 5x training rates), stated in
+    # full so a later change of a default cannot silently move the test set.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Held-out gust schedule: both gusts start inside the 20 s episode (training draws
+      # starts up to 50 s). Gust speed and length stay inside the training ranges.
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+      mean_speed: [0.0, 8.0]  # the nominal cells' range, drawn per episode
+    hold_distance: [1.0, 2.0]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.10
+  cells:
+    - {name: nominal, label: "nominal airframe"}
+    # Airframe: the mock is a 0.8 kg 5-inch placeholder until the Starling 2 numbers exist.
+    # The module scales thrust through PX4's hover thrust, so mass mostly changes how hard the
+    # wind pushes; the hover-thrust error is PX4's estimate being off.
+    - {name: mass_0.7, label: "mass x0.7", env: {airframe_rand: {mass_scale: 0.7}}}
+    - {name: mass_1.5, label: "mass x1.5", env: {airframe_rand: {mass_scale: 1.5}}}
+    - {name: hover_err_15, label: "hover thrust error +/-15 %", env: {airframe_rand: {hover_thrust_error: [-0.15, 0.15]}}}
+    - {name: tw_0.75, label: "thrust/weight x0.75 (1.5)", env: {airframe_rand: {thrust_to_weight_scale: 0.75}}}
+    - {name: inertia_0.5, label: "inertia x0.5", env: {airframe_rand: {inertia_scale: 0.5}}}
+    - {name: inertia_2, label: "inertia x2", env: {airframe_rand: {inertia_scale: 2.0}}}
+    # Motor (thrust and torque) lag, nominal 20 ms.
+    - {name: motor_50ms, label: "motor lag 50 ms", env: {airframe_rand: {motor_tau_s: 0.05}}}
+    - {name: motor_80ms, label: "motor lag 80 ms", envelope: false, env: {airframe_rand: {motor_tau_s: 0.08}}}
+    # Estimate: delay beyond the 50 to 150 ms the policy trained on, and long dropouts (5 s is
+    # EKF2's no-aiding limit, after which the watchdog hands back to PX4 anyway).
+    - {name: delay_250, label: "estimate delay 150-250 ms", env: {estimate: {delay_min_s: 0.15, delay_max_s: 0.25}}}
+    - {name: delay_350, label: "estimate delay 250-350 ms", envelope: false, env: {estimate: {delay_min_s: 0.25, delay_max_s: 0.35}}}
+    - {name: dropout_5s, label: "dropouts 3-5 s, 0.05 Hz", env: {estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
+    # Near-wall yaw moment (placeholder model, envs/structure_hold/config.py WallYawTorque),
+    # as a share of the 0.05 N m yaw authority, at the wall in a 10 m/s wind.
+    - {name: yaw_25, label: "wall yaw moment 25 %", env: {wall_yaw_torque: {peak_nm: [0.0, 0.0125]}}}
+    - {name: yaw_50, label: "wall yaw moment 50 %", env: {wall_yaw_torque: {peak_nm: [0.0, 0.025]}}}
+    - {name: yaw_100, label: "wall yaw moment 100 %", envelope: false, env: {wall_yaw_torque: {peak_nm: [0.0, 0.05]}}}
+    # Everything at once, moderately.
+    - name: combined
+      label: "combined, moderate"
+      env:
+        airframe_rand: {mass_scale: [0.8, 1.3], inertia_scale: [0.7, 1.5], hover_thrust_error: [-0.1, 0.1], motor_tau_s: [0.02, 0.05]}
+        estimate: {delay_min_s: 0.05, delay_max_s: 0.2}
+        wall_yaw_torque: {peak_nm: [0.0, 0.0125]}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9001]
+  base_env:
+    episode_length_s: 2.0

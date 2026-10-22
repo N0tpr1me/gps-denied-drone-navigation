@@ -10,9 +10,16 @@ decides what a crash is.
     state = sim.step(thrust, torque_body, force_ext_world)
 
 Inputs per step are ``(N,)`` collective thrust in N along body +z, ``(N, 3)`` body torque in
-N m (FLU axes) and ``(N, 3)`` external force in N (world ENU). Thrust is clipped to
-``[0, max_thrust]`` and torque to ``±max_torque`` before the motor lag, as a real airframe's
-mixer would. Output is a ``QuadState`` (world ENU, body FLU, quaternion w first).
+N m (FLU axes), ``(N, 3)`` external force in N (world ENU) and optionally ``(N, 3)`` external
+body torque in N m (an aerodynamic moment: added after the mixer, so neither clipped nor
+lagged). Thrust is clipped to ``[0, max_thrust]`` and torque to ``±max_torque`` before the
+motor lag, as a real airframe's mixer would. Output is a ``QuadState`` (world ENU, body FLU,
+quaternion w first).
+
+Every airframe number (mass, inertia, max thrust, max torque, motor lag) is held per env, so
+a task can draw a different airframe each episode (domain randomisation) with
+``set_airframe(env_ids, ...)``; until it does, every env flies ``QuadParams``. Any other
+backend behind the seam takes the same call.
 
 The default airframe is a placeholder 5-inch-class quad (0.8 kg); the real numbers come with
 the airframe choice (docs/decisions.md).
@@ -20,10 +27,10 @@ the airframe choice (docs/decisions.md).
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, fields
 from typing import Any
 
+import numpy as np
 import torch
 
 from envs.sims.quad_state import QuadState
@@ -147,11 +154,16 @@ class TorchQuadSim:
         self.device = torch.device(device)
         self.dtype = dtype
         self.h = self.dt / params.substeps
-        self.inertia = torch.tensor(params.inertia, dtype=dtype, device=self.device)
-        self.max_torque = torch.tensor(params.max_torque, dtype=dtype, device=self.device)
         self.gravity = torch.tensor([0.0, 0.0, -GRAVITY], dtype=dtype, device=self.device)
-        # Motor lag as an exact first-order step: x += (1 - exp(-h/tau)) * (cmd - x).
-        self.lag = 1.0 if params.motor_tau == 0 else 1.0 - math.exp(-self.h / params.motor_tau)
+        # Per-env airframe, (N,) or (N, 3); every env starts as ``params``.
+        n = self.num_envs
+        self.inertia = torch.zeros(n, 3, dtype=dtype, device=self.device)
+        self.max_torque = torch.zeros(n, 3, dtype=dtype, device=self.device)
+        self.inv_mass = torch.zeros(n, dtype=dtype, device=self.device)
+        self.hover_thrust = torch.zeros(n, dtype=dtype, device=self.device)
+        self.max_thrust = torch.zeros(n, dtype=dtype, device=self.device)
+        self.lag = torch.zeros(n, dtype=dtype, device=self.device)
+        self.set_airframe()
         self._state = QuadState.hover(self.num_envs, device=self.device, dtype=dtype)
         self.thrust = torch.zeros(self.num_envs, dtype=dtype, device=self.device)
         self.torque = torch.zeros(self.num_envs, 3, dtype=dtype, device=self.device)
@@ -168,6 +180,44 @@ class TorchQuadSim:
         if ids.dtype == torch.bool:
             ids = ids.nonzero(as_tuple=False).squeeze(-1)
         return ids.long()
+
+    def set_airframe(self, env_ids: Any = None, *, mass: Any = None, inertia: Any = None,
+                     max_thrust: Any = None, max_torque: Any = None,
+                     motor_tau: Any = None) -> None:
+        """Give ``env_ids`` (default all) a different airframe from the next step on. Each
+        argument is a scalar or one value (row) per listed env; one left out returns to the
+        ``QuadParams`` value. Units as ``QuadParams``: kg, kg m^2 (FLU diagonal), N, N m, s.
+        Motors keep their current output."""
+        ids = self._ids(env_ids)
+        n = int(ids.numel())
+        if n == 0:
+            return
+        p = self.params
+
+        def rows(value: Any, default: Any, width: int | None) -> np.ndarray:
+            v = np.asarray(default if value is None else value, dtype=np.float64)
+            shape = (n,) if width is None else (n, width)
+            return np.broadcast_to(v, shape).copy()
+
+        m = rows(mass, p.mass, None)
+        inertia_ = rows(inertia, p.inertia, 3)
+        thrust = rows(max_thrust, p.max_thrust, None)
+        torque = rows(max_torque, p.max_torque, 3)
+        tau = rows(motor_tau, p.motor_tau, None)
+        if (m <= 0).any() or (inertia_ <= 0).any() or (thrust <= 0).any() or (torque <= 0).any():
+            raise ValueError("mass, inertia, max_thrust and max_torque must be positive")
+        if (tau < 0).any():
+            raise ValueError("motor_tau must be >= 0")
+        # Derived numbers in float64, then cast once, so the nominal airframe gives exactly
+        # the floats the scalar code used to.
+        lag = np.where(tau > 0, 1.0 - np.exp(-self.h / np.where(tau > 0, tau, 1.0)), 1.0)
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        self.inv_mass[ids] = t(1.0 / m)
+        self.hover_thrust[ids] = t(m * GRAVITY)
+        self.inertia[ids] = t(inertia_)
+        self.max_thrust[ids] = t(thrust)
+        self.max_torque[ids] = t(torque)
+        self.lag[ids] = t(lag)
 
     def reset(self, env_ids: Any = None, state: QuadState | None = None) -> None:
         """Put ``env_ids`` (default all) at ``state``: rows for those envs only, or a full
@@ -193,10 +243,11 @@ class TorchQuadSim:
         self._state.quat[ids] = q
         self._state.vel[ids] = new.vel
         self._state.ang_vel[ids] = new.ang_vel
-        self.thrust[ids] = self.params.hover_thrust
+        self.thrust[ids] = self.hover_thrust[ids]
         self.torque[ids] = 0.0
 
-    def step(self, thrust: Any, torque_body: Any, force_ext_world: Any) -> QuadState:
+    def step(self, thrust: Any, torque_body: Any, force_ext_world: Any,
+             torque_ext_body: Any = None) -> QuadState:
         """Advance every env by ``dt``. See the module docstring for shapes and units."""
         p = self.params
         thrust_cmd = torch.as_tensor(thrust, dtype=self.dtype, device=self.device)
@@ -204,24 +255,29 @@ class TorchQuadSim:
         f_ext = torch.as_tensor(force_ext_world, dtype=self.dtype, device=self.device)
         if thrust_cmd.shape != (self.num_envs,):
             raise ValueError(f"thrust must be ({self.num_envs},), got {tuple(thrust_cmd.shape)}")
-        for name, x in (("torque_body", torque_cmd), ("force_ext_world", f_ext)):
-            if x.shape != (self.num_envs, 3):
+        tau_ext = (None if torque_ext_body is None else
+                   torch.as_tensor(torque_ext_body, dtype=self.dtype, device=self.device))
+        for name, x in (("torque_body", torque_cmd), ("force_ext_world", f_ext),
+                        ("torque_ext_body", tau_ext)):
+            if x is not None and x.shape != (self.num_envs, 3):
                 raise ValueError(f"{name} must be ({self.num_envs}, 3), got {tuple(x.shape)}")
-        thrust_cmd = thrust_cmd.clamp(0.0, p.max_thrust)
+        thrust_cmd = torch.minimum(thrust_cmd.clamp(min=0.0), self.max_thrust)
         torque_cmd = torch.maximum(torch.minimum(torque_cmd, self.max_torque), -self.max_torque)
 
         pos, quat, vel, ang_vel = self._state
-        inv_m = 1.0 / p.mass
+        inv_m = self.inv_mass[:, None]
+        lag, lag3 = self.lag, self.lag[:, None]
         for _ in range(p.substeps):
-            self.thrust = self.thrust + self.lag * (thrust_cmd - self.thrust)
-            self.torque = self.torque + self.lag * (torque_cmd - self.torque)
+            self.thrust = self.thrust + lag * (thrust_cmd - self.thrust)
+            self.torque = self.torque + lag3 * (torque_cmd - self.torque)
             # Translation: thrust along body z, gravity, external force. No drag here.
             acc = (body_z_world(quat) * self.thrust[:, None] + f_ext) * inv_m + self.gravity
             vel = vel + acc * self.h
             pos = pos + vel * self.h
-            # Rotation: Euler's equation with a diagonal inertia.
+            # Rotation: Euler's equation with a diagonal inertia, plus any external moment.
             gyro = torch.cross(ang_vel, ang_vel * self.inertia, dim=-1)
-            ang_acc = (self.torque - gyro) / self.inertia
+            torque = self.torque if tau_ext is None else self.torque + tau_ext
+            ang_acc = (torque - gyro) / self.inertia
             ang_vel = ang_vel + ang_acc * self.h
             quat = quat_integrate(quat, ang_vel, self.h)
         self._state = QuadState(pos, quat, vel, ang_vel)

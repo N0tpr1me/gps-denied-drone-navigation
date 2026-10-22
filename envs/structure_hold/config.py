@@ -59,6 +59,94 @@ class RewardWeights:
         return cls(**d)
 
 
+def _range(v: Any, name: str) -> tuple[float, float]:
+    lo, hi = (float(v), float(v)) if isinstance(v, (int, float)) else (float(v[0]), float(v[1]))
+    if lo > hi:
+        raise ValueError(f"{name}: min {lo} > max {hi}")
+    return lo, hi
+
+
+@dataclass(frozen=True)
+class AirframeRandomization:
+    """Per-episode spread of the airframe around ``quad``: domain randomisation for training
+    and the stress conditions of the Gate 1 protocol. Each range is (min, max), drawn uniform
+    per episode from a generator of its own, so switching it on changes the airframe and
+    nothing else (same hold points, wind and estimate as without it). The defaults are the
+    nominal airframe exactly: nothing is drawn.
+
+    The PX4 module scales the policy's thrust through the vehicle's hover thrust
+    (``sim2real/px4``: ``thrust_n / (MASS_KG * g) * hover_thrust``), so a heavier airframe
+    gets proportionally more thrust for the same action. The env reproduces that: thrust in
+    newtons = action thrust x ``mass_scale`` x (1 + ``hover_thrust_error``), where the error is
+    how far PX4's hover-thrust estimate is off.
+    """
+
+    mass_scale: tuple[float, float] = (1.0, 1.0)  # times quad.mass
+    inertia_scale: tuple[float, float] = (1.0, 1.0)  # times quad.inertia, all axes together
+    # Max thrust over weight, relative to the nominal airframe's (16 N / 7.85 N = 2.04).
+    thrust_to_weight_scale: tuple[float, float] = (1.0, 1.0)
+    motor_tau_s: tuple[float, float] | None = None  # None: quad.motor_tau
+    hover_thrust_error: tuple[float, float] = (0.0, 0.0)  # fraction, + means too much thrust
+
+    def __post_init__(self) -> None:
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if v is not None:
+                object.__setattr__(self, f.name, _range(v, f.name))
+        for name in ("mass_scale", "inertia_scale", "thrust_to_weight_scale"):
+            if getattr(self, name)[0] <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.motor_tau_s is not None and self.motor_tau_s[0] < 0:
+            raise ValueError("motor_tau_s must be >= 0")
+        if self.hover_thrust_error[0] <= -1:
+            raise ValueError("hover_thrust_error must be above -1")
+
+    @property
+    def active(self) -> bool:
+        return (any(getattr(self, n) != (1.0, 1.0) for n in
+                    ("mass_scale", "inertia_scale", "thrust_to_weight_scale"))
+                or self.motor_tau_s is not None or self.hover_thrust_error != (0.0, 0.0))
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> AirframeRandomization:
+        d = dict(d or {})
+        _check_keys(cls, d, "airframe randomization")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
+class WallYawTorque:
+    """Placeholder near-wall yaw moment (not in envs/disturbance: one published data point,
+    showing the moment changing sign, is not enough to fit it; the fan rig will). Per episode
+    a peak moment is drawn from ``peak_nm`` with a random sign; the moment on the body is
+
+        tau_z = sign * peak * exp(-clearance / decay_m) * (|mean wind| / ref_wind_mps)^2
+
+    so it grows near the wall and with the wind's dynamic pressure, and reaches ``peak`` at
+    the wall in a ``ref_wind_mps`` wind. The nominal airframe's yaw authority is 0.05 N m.
+    Off by default (peak 0); drawn from the airframe generator so it changes nothing else.
+    """
+
+    peak_nm: tuple[float, float] = (0.0, 0.0)
+    decay_m: float = 1.0
+    ref_wind_mps: float = 10.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "peak_nm", _range(self.peak_nm, "peak_nm"))
+        if self.peak_nm[0] < 0 or self.decay_m <= 0 or self.ref_wind_mps <= 0:
+            raise ValueError("peak_nm >= 0, decay_m > 0 and ref_wind_mps > 0")
+
+    @property
+    def active(self) -> bool:
+        return self.peak_nm[1] > 0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> WallYawTorque:
+        d = dict(d or {})
+        _check_keys(cls, d, "wall yaw torque")
+        return cls(**d)
+
+
 @dataclass(frozen=True)
 class StructureHoldConfig:
     """The task. The wall is the plane x = 0 (world ENU); free air is x < 0 and the hold
@@ -88,6 +176,8 @@ class StructureHoldConfig:
     disturbance: DisturbanceConfig = field(default_factory=DisturbanceConfig)
     estimate: EstimateCorruptionConfig = field(default_factory=EstimateCorruptionConfig)
     reward: RewardWeights = field(default_factory=RewardWeights)
+    airframe_rand: AirframeRandomization = field(default_factory=AirframeRandomization)
+    wall_yaw_torque: WallYawTorque = field(default_factory=WallYawTorque)
 
     def __post_init__(self) -> None:
         if self.dt <= 0 or self.episode_length_s < self.dt:
@@ -114,6 +204,8 @@ class StructureHoldConfig:
             "disturbance": DisturbanceConfig.from_dict,
             "estimate": lambda x: EstimateCorruptionConfig.from_dict(x or {}),
             "reward": RewardWeights.from_dict,
+            "airframe_rand": AirframeRandomization.from_dict,
+            "wall_yaw_torque": WallYawTorque.from_dict,
         }
         for key, build in nested.items():
             if key in d:
