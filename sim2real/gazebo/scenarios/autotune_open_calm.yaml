@@ -1,0 +1,10 @@
+# Still air, 4 m from the wall: room for PX4's autotune steps (eval/baselines/autotune.py).
+name: autotune_open_calm
+seed: 1
+spawn: {x: -4.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+disturbance:
+  mean_speed: 0.0
+  num_gusts: 0
+  turb_sigma: 0.0
+hover: {altitude: 2.5, hover_s: 30.0}

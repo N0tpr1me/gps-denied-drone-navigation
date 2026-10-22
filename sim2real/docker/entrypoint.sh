@@ -4,6 +4,7 @@
 #   hover-test  start SITL, fly takeoff / 30 s hover / land with MAVSDK, write a summary
 #   hold-test   start SITL, fly the Structure Hold acceptance sequence (sim2real/px4/sitl_test.py
 #               from the repo mounted at /repo), write a summary
+#   with-sitl   start SITL (and the bridge), run the given command, copy the ulog to /out
 #   shell       bash, for poking around
 set -euo pipefail
 
@@ -65,6 +66,16 @@ case "${1:-sitl}" in
         # Gazebo takes longer than SIH to come up; sitl_test.py's own default is 120 s.
         python3 /repo/sim2real/px4/sitl_test.py --out "${OUT_DIR}/summary.json" \
             --ready-timeout-s 300 "$@" || status=$?
+        copy_latest_ulog
+        exit "${status}"
+        ;;
+    with-sitl)
+        # Any flight script beside SITL (and the bridge), e.g. eval/baselines/autotune_flight.py.
+        shift
+        start_px4_background
+        trap stop_px4 EXIT
+        status=0
+        "$@" || status=$?
         copy_latest_ulog
         exit "${status}"
         ;;
