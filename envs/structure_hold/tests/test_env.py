@@ -351,3 +351,26 @@ def test_thrust_away_from_the_weight_costs_reward(airframe):
         torch.tensor(cfg.actuation.thrust_cmd_range[1])).item() / weight - 1.0
     ) if env.thrust_via_module else min(1.0, cfg.quad.max_thrust / weight - 1.0)
     assert reward[0] - reward[1] == pytest.approx(full, abs=0.05)
+
+
+def test_sensor_noise_is_off_by_default_and_touches_only_rates_attitude_and_velocity():
+    base = {"disturbance": {"mean_speed": [0.0, 0.0], "num_gusts": 0, "turb_sigma": [0.0, 0.0]}}
+    noisy = {**base, "sensor_noise": {"ang_vel_std_rad_s": 0.2, "gravity_std": 0.02,
+                                      "vel_wander_std_mps": 0.1, "vel_wander_tau_s": 0.3}}
+    envs = [StructureHoldEnv(StructureHoldConfig.from_dict(d), num_envs=64, seed=3)
+            for d in (base, base, noisy)]
+    obs = [e.reset()[0] for e in envs]
+    for _ in range(50):
+        obs = [e.step(hover_action(e))[0] for e in envs]
+    torch.testing.assert_close(obs[0], obs[1])  # off: deterministic, nothing drawn
+    assert not StructureHoldConfig().sensor_noise.active
+    for name in ("ang_vel", "gravity_body", "vel"):
+        assert not torch.allclose(obs[2][:, OBS[name]], obs[0][:, OBS[name]])
+    torch.testing.assert_close(obs[2][:, OBS["pos_err"]], obs[0][:, OBS["pos_err"]])
+    e = envs[2]
+    assert (e.noise_std >= 0).all() and (e.noise_std[:, 0] <= 0.2).all()
+    w0 = e.vel_wander.clone()
+    e.step(hover_action(e))
+    # Slow wander: consecutive steps are nearly the same (correlation exp(-dt / tau)).
+    corr = torch.corrcoef(torch.stack([w0.flatten(), e.vel_wander.flatten()]))[0, 1]
+    assert corr > 0.9

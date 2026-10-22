@@ -1,0 +1,75 @@
+# Policy v7 candidate: v6 (run 20261022-223115, the v5 recipe trained 2000 iterations)
+# continued for 1000 more with sensor noise on the inputs the mock otherwise reads from the
+# true state (gyro, attitude) and slow wander on the velocity estimate (cfg.sensor_noise,
+# per-episode std from 0 to the maximum below). v5 sat 0.3 to 0.45 m above its hold point
+# in Gazebo while its rate setpoints jittered 10x more than in the mock; in the mock, noisy
+# rate or velocity inputs lift v5 and v6 the same way (white noise 0.15 on either: +0.1 m).
+#   python -m training.launch --config training/configs/structure_hold_ppo_v7.yaml --smoke --device cpu
+name: structure_hold_ppo_v7
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261022-223115_structure_hold_ppo_v5_resume_s0_ca3b52d/policy.pt  # v6: run 4, iteration 1500
+  iterations: 1000  # ~22k env-steps/s on 4 CPU cores: ~40 min, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+    # Rate-setpoint lag up to 30 ms (the module tick and the next gyro sample), drawn per
+    # episode; the x500's own rate loop is in the preset.
+    rate_lag_s: [0.0, 0.03]
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+    sensor_noise:
+      ang_vel_std_rad_s: 0.15
+      gravity_std: 0.02  # ~1 deg
+      vel_wander_std_mps: 0.1
+      vel_wander_tau_s: 0.3
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500
+    episode_length_s: 2.0
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    sensor_noise: {ang_vel_std_rad_s: 0.15, vel_wander_std_mps: 0.1}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
