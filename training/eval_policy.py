@@ -26,9 +26,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.fallback import FallbackRule, StaleFallback
 from training import evaluate
 from training.policy_io import load_controller, read_metadata
 from training.runlib import RunWriter, entry_args, load_yaml
@@ -78,10 +80,24 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     print(f"eval: {policy_path.name} ({meta['input']['history']}-step history), {num_envs} envs "
           f"x {episodes} episode(s) of {env_cfg.episode_length_s} s, seeds {seeds}, "
           f"device {device}", flush=True)
+    # Optional brake-and-hover fallback around the policy (envs/structure_hold/fallback.py):
+    # `fallback: {threshold_s: 1.0}` in params; null leaves the policy bare.
+    rule = FallbackRule.from_dict(p["fallback"]) if p.get("fallback") else None
+    wrappers: list[StaleFallback] = []
+
+    def make_policy(env):
+        ctl = load_controller(policy_path, env.num_envs, device)
+        if rule is None:
+            return ctl
+        wrappers.append(StaleFallback(env, ctl, rule))
+        return wrappers[-1]
+
+    if rule is not None:
+        print(f"eval: fallback {rule}", flush=True)
     per_seed: dict[str, list[dict[str, Any]]] = {"policy": [], "baseline": []}
     for seed in seeds:
         pol, base, wording = evaluate.compare(
-            env_cfg, lambda env: load_controller(policy_path, env.num_envs, device),
+            env_cfg, make_policy,
             num_envs=num_envs, episodes=episodes, score_envs=int(p.get("score_envs", 32)),
             seed=seed, device=device, sim=str(p.get("sim", "torch")),
             on_episode=lambda name, row, seed=seed: writer.metric(seed, controller=name, **row),
@@ -103,6 +119,9 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
         "policy": str(policy_path.relative_to(REPO_ROOT) if policy_path.is_relative_to(REPO_ROOT)
                       else policy_path),
         "seeds": len(seeds),
+        **({"fallback_threshold_s": rule.threshold_s,
+            "fallback_active_fraction": float(np.mean([w.active_fraction for w in wrappers]))}
+           if rule is not None else {}),
         **{f"policy_{k}": pol[k] for k in keys},
         **{f"pd_{k}": base[k] for k in keys},
     }

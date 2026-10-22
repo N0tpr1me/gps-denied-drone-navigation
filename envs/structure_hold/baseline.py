@@ -42,9 +42,6 @@ class CascadedPd:
         g = self.g
         err = obs[:, OBS["pos_err"]]
         vel = obs[:, OBS["vel"]]
-        gravity_body = obs[:, OBS["gravity_body"]]
-        heading = obs[:, OBS["heading"]]
-        n = obs.shape[0]
 
         # Acceleration setpoint in the world (= structure) frame, then the thrust vector.
         # The integrator restarts with each episode and only acts once the start transient
@@ -56,26 +53,38 @@ class CascadedPd:
         self.err_integral.clamp_(-lim, lim)
         acc = -g.pos * err - g.vel * vel - g.integral * self.err_integral
         acc = acc.clamp(-g.max_acc, g.max_acc)
-        f_world = acc * self.mass
-        f_world[:, 2] += self.mass * GRAVITY
-        f_norm = f_world.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-        z_des_world = f_world / f_norm
+        return acceleration_to_action(self.env, obs, acc, tilt=g.tilt, yaw=g.yaw)
 
-        # Attitude: rotate the desired thrust axis into the body frame and steer body z onto it.
-        quat = self.env.state.quat  # attitude is observed directly (gravity_body, heading)
-        z_des_body = quat_rotate_inverse(quat, z_des_world)
-        z_body = torch.zeros(n, 3, dtype=obs.dtype, device=obs.device)
-        z_body[:, 2] = 1.0
-        tilt_err = torch.cross(z_body, z_des_body, dim=-1)  # small-angle rotation vector
-        rates = g.tilt * tilt_err
-        # Heading: face the wall (+x of the structure frame).
-        yaw_err = torch.atan2(heading[:, 1], heading[:, 0])
-        rates[:, 2] = -g.yaw * yaw_err
-        # Thrust: the component of the demanded force along the current body z.
-        up_body = -gravity_body  # world up in the body frame
-        thrust = (f_norm.squeeze(-1) * (z_des_body * up_body).sum(-1)).clamp(min=0.0)
 
-        action = torch.empty(n, 4, dtype=obs.dtype, device=obs.device)
-        action[:, :3] = rates / self.max_rate
-        action[:, 3] = 2.0 * thrust / self.max_thrust - 1.0
-        return action.clamp(-1.0, 1.0)
+def acceleration_to_action(env: StructureHoldEnv, obs: torch.Tensor, acc: torch.Tensor, *,
+                           tilt: float, yaw: float) -> torch.Tensor:
+    """Turn a world-frame acceleration setpoint into the env's action: thrust vector, a P
+    attitude loop that outputs body rates, heading held on the wall (+x)."""
+    gravity_body = obs[:, OBS["gravity_body"]]
+    heading = obs[:, OBS["heading"]]
+    n = obs.shape[0]
+    mass, max_thrust, max_rate = env.cfg.quad.mass, env.cfg.quad.max_thrust, env.cfg.max_rate_rad_s
+
+    f_world = acc * mass
+    f_world[:, 2] += mass * GRAVITY
+    f_norm = f_world.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+    z_des_world = f_world / f_norm
+
+    # Attitude: rotate the desired thrust axis into the body frame and steer body z onto it.
+    quat = env.state.quat  # attitude is observed directly (gravity_body, heading)
+    z_des_body = quat_rotate_inverse(quat, z_des_world)
+    z_body = torch.zeros(n, 3, dtype=obs.dtype, device=obs.device)
+    z_body[:, 2] = 1.0
+    tilt_err = torch.cross(z_body, z_des_body, dim=-1)  # small-angle rotation vector
+    rates = tilt * tilt_err
+    # Heading: face the wall (+x of the structure frame).
+    yaw_err = torch.atan2(heading[:, 1], heading[:, 0])
+    rates[:, 2] = -yaw * yaw_err
+    # Thrust: the component of the demanded force along the current body z.
+    up_body = -gravity_body  # world up in the body frame
+    thrust = (f_norm.squeeze(-1) * (z_des_body * up_body).sum(-1)).clamp(min=0.0)
+
+    action = torch.empty(n, 4, dtype=obs.dtype, device=obs.device)
+    action[:, :3] = rates / max_rate
+    action[:, 3] = 2.0 * thrust / max_thrust - 1.0
+    return action.clamp(-1.0, 1.0)
