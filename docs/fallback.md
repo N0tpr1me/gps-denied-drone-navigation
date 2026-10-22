@@ -69,6 +69,22 @@ crashes (60 % fewer than bare v2). The hold-error cost of the fallback is within
 (+0.04 m p95 at 0.5 s, none at 0.25 s): the fallback flies 2 % of the steps and most of
 them are steps the bare policy would have spent drifting anyway.
 
+## Re-measured with policy v3 on the lagged plant (2026-10-22)
+
+With the rate-loop lag, the 2 rad/s action limit and the retuned gains (`K_BRAKE` 1.5,
+`K_TILT` 4), 3 seeds x 2048 episodes:
+
+| Controller | p95 hold error | crash rate | heading error |
+| --- | --- | --- | --- |
+| PD yardstick (retuned) | 0.95 m | 7.9 % | 2 deg |
+| v3 bare | 0.57 m | 2.9 % | 8 deg |
+| v3 + fallback, `T_FB` 0.5 s | 0.63 m | 4.0 % | 8 deg |
+
+v3 handles dropouts on its own and the fallback now costs it on both numbers, so v3 ships
+with the fallback off (`SH_FB_EN` 0). The rule stays in the module as an option for a policy
+that needs it (around v2 it halved the crash rate) and for flight-test safety if the real
+estimator's dropouts look different from the mock's.
+
 ## For the module
 
 - **Watchdog order.** `SH_WD_EST_TO` (stale-estimate trip, default 0.5 s) must be raised
