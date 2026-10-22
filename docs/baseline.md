@@ -159,8 +159,8 @@ Mean over seeds 1–3, worst in brackets.
 † PX4's position-loss failsafe during takeoff (Land at 16.4 s, seed 3), before Structure Hold
 was engaged; none in the hold. ‡ Not the module: seed 3 held the full 60 s, handed back
 in the scripted test, then flipped during stock PX4's final Land in the 8 m/s wind while a
-vision jump was arriving (EKF2 innovation 3 m), and never reported touchdown. No flight
-touched the wall (0 contacts, closest 0.41 m away from the wall... see per-flight lines; v5's closest was 0.53 m).
+vision jump was arriving (EKF2 innovation 3 m), and never reported touchdown. No v5 flight
+touched the wall (0 contacts; closest clearance 0.53 m, 8 m/s seed 1).
 
 **Reading it.** The 2 Hz roll and thrust cycle that sank v3 is gone. On the clean calm
 plumbing flight v5 passes every check, including position_held. Its thrust sits at
