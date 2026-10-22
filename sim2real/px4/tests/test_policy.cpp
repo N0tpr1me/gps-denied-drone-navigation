@@ -161,8 +161,10 @@ int main()
 		CHECK(same(actionToSetpoint(lo, 0.42f, lim).thrust, lim.thrust_min));
 		const float hi[4] = {3.f, 0.f, 0.f, 1.f};
 		CHECK(near(actionToSetpoint(hi, 0.42f, lim).rates_frd[0], policy::MAX_RATE_RAD_S, 1e-6f));
-		CHECK(near(actionToSetpoint(hi, 0.42f, lim).thrust, 16.f / (0.8f * GRAVITY_MPS2) * 0.42f, 1e-5f));
-		CHECK(same(actionToSetpoint(hi, 0.5f, lim).thrust, lim.thrust_max));  // 1.02 clamped
+		// Full collective = the policy's thrust-to-weight ratio times the hover thrust.
+		const float full = policy::MAX_THRUST_N / (policy::MASS_KG * GRAVITY_MPS2);
+		CHECK(near(actionToSetpoint(hi, 0.42f, lim).thrust, clampf(full * 0.42f, lim.thrust_min, lim.thrust_max), 1e-5f));
+		CHECK(same(actionToSetpoint(hi, 0.9f, lim).thrust, lim.thrust_max));  // above 0.9, clamped
 		lim.rate_max = 0.3f * policy::MAX_RATE_RAD_S;
 		CHECK(near(actionToSetpoint(hi, 0.5f, lim).rates_frd[0], lim.rate_max, 1e-6f));
 		CHECK(near(actionToSetpoint(a, 0.5f, lim).rates_frd[1], -0.25f * policy::MAX_RATE_RAD_S, 1e-6f));  // under it
@@ -183,7 +185,7 @@ int main()
 		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
 		VehicleSample s = sampleOf(k);
 		s.stale = false;
-		s.age_s = 0.08f;
+		s.age_s = 0.f;  // the env's age: 0 while fresh
 
 		// Fresh: policy flies, last_action starts at zero.
 		PolicyOutput o = ctl.step(s, 0.f, 0.5f);
@@ -223,7 +225,7 @@ int main()
 
 		// Fresh fix: hand back on the first tick.
 		s.stale = false;
-		s.age_s = 0.1f;
+		s.age_s = 0.f;
 		o = ctl.step(s, 0.f, 0.5f);
 		CHECK(!o.fallback_active);
 

@@ -1,7 +1,7 @@
 # Structure Hold PX4 module
 
 One onboard PX4 flight mode, built into `px4_sitl` first and later into the target
-airframe. Since 2026-10-22 it flies the released policy (v3, `training/policies/`) with the
+airframe. Since 2026-10-22 it flies the released policy (v5, `training/policies/`, trained on the Gazebo x500) with the
 brake-and-hover fallback and a yaw guard available as options; the v0 placeholder cascade
 stays selectable (`SH_CTRL 0`).
 
@@ -21,12 +21,14 @@ What it does today:
   is active.
 - **Policy inference** is a compiled-in MLP (`MlpPolicy.hpp`, no heap, no PX4 headers, no
   third-party library; docs/decisions.md). `tools/export_policy_header.py` turns the
-  released `training/policies/structure_hold_v3.onnx` + `.json` into
+  released `training/policies/structure_hold_v5.onnx` + `.json` into
   `structure_hold/PolicyWeights.hpp`: weights, the history length (15, from
   `policy.json input.history`, never hardcoded), the observation layout, the action scaling,
   the mock airframe the policy was trained on, and the policy's own defaults for the two
   options below (`output.yaw`, `output.fallback`, `output.max_rate_rad_s`). The module builds the env's observation
-  (structure frame = heading at engage, ENU-style, FLU body) from PX4's NED / FRD state,
+  (structure frame = heading at engage, ENU-style, FLU body) from PX4's NED / FRD state
+  (the age input is the env's: 0 while the fix is fresh, the time since the last fix while
+  stale; the sample latency is reported in the status message only),
   keeps the rolling history, and maps the action back (FLU → FRD rates, thrust in newtons for
   the mock airframe scaled through the hover thrust). `tests/test_policy_header.py` fails
   when the header no longer matches the released policy.
@@ -88,8 +90,8 @@ sim2real/px4/
 After a policy release, regenerate both headers and commit them:
 
 ```bash
-python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v3.onnx
-python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v3.onnx
+python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v5.onnx
+python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v5.onnx
 ```
 
 ## Build
@@ -236,9 +238,9 @@ batch runner so the rows compare like for like (same wind and estimate draws per
 same PX4 parameter set underneath, same truth scoring over a 60 s window):
 
 ```bash
-python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 \
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v5 \
     --params eval/baselines/px4_tuned_v1.params
-python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v3>/batch.json
+python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v5>/batch.json
 ```
 
 ## Frames
