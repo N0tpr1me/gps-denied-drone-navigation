@@ -4,17 +4,18 @@
 # the actor's window covers the whole delay range (the v2 lesson: a window shorter than the
 # delay cannot identify it). Same reward, same PX4-like rate dynamics as v3.
 #   python -m training.launch --config training/configs/structure_hold_ppo_v4.yaml --smoke --device cpu
-# Two 30-40 min runs chained with structure_hold_ppo_v4_resume.yaml (3000 iterations).
+# Three ~50 min runs of 1000 iterations chained with structure_hold_ppo_v4_resume.yaml
+# (3000 iterations; 1500 per run would take ~75 min, over the 1 h rule).
 name: structure_hold_ppo_v4_resume
 entrypoint: training.train_ppo
 seed: 0
-expected_hours: 0.7
+expected_hours: 0.9
 gpus: 1
 params:
   num_envs: 1024
   # Continue the first v4 run for 1500 more; point this at it before launching.
-  resume: runs/RUN/tb/model_1499.pt
-  iterations: 1500
+  resume: runs/RUN/tb/model_999.pt
+  iterations: 1000  # ~19.5k env-steps/s on 4 CPU cores with the 25-step history: ~50 min
   num_steps_per_env: 48
   history: 25  # 250 ms: covers the 50 to 250 ms delay drawn below
   sim: torch
