@@ -10,7 +10,7 @@ params:
   num_envs: 1024
   # Continue the dead-reckoning run 20261022-035818_structure_hold_ppo_s0_bd49d14 for 1500 more
   # (two runs under the hour limit). Point this at the run to continue.
-  resume: runs/20261022-035818_structure_hold_ppo_s0_bd49d14/tb/model_1499.pt
+  resume: runs/20261022-062951_structure_hold_ppo_s0_8e60d1c/tb/model_1499.pt
   iterations: 1500  # policy v2 needed 3000: run twice with `resume` (see structure_hold_ppo_h15_resume.yaml)
   num_steps_per_env: 48
   history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay (policy v2; v1 used 3)
