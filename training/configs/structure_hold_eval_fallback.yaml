@@ -18,7 +18,7 @@ params:
   score_envs: 64
   seeds: [1, 2, 3]
   fallback:
-    threshold_s: 0.25
+    threshold_s: 0.5
   sim: torch
   env:
     estimate:
