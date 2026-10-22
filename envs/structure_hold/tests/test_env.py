@@ -201,3 +201,25 @@ def test_dropout_cap_limits_how_long_the_estimate_stays_stale():
     assert longest_dropout_steps(None) > 100  # up to 3 s with the config as is
     assert 20 <= longest_dropout_steps(0.5) <= 50  # capped at 0.5 s
     assert longest_dropout_steps(0.05) == 20  # never below dropout_min_s (0.2 s = 20 steps)
+
+
+def test_moving_fast_on_a_stale_estimate_costs_extra_reward():
+    cfg = StructureHoldConfig(
+        disturbance=still_air().disturbance,
+        estimate=EstimateCorruptionConfig(dropout_rate_hz=0.0, jump_rate_hz=0.0,
+                                          delay_min_s=0.0, delay_max_s=0.0),
+        start_offset_std_m=0.0, start_yaw_std_rad=0.0,
+    )
+    from envs.sims import QuadState
+
+    env = StructureHoldEnv(cfg, num_envs=2, seed=0)
+    # Same true state in both envs, 2 m/s sideways; env 1 is in a dropout, env 0 is not.
+    st = env.sim.state
+    vel = torch.tensor([[0.0, 2.0, 0.0]]).expand(2, 3).clone()
+    env.sim.reset(torch.arange(2), QuadState(pos=st.pos.clone(), quat=st.quat.clone(),
+                                             vel=vel, ang_vel=st.ang_vel.clone()))
+    env.estimator.dropout_left[1] = 50
+    _, reward, *_ = env.step(hover_action(env))
+    assert bool(env.estimate_stale[1]) and not bool(env.estimate_stale[0])
+    expected = cfg.reward.stale_vel * 2.0
+    assert reward[0] - reward[1] == pytest.approx(expected, abs=0.05)

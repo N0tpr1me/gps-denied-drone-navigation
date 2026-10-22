@@ -24,7 +24,7 @@ expects.
 | Hold point | `hold_distance` m from the wall (default 1 to 3), `hold_height` m up, drawn per episode. |
 | Observation (20) | estimated position error and velocity in the structure frame, gravity in the body frame, heading, body rates, previous action, estimate stale flag and age. Layout in `env.py` (`OBS`). |
 | Action (4) | body rate setpoints as a fraction of `max_rate_rad_s`, and thrust mapped from [-1, 1] to [0, `max_thrust`]. |
-| Reward | alive bonus minus bounded penalties on true position error (saturating over `pos_scale_m`, extra for the component toward the wall), speed, body rates, action size, action change and tilt beyond `reward.tilt_free_deg`; a crash costs `reward.crash` once. Every term is bounded so a live step always beats a crash (`config.py`). |
+| Reward | alive bonus minus bounded penalties on true position error (saturating over `pos_scale_m`, extra for the component toward the wall), speed (`stale_vel` adds to the speed penalty while the estimate is stale, so the drone slows down instead of flying off a frozen estimate), body rates, action size, action change and tilt beyond `reward.tilt_free_deg`; a crash costs `reward.crash` once. Every term is bounded so a live step always beats a crash (`config.py`). |
 | Episode ends | contact (clearance ≤ 0.25 m), ground, tilt over 80°, true error over 3 m, a non-finite state (counted, never silently dropped), or the clock (`episode_length_s`). |
 | Randomness | one seed drives the NumPy generator (hold point, start pose, wind) and the estimator's torch generator. Same seed, same rollout. |
 
