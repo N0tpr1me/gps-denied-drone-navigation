@@ -1,0 +1,56 @@
+# structure_hold_ppo.yaml with 10x the standard dropout rate in training, for the stale-speed
+# reward term (RewardWeights.stale_vel): fine-tuning policy v2 with the term did not change its
+# behaviour (run 20261022-014045), so this trains from scratch with far more dropouts to learn from.
+#   python -m training.launch --config training/configs/structure_hold_ppo.yaml --smoke --device cpu
+name: structure_hold_ppo_stale
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.5
+gpus: 1
+params:
+  num_envs: 1024
+  iterations: 1500  # policy v2 needed 3000: run twice with `resume` (see structure_hold_ppo_h15_resume.yaml)
+  num_steps_per_env: 48
+  history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay (policy v2; v1 used 3)
+  sim: torch
+  env:
+    # Train on 5x more frequent estimate jumps and dropouts than the standard condition so
+    # the policy meets enough of them; the wind is the default. Scoring uses the standard
+    # condition (eval.env below), the same the PD yardstick and every LOG.md line use.
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.2   # 10x standard: dropouts are the crash cause, see them often
+  curriculum:
+    # Dropout-length curriculum (cap dropouts at dropout_max_s when training starts, grow the
+    # cap linearly to the env's 3 s over the first `fraction` of the iterations). Off: the one
+    # logged run with it (0.5 s, 0.6) came out worse than policy v1 on 3 seeds x 2048 episodes
+    # (crash 9.6 % vs 6.1 %, p95 0.59 m vs 0.48 m); see docs/decisions.md.
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250   # score checkpoints 0, 250, ... and the last one; export the safest
+    select_envs: 128
+# Overrides applied with --smoke: a handful of PPO iterations on a few envs, a 2 s eval; done
+# in well under a minute on CPU. (launch.py's override is a shallow update, so nested blocks
+# are given whole.)
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    episode_length_s: 2.0
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
