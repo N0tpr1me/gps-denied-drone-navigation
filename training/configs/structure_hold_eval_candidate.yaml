@@ -20,6 +20,7 @@ params:
   seeds: [1, 2, 3]
   fallback:
     threshold_s: 0.5
+  yaw_guard: true
   sim: torch
   env:
     estimate:
