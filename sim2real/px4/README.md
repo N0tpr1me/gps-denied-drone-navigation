@@ -79,6 +79,8 @@ sim2real/px4/
                          make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
+  run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
+                         (Docker image, sim2real/estimate_bridge), scored on the truth
   tests/                 test_watchdog.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
                          test_policy_header.py
 ```
@@ -182,11 +184,52 @@ it reached 0.99 m in 20 s). That is a 20 s forced test of a rule meant for 0.5 t
 dropouts, not a fault; the Gazebo flight with real dropouts is where the gains get judged.
 `SH_YAW_GUARD=1` on v3 is the field override only (the mock says it hurts).
 
-**Next step:** the Gazebo SITL flight on the Mac (`sim2real/docker`, `sim2real/gazebo`
-wall_slab world, `sim2real/estimate_bridge` for the VIO-like estimate with dropouts):
-engage with `SH_CTRL=1` and the defaults, confirm v3 flies through a dropout, then with
-`SH_FB_EN=1` that the fallback takes over 0.5 s into a dropout and hands back, then the
-benchmark against tuned PX4 (M1).
+**Next step:** the Gazebo flight below on the Mac, then the benchmark against tuned PX4
+(M1).
+
+## Gazebo flight (needs Docker: the Mac)
+
+`run_gazebo.py` flies the acceptance sequence in the wall-and-slab world with wind and the
+VIO-like estimate (dropouts, jumps, bias) through EKF2, GPS off, and scores the TRUE
+position over the hold against the hold point the module captured. It is the first flight
+that judges the policy rather than the plumbing. The image must carry the current module:
+
+```bash
+sim2real/docker/run.sh build                                   # after any change under sim2real/px4 (~5 min)
+python -m sim2real.px4.run_gazebo calm_0ms --profile clean     # 1. plumbing: no wind, exact estimate
+python -m sim2real.px4.run_gazebo wind_8ms --profile vio_default                # 2. v3 defaults
+python -m sim2real.px4.run_gazebo wind_8ms --profile vio_default --param SH_FB_EN=1   # 3. fallback on
+python -m sim2real.px4.run_gazebo wind_8ms --profile vio_default --param SH_CTRL=0    # 4. cascade, regression
+```
+
+Each writes `runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/` with `summary.json`
+(the sequence's checks), `hold.json` (truth metrics, fallback / guard shares, stale time),
+`ekf.json`, the verified wind and estimate traces, and `hold_summary.json` for the LOG
+entry. About 3 minutes per run (60 s hold, two settles, the trip and the landing).
+
+Expected results, in order; stop and look at the log the first time one is missed:
+
+1. **calm, clean** passes every check (`"ok": true`): engage accepted, 60 s hold with
+   `hold.json` p95 well under 0.5 m and `estimate_error` about zero, disengage, re-engage,
+   handback under 1 s, latched refusal, landing; `fallback_share` 0, `yaw_guard_share` 0,
+   `stale_max_s` about 0.02 (50 Hz odometry), `gps_free` and `vision_fused` true. If this
+   one fails, the problem is plumbing (image not rebuilt, port 14540 busy, the bridge not
+   started: see `bridge.log`), not the policy.
+2. **wind 8 m/s, vio_default** is the policy's number: compare `hold.json metrics.p95_m`
+   with the tuned-PX4 baseline (`docs/baseline.md`) and the mock (v3: 0.57 m). Expect
+   `stale_max_s` up to 3 s (the profile's longest dropout), `fallback_share` 0 (off for v3),
+   and `ekf.json aiding` showing dead-reckoning during dropouts. Known stock behaviour: a
+   dropout longer than `COM_POS_FS_DELAY` (1 s) can make commander run its position-loss
+   failsafe and leave the mode on its own; the summary then shows an unexpected mode before
+   the trip step. That is PX4, not the module; note it and rerun with another `--seed`.
+3. **fallback on** should show `fallback_episodes` > 0 and `fallback_share` roughly the
+   share of the hold spent more than 0.5 s into a dropout, with the policy back in charge
+   on each fresh fix; the hold number tells whether the rule helps or costs on PX4 as the
+   mock says it costs v3.
+4. **cascade** (`SH_CTRL=0`) must still pass as it did in PR #9's SIH runs; it is the
+   regression check that the module's plumbing did not move while the policy went in.
+
+Log every run in `experiments/LOG.md` against the tuned-PX4 baseline.
 
 ## Frames
 

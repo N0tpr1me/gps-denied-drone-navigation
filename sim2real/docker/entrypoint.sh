@@ -2,6 +2,8 @@
 # Container entrypoint.
 #   sitl        run PX4 + Gazebo headless in the foreground (default)
 #   hover-test  start SITL, fly takeoff / 30 s hover / land with MAVSDK, write a summary
+#   hold-test   start SITL, fly the Structure Hold acceptance sequence (sim2real/px4/sitl_test.py
+#               from the repo mounted at /repo), write a summary
 #   shell       bash, for poking around
 set -euo pipefail
 
@@ -52,6 +54,17 @@ case "${1:-sitl}" in
         trap stop_px4 EXIT
         status=0
         python3 /opt/sitl/hover_test.py --out "${OUT_DIR}/summary.json" "$@" || status=$?
+        copy_latest_ulog
+        exit "${status}"
+        ;;
+    hold-test)
+        shift
+        start_px4_background
+        trap stop_px4 EXIT
+        status=0
+        # Gazebo takes longer than SIH to come up; sitl_test.py's own default is 120 s.
+        python3 /repo/sim2real/px4/sitl_test.py --out "${OUT_DIR}/summary.json" \
+            --ready-timeout-s 300 "$@" || status=$?
         copy_latest_ulog
         exit "${status}"
         ;;
