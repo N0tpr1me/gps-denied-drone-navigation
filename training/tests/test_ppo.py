@@ -211,9 +211,11 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     ecfg["params"].update(ecfg.pop("smoke"))
     ecfg["params"].update({"policy": str(tmp_path / "train" / "policy.onnx"), "num_envs": 4,
                            "score_envs": 2, "env": {"episode_length_s": 1.0},
-                           "fallback": {"threshold_s": 0.5}})
+                           "fallback": {"threshold_s": 0.5}, "yaw_guard": True})
     esummary = run_entry("training.eval_policy", ecfg, tmp_path / "eval")
     assert esummary["headline"]["policy_p95_m_mean"] > 0
+    assert esummary["headline"]["yaw_guard"] is True
+    assert 0.0 <= esummary["headline"]["policy_heading_err_deg_mean"] <= 180.0
     assert esummary["headline"]["fallback_threshold_s"] == 0.5
     assert 0.0 <= esummary["headline"]["fallback_active_fraction"] <= 1.0
     rows = [json.loads(x) for x in (tmp_path / "eval" / "metrics.jsonl").read_text().splitlines()]

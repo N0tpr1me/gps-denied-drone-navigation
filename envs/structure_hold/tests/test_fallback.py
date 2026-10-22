@@ -9,8 +9,8 @@ from envs.estimate import EstimateCorruptionConfig
 from envs.sims import QuadState
 from envs.structure_hold.baseline import CascadedPd
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.env import StructureHoldEnv
-from envs.structure_hold.fallback import FallbackRule, StaleFallback
+from envs.structure_hold.env import OBS, StructureHoldEnv
+from envs.structure_hold.fallback import FallbackRule, StaleFallback, YawGuard
 from envs.structure_hold.tests.test_env import hover_action, still_air
 
 
@@ -82,3 +82,27 @@ def test_fallback_rule_from_dict_and_history_reset_pass_through():
     inner.reset_history = lambda *a: calls.append(a)
     wrapped = StaleFallback(env, inner)
     assert wrapped.reset_history is inner.reset_history
+
+
+def test_yaw_guard_replaces_only_the_yaw_action_and_turns_toward_the_wall():
+    import math
+
+    from envs.sims.torch_quad import quat_from_yaw
+
+    env = quiet_env(num_envs=2)
+    st = env.sim.state
+    env.sim.reset(torch.arange(2), QuadState(pos=st.pos.clone(),
+                                             quat=quat_from_yaw(torch.tensor([0.0, 0.5])),
+                                             vel=st.vel.clone(), ang_vel=st.ang_vel.clone()))
+    env._observe()
+    obs, _ = env.get_observations()
+    spin = hover_action(env)
+    spin[:, 2] = 1.0  # the inner policy asks for a saturated yaw rate
+    guarded = YawGuard(env, lambda o: spin)(obs)
+    assert torch.equal(guarded[:, [0, 1, 3]], spin[:, [0, 1, 3]])
+    assert guarded[0, 2] == pytest.approx(0.0, abs=1e-6)  # already facing the wall
+    assert guarded[1, 2] == pytest.approx(-3.0 * 0.5 / env.cfg.max_rate_rad_s, abs=1e-5)
+    for _ in range(100):
+        obs, *_ = env.step(YawGuard(env, lambda o: spin)(obs))
+    h = obs[:, OBS["heading"]]
+    assert abs(math.atan2(float(h[1, 1]), float(h[1, 0]))) < 0.1

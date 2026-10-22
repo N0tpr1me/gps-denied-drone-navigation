@@ -274,6 +274,10 @@ class StructureHoldEnv:
         over_tilt = (self.cos_tilt_free + gravity_body[:, 2]).clamp(min=0.0)
         # Shaping terms are bounded (see RewardWeights) so living always beats crashing.
         speed_w = w.vel + w.stale_vel * est.stale.to(self.dtype)  # slow down on a dropout
+        # Heading: 1 - cos(yaw error) to the wall-facing heading, from the body x axis.
+        fwd_world = quat_rotate(state.quat, torch.tensor(
+            [1.0, 0.0, 0.0], dtype=self.dtype, device=self.device).expand(self.num_envs, 3))
+        cos_yaw = fwd_world[:, 0] / fwd_world[:, :2].norm(dim=-1).clamp(min=1e-6)
         reward = (
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
@@ -283,6 +287,8 @@ class StructureHoldEnv:
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
             - w.tilt * over_tilt
+            - w.heading * (1.0 - cos_yaw)
+            - w.yaw_rate * state.ang_vel[:, 2].abs().clamp(max=10.0)
             - w.crash * crash.to(self.dtype)
         )
         self.reward_buf = torch.nan_to_num(reward, nan=-w.crash)

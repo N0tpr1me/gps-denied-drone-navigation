@@ -21,11 +21,11 @@ import torch
 
 from envs.structure_hold.baseline import CascadedPd
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.env import StructureHoldEnv
+from envs.structure_hold.env import OBS, StructureHoldEnv
 from envs.structure_hold.run import EpisodeRecorder
 
 HEADLINE_KEYS = ("p95_m_mean", "p95_m_worst", "rms_m_mean", "worst_toward_surface_m",
-                 "contact_rate", "crash_rate")
+                 "contact_rate", "crash_rate", "heading_err_deg_mean")
 
 
 def score_controller(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor],
@@ -38,10 +38,13 @@ def score_controller(env: StructureHoldEnv, controller: Callable[[torch.Tensor],
     total_steps = int(episodes) * env.max_episode_length
     counts0 = dict(env.counts)
     t0 = time.perf_counter()
+    heading_err_sum = 0.0
     for step in range(total_steps):
         actions = controller(obs)
         recorder.before_step(actions)
         obs, reward, dones, extras = env.step(actions)
+        heading = obs[:, OBS["heading"]]
+        heading_err_sum += float(torch.atan2(heading[:, 1], heading[:, 0]).abs().mean())
         if bool(dones.any()) and hasattr(controller, "reset_history"):
             controller.reset_history(obs, dones)  # the window restarts with the new episode
         for row in recorder.after_step(dones, reward, counts0):
@@ -65,6 +68,7 @@ def score_controller(env: StructureHoldEnv, controller: Callable[[torch.Tensor],
         "worst_toward_surface_m": agg("worst_toward_surface_m", np.max),
         "rate_roughness_rad_s2": agg("rate_roughness_rad_s2", np.mean),
         "contact_rate": ended["contact"] / total_ended if total_ended else math.nan,
+        "heading_err_deg_mean": math.degrees(heading_err_sum / total_steps),  # to the wall
         "crash_rate": (1 - ended["timeout"] / total_ended) if total_ended else math.nan,
         "episodes_ended": total_ended,
         "env_steps_per_s": total_steps * env.num_envs / elapsed,

@@ -41,6 +41,11 @@ class RewardWeights:
     action_rate: float = 0.05  # times squared change in normalised action between steps
     tilt: float = 2.0  # times (cos(tilt_free) - cos(tilt)) when tilted beyond tilt_free_deg
     tilt_free_deg: float = 45.0  # no tilt penalty up to here (fighting 12 m/s wind needs ~30)
+    # Heading hold: the camera must stay on the structure, and a policy with no heading
+    # term yawed freely (v2 commanded a saturated yaw rate on PX4, docs/decisions.md
+    # 2026-10-22). Target is the wall-facing heading (+x of the structure frame).
+    heading: float = 0.5  # times 1 - cos(yaw error): 0 facing the wall, at most 2 x heading
+    yaw_rate: float = 0.05  # times |yaw rate| clipped at 10 rad/s
     crash: float = 20.0  # once, on contact, ground, tilt or leaving the box
 
     @classmethod
