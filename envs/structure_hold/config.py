@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+import numpy as np
+
 from envs.disturbance import DisturbanceConfig
 from envs.estimate import EstimateCorruptionConfig
 from envs.sims import QuadParams, RatePidGains
+from envs.structure_hold.airframes import airframe_config
 from eval.metrics import CONTACT_RADIUS_M
 
 
@@ -37,6 +40,11 @@ class RewardWeights:
     # default: two runs with 0.3 did not reduce crashes (docs/decisions.md, 2026-10-22).
     stale_vel: float = 0.0  # times true speed clipped at 5 m/s, only while stale
     ang_vel: float = 0.01  # times body rate norm clipped at 10 rad/s
+    # Collective thrust away from the weight: |thrust / (m g) - 1| clipped at 1. Off by
+    # default. A 2 to 3 Hz thrust cycle around hover moves the drone only centimetres, so the
+    # position term barely sees it and the step-to-step action_rate term weights 2 Hz by
+    # (2 pi f dt)^2 ~ 0.016; this term charges the swing itself (docs/decisions.md 2026-10-22).
+    thrust: float = 0.0
     action: float = 0.02  # times squared normalised rate command
     # Smoothness: squared change in normalised action between steps. 0.15 (was 0.05) after
     # v2 chattered between the rate limits on PX4 (docs/decisions.md, 2026-10-22).
@@ -76,14 +84,16 @@ class AirframeRandomization:
 
     The PX4 module scales the policy's thrust through the vehicle's hover thrust
     (``sim2real/px4``: ``thrust_n / (MASS_KG * g) * hover_thrust``), so a heavier airframe
-    gets proportionally more thrust for the same action. The env reproduces that: thrust in
-    newtons = action thrust x ``mass_scale`` x (1 + ``hover_thrust_error``), where the error is
-    how far PX4's hover-thrust estimate is off.
+    gets proportionally more thrust for the same action. The env reproduces that: on a
+    thrust-linear airframe, thrust in newtons = action thrust x ``mass_scale`` x (1 +
+    ``hover_thrust_error``), where the error is how far PX4's hover-thrust estimate is off;
+    with ``actuation`` set, the same mapping goes through the airframe's thrust curve.
     """
 
     mass_scale: tuple[float, float] = (1.0, 1.0)  # times quad.mass
     inertia_scale: tuple[float, float] = (1.0, 1.0)  # times quad.inertia, all axes together
-    # Max thrust over weight, relative to the nominal airframe's (16 N / 7.85 N = 2.04).
+    # Max thrust over weight, relative to the nominal airframe's (placeholder 16 N / 7.85 N =
+    # 2.04, gz_x500 34.2 N / 20.2 N = 1.69).
     thrust_to_weight_scale: tuple[float, float] = (1.0, 1.0)
     motor_tau_s: tuple[float, float] | None = None  # None: quad.motor_tau
     hover_thrust_error: tuple[float, float] = (0.0, 0.0)  # fraction, + means too much thrust
@@ -148,11 +158,75 @@ class WallYawTorque:
 
 
 @dataclass(frozen=True)
+class Actuation:
+    """How PX4's normalised commands become force and torque on the airframe, between the
+    rate loop and the simulator. The defaults are the placeholder's: PX4's unit torque is
+    the airframe's ``quad.max_torque`` and thrust is linear in the command, so the policy's
+    newtons arrive unchanged (``envs/structure_hold/airframes.py`` derives a real vehicle's).
+    """
+
+    # N m of body torque per unit of PX4's normalised torque (roll, pitch, yaw), linearised
+    # at hover. None: ``quad.max_torque``, i.e. a unit command is exactly the airframe's
+    # limit. Larger than ``max_torque``: PX4 saturates the torque before a unit command.
+    torque_per_unit: tuple[float, float, float] | None = None
+    # Rotor speed is linear in the command from this fraction of full speed (gz:
+    # SIM_GZ_EC_MIN / MAX) and thrust goes with speed squared. None: thrust linear in it.
+    esc_min_frac: float | None = None
+    # The module's clamp on the normalised collective thrust it sends.
+    thrust_cmd_range: tuple[float, float] = (0.0, 1.0)
+
+    def __post_init__(self) -> None:
+        if self.torque_per_unit is not None:
+            object.__setattr__(self, "torque_per_unit",
+                               tuple(float(x) for x in self.torque_per_unit))
+            if len(self.torque_per_unit) != 3 or min(self.torque_per_unit) <= 0:
+                raise ValueError("torque_per_unit must be three positive values")
+        if self.esc_min_frac is not None and not 0.0 <= self.esc_min_frac < 1.0:
+            raise ValueError("esc_min_frac must be in [0, 1)")
+        object.__setattr__(self, "thrust_cmd_range",
+                           _range(self.thrust_cmd_range, "thrust_cmd_range"))
+        lo, hi = self.thrust_cmd_range
+        if lo < 0 or hi > 1:
+            raise ValueError("thrust_cmd_range must lie in [0, 1]")
+
+    @property
+    def thrust_via_module(self) -> bool:
+        """True when thrust must go through the module's normalised command (a thrust
+        curve or a clamp); False keeps the placeholder's direct newtons."""
+        return self.esc_min_frac is not None or self.thrust_cmd_range != (0.0, 1.0)
+
+    def thrust_fraction(self, u: Any) -> Any:
+        """Thrust as a fraction of max thrust for normalised commands ``u`` in [0, 1]."""
+        if self.esc_min_frac is None:
+            return u
+        w0 = self.esc_min_frac
+        return (w0 + (1.0 - w0) * u) ** 2
+
+    def command_for_fraction(self, f: Any) -> Any:
+        """Inverse of ``thrust_fraction``: the command giving thrust fraction ``f``."""
+        if self.esc_min_frac is None:
+            return f
+        w0 = self.esc_min_frac
+        return (np.sqrt(f) - w0) / (1.0 - w0)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> Actuation:
+        d = dict(d or {})
+        _check_keys(cls, d, "actuation")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
 class StructureHoldConfig:
     """The task. The wall is the plane x = 0 (world ENU); free air is x < 0 and the hold
     point sits ``hold_distance`` metres from it, so the structure frame's x axis is world +x.
+
+    ``airframe`` names a vehicle in ``envs/structure_hold/airframes.py``; ``from_dict``
+    merges its numbers (``quad``, ``rate_pid``, ``actuation``, ``rate_lag_s``) under the ones
+    the mapping states itself.
     """
 
+    airframe: str = "placeholder"
     dt: float = 0.01  # s, policy and rate-loop step (100 Hz)
     episode_length_s: float = 20.0
     hold_distance: tuple[float, float] = (1.0, 3.0)  # m from the wall, per episode
@@ -173,6 +247,7 @@ class StructureHoldConfig:
     obs_pos_clip_m: float = 5.0
     quad: QuadParams = field(default_factory=QuadParams)
     rate_pid: RatePidGains = field(default_factory=RatePidGains)
+    actuation: Actuation = field(default_factory=Actuation)
     disturbance: DisturbanceConfig = field(default_factory=DisturbanceConfig)
     estimate: EstimateCorruptionConfig = field(default_factory=EstimateCorruptionConfig)
     reward: RewardWeights = field(default_factory=RewardWeights)
@@ -198,9 +273,17 @@ class StructureHoldConfig:
     def from_dict(cls, d: dict[str, Any] | None) -> StructureHoldConfig:
         d = dict(d or {})
         _check_keys(cls, d, "structure_hold config")
+        # The named airframe first, then the mapping's own values on top (one level deep, so
+        # ``quad: {motor_tau: 0.03}`` changes one number of the vehicle's quad).
+        for key, value in airframe_config(str(d.get("airframe", "placeholder"))).items():
+            if isinstance(value, dict) and isinstance(d.get(key), dict):
+                d[key] = {**value, **d[key]}
+            elif key not in d:
+                d[key] = value
         nested = {
             "quad": QuadParams.from_dict,
             "rate_pid": RatePidGains.from_dict,
+            "actuation": Actuation.from_dict,
             "disturbance": DisturbanceConfig.from_dict,
             "estimate": lambda x: EstimateCorruptionConfig.from_dict(x or {}),
             "reward": RewardWeights.from_dict,
@@ -210,7 +293,7 @@ class StructureHoldConfig:
         for key, build in nested.items():
             if key in d:
                 d[key] = build(d[key])
-        for key in ("hold_distance", "hold_height"):
+        for key in ("hold_distance", "hold_height", "rate_lag_s"):
             if key in d:
                 v = d[key]
                 d[key] = (float(v), float(v)) if isinstance(v, (int, float)) else tuple(

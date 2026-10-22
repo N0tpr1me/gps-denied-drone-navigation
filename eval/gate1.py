@@ -142,9 +142,38 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
             m = compute_metrics(trace, surface, gusts=[g for g in gusts[i] if g[0] < t[-1]],
                                 contact_radius_m=cfg.contact_radius_m)
             row.update({k: m[k] for k in ("p95_m", "rms_m", "max_m", "worst_toward_surface_m",
-                                          "contacts", "rate_roughness_rad_s2")})
+                                          "contacts", "rate_roughness_rad_s2",
+                                          "thrust_roughness_1_s")})
         rows.append(row)
     return rows
+
+
+def module_thrust_scale(meta: dict[str, Any], env: StructureHoldEnv) -> float:
+    """How much more hover-relative thrust one unit of the policy's thrust action is worth
+    on the module than in ``env``: the module turns the action into newtons with the
+    policy's own max thrust and maps them through the hover point with the policy's own
+    mass (``sim2real/px4``: ``thrust_n / (MASS_KG * g) * hover_thrust``). 1 when the policy
+    trained on the env's airframe."""
+    pq = meta["env_cfg"]["quad"]
+    return (pq["max_thrust"] / pq["mass"]) / (env.cfg.quad.max_thrust / env.cfg.quad.mass)
+
+
+class ModuleThrustScale:
+    """Fly a policy trained on another airframe the way the PX4 module flies it: its thrust
+    action rescaled by ``module_thrust_scale`` (clipped to the action range, which on the
+    x500 only cuts commands past the module's own 0.9 clamp), and the previous-action
+    observation mapped back so the policy sees its own action."""
+
+    def __init__(self, inner: Callable[[torch.Tensor], torch.Tensor], k: float):
+        self.inner, self.k = inner, float(k)
+        self.j = OBS["last_action"].start + 3
+
+    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
+        obs = obs.clone()
+        obs[:, self.j] = (obs[:, self.j] + 1.0) / self.k - 1.0
+        a = self.inner(obs).clone()
+        a[:, 3] = ((a[:, 3] + 1.0) * self.k - 1.0).clamp(-1.0, 1.0)
+        return a
 
 
 def make_factory(spec: dict[str, Any], device: str) -> Callable[[StructureHoldEnv], Any]:
@@ -160,12 +189,13 @@ def make_factory(spec: dict[str, Any], device: str) -> Callable[[StructureHoldEn
 
     def factory(env: StructureHoldEnv):
         out = meta["output"]
-        if (abs(out["max_rate_rad_s"] - env.cfg.max_rate_rad_s) > 1e-9
-                or abs(out["max_thrust_n"] - env.cfg.quad.max_thrust) > 1e-9):
-            raise ValueError(f"{path.name} scales actions for {out['max_rate_rad_s']} rad/s and "
-                             f"{out['max_thrust_n']} N, the protocol env for "
-                             f"{env.cfg.max_rate_rad_s} rad/s and {env.cfg.quad.max_thrust} N")
+        if abs(out["max_rate_rad_s"] - env.cfg.max_rate_rad_s) > 1e-9:
+            raise ValueError(f"{path.name} scales rates for {out['max_rate_rad_s']} rad/s, the "
+                             f"protocol env for {env.cfg.max_rate_rad_s} rad/s")
         ctl = load_controller(path, env.num_envs, device, meta=meta)
+        k = module_thrust_scale(meta, env)
+        if abs(k - 1.0) > 1e-9:
+            ctl = ModuleThrustScale(ctl, k)
         if rule is not None:
             ctl = StaleFallback(env, ctl, rule)
         return YawGuard(env, ctl) if spec.get("yaw_guard") else ctl
@@ -194,6 +224,11 @@ def _crash(rows: list[dict[str, Any]]) -> np.ndarray:
     return np.array([r["crash"] for r in rows], dtype=float)
 
 
+def _mean_of(rows: list[dict[str, Any]], key: str) -> float:
+    x = np.array([r.get(key, math.nan) for r in rows], dtype=float)
+    return float(np.nanmean(x)) if np.isfinite(x).any() else math.nan
+
+
 def describe(rows: list[dict[str, Any]], idx: np.ndarray) -> dict[str, Any]:
     """Headline numbers of one controller in one cell, with 95 % intervals."""
     p95, crash = _p95(rows), _crash(rows)
@@ -216,6 +251,9 @@ def describe(rows: list[dict[str, Any]], idx: np.ndarray) -> dict[str, Any]:
         "worst_toward_surface_m": float(np.nanmax(worst)),
         "contact_rate": sum(1 for r in rows if r["reason"] == "contact") / n,
         "heading_err_deg_mean": float(np.mean([r["heading_err_deg"] for r in rows])),
+        # Reported, not judged: a limit cycle in the commands shows up here, not in p95.
+        "rate_roughness_rad_s2_mean": _mean_of(rows, "rate_roughness_rad_s2"),
+        "thrust_roughness_1_s_mean": _mean_of(rows, "thrust_roughness_1_s"),
     }
 
 
@@ -370,8 +408,9 @@ def markdown(report: dict[str, Any]) -> str:
         f"Seeds {report['seeds']}, {report['num_envs']} episodes per cell and seed; "
         f"judged: `{gate}`. Intervals are 95 %.",
         "",
-        "| Cell | Controller | p95 (m) | Crash | Worst toward wall (m) | Heading (deg) |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Cell | Controller | p95 (m) | Crash | Worst toward wall (m) | Heading (deg) "
+        "| Roughness, rates (rad/s2) / thrust (1/s) |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for c in report["cells"]:
         for name in names:
@@ -380,7 +419,9 @@ def markdown(report: dict[str, Any]) -> str:
                 f"| {c['label']} | {name} | {d['p95_m_mean']:.3f} "
                 f"[{d['p95_ci'][0]:.3f}, {d['p95_ci'][1]:.3f}] | {d['crash_rate']:.1%} "
                 f"[{d['crash_ci'][0]:.1%}, {d['crash_ci'][1]:.1%}] | "
-                f"{d['worst_toward_surface_m']:.2f} | {d['heading_err_deg_mean']:.1f} |")
+                f"{d['worst_toward_surface_m']:.2f} | {d['heading_err_deg_mean']:.1f} | "
+                f"{d.get('rate_roughness_rad_s2_mean', math.nan):.0f} / "
+                f"{d.get('thrust_roughness_1_s_mean', math.nan):.1f} |")
     lines += ["", f"| Cell | {gate} p95 vs PD | Crash difference | Hold | Safety | Verdict |",
               "| --- | --- | --- | --- | --- | --- |"]
     for c in report["cells"]:

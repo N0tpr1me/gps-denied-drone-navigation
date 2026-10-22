@@ -1,0 +1,78 @@
+# Policy v5 candidate: the v3 recipe (reward, 15-step history, standard 50 to 150 ms estimate
+# delay, 5x jump and dropout rates) on the gz x500, the vehicle the module is benchmarked on
+# in Gazebo (envs/structure_hold/airframes.py). v3 flew 3x worse than tuned PX4 there in a
+# 2 Hz roll-rate and thrust limit cycle (PR #30); in the mock the x500 preset reproduces that
+# cycle (2.4 Hz) because its rate loop answers 3 to 4x faster than the placeholder's lagged
+# one and its thrust curve is 1.6x steeper at hover, and a 15 % hover-thrust estimate error
+# moves v3 0.7 m off its hold point. One airframe per episode around the x500 below.
+# The first v5 run (20261022-193416) held the x500 within 0.07 m in calm air but drove thrust
+# and roll in a 2.8 Hz cycle that runs through its own previous-action input (freezing that
+# input stops it) and costs almost nothing: a few cm of error, and the step-to-step
+# action_rate term weights 2 Hz by only ~0.016. Raising action_rate to 1.0 (run
+# 20261022-201654) collapsed the exploration noise (0.02 by the end) and left the cycle.
+# So action_rate stays at v3's 0.15 and the swing itself is charged: thrust 1.0 times
+# |thrust / weight - 1| (the run-1 cycle costs ~0.27 per step) and ang_vel 0.1 (was 0.01).
+#   python -m training.launch --config training/configs/structure_hold_ppo_v5.yaml --smoke --device cpu
+# 1000 iterations per run (1500 would pass the 1 h rule on 4 CPU cores); continued with
+# structure_hold_ppo_v5_resume.yaml from the selected checkpoint if the first run is still improving.
+name: structure_hold_ppo_v5
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  iterations: 1000  # ~22k env-steps/s on 4 CPU cores: ~40 min, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+    # Rate-setpoint lag up to 30 ms (the module tick and the next gyro sample), drawn per
+    # episode; the x500's own rate loop is in the preset.
+    rate_lag_s: [0.0, 0.03]
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500
+    episode_length_s: 2.0
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

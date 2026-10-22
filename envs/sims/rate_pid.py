@@ -2,12 +2,14 @@
 
 The policy commands body rates, exactly as the onboard Structure Hold module will, so the
 training env closes the same inner loop PX4 closes. PX4 works in normalised torque
-(``-1..1`` of the airframe's authority); ``RatePid`` does the same and scales by
-``max_torque`` on the way out. As in PX4:
+(``-1..1``); ``RatePid`` does the same and scales by ``max_torque`` (the newton-metres of
+one unit) on the way out. As in PX4:
 
 - D acts on the measured rate (low-pass filtered, ``IMU_DGYRO_CUTOFF``), not on the error,
   so a step in the setpoint gives no derivative kick;
-- the integrator freezes while the output is saturated in the same direction;
+- the integrator freezes while the output is saturated in the same direction: at ``±1``, or
+  at ``±sat_limit`` when the airframe saturates before a unit command (PX4 learns that from
+  the control allocator's saturation flags);
 - the integral term is clipped to ``±int_lim``.
 
 Gains default to PX4 v1.14+ multicopter defaults. Batched: every state is ``(N, 3)``.
@@ -53,6 +55,7 @@ class RatePid:
         dt: float,
         device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
+        sat_limit: Any = None,
     ):
         self.gains = gains
         self.dt = float(dt)
@@ -62,6 +65,8 @@ class RatePid:
         self.kp, self.ki, self.kd, self.kff = t(gains.p), t(gains.i), t(gains.d), t(gains.ff)
         self.int_lim = t(gains.int_lim)
         self.max_torque = torch.as_tensor(max_torque, dtype=dtype, device=dev)
+        self.sat = torch.as_tensor(1.0 if sat_limit is None else sat_limit, dtype=dtype,
+                                   device=dev)
         if gains.d_cutoff_hz > 0:
             self.alpha = 1.0 - math.exp(-2.0 * math.pi * gains.d_cutoff_hz * self.dt)
         else:
@@ -90,7 +95,8 @@ class RatePid:
         d_rate = (self.rate_filt - self.rate_prev) / self.dt
         self.rate_prev = self.rate_filt
         # Anti-windup as PX4: no integration pushing further into saturation.
-        saturated = (self.out_prev >= 1.0) & (err > 0) | (self.out_prev <= -1.0) & (err < 0)
+        saturated = ((self.out_prev >= self.sat) & (err > 0)
+                     | (self.out_prev <= -self.sat) & (err < 0))
         step = torch.where(saturated, torch.zeros_like(err), self.ki * err * self.dt)
         self.integral = torch.maximum(torch.minimum(self.integral + step, self.int_lim),
                                       -self.int_lim)
