@@ -31,6 +31,7 @@ uint8 CTRL_CASCADE = 0        # placeholder P cascade (SH_CTRL 0)
 uint8 CTRL_POLICY = 1         # policy v2 with the brake-and-hover fallback (SH_CTRL 1)
 uint8 controller
 bool fallback_active          # the brake-and-hover fallback flew this tick
+bool yaw_guarded              # the yaw action flown is the module's heading hold (SH_YAW_GUARD)
 bool odometry_fix             # fixes counted from vehicle_visual_odometry (else local position)
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 

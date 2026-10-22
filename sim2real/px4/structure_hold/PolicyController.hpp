@@ -43,10 +43,23 @@ struct FallbackRule {
 	float yaw{3.0f};          // K_YAW [rad/s per rad]
 };
 
+/**
+ * Yaw guard: the module holds the wall-facing heading with its own P loop (the PD
+ * yardstick's and the fallback's gain) and ignores the policy's yaw output. Policy v2 was
+ * trained without a heading term and yaws freely, which the stock rate loop of a real
+ * airframe does not tolerate (docs/decisions.md). The flown yaw replaces the policy's in
+ * last_action, as the env does for the fallback.
+ */
+struct YawGuard {
+	bool enabled{true};  // SH_YAW_GUARD; forced on when the policy does not own yaw (YAW_FROM_POLICY)
+	float gain{3.0f};  // rad/s per rad of heading error
+};
+
 /** How an env-convention action becomes a PX4 rates setpoint. */
 struct SetpointLimits {
 	float thrust_min{0.08f};  // normalised collective thrust
 	float thrust_max{0.9f};
+	float rate_max{policy::MAX_RATE_RAD_S};  // [rad/s] clamp on the commanded body rates
 };
 
 /** Structure frame: origin at the hold point, x along the heading at engage, z up. */
@@ -199,9 +212,9 @@ inline Setpoint actionToSetpoint(const float action[4], float hover_thrust, cons
 {
 	using namespace policy;
 	Setpoint sp{};
-	sp.rates_frd[0] = clampf(action[0], -1.f, 1.f) * MAX_RATE_RAD_S;
-	sp.rates_frd[1] = -clampf(action[1], -1.f, 1.f) * MAX_RATE_RAD_S;
-	sp.rates_frd[2] = -clampf(action[2], -1.f, 1.f) * MAX_RATE_RAD_S;
+	sp.rates_frd[0] = clampf(action[0] * MAX_RATE_RAD_S, -lim.rate_max, lim.rate_max);
+	sp.rates_frd[1] = clampf(-action[1] * MAX_RATE_RAD_S, -lim.rate_max, lim.rate_max);
+	sp.rates_frd[2] = clampf(-action[2] * MAX_RATE_RAD_S, -lim.rate_max, lim.rate_max);
 	const float thrust_n = 0.5f * (clampf(action[3], -1.f, 1.f) + 1.f) * MAX_THRUST_N;
 	sp.thrust = clampf(thrust_n / (MASS_KG * GRAVITY_MPS2) * hover_thrust, lim.thrust_min, lim.thrust_max);
 	return sp;
@@ -212,6 +225,7 @@ struct PolicyOutput {
 	float action[4] {0.f, 0.f, 0.f, 0.f};         // what flew (policy or fallback), env convention
 	float policy_action[4] {0.f, 0.f, 0.f, 0.f};  // the policy's own output this tick
 	bool fallback_active{false};
+	bool yaw_guarded{false};  // the yaw action flown is the module's heading hold
 	bool ok{true};  // false if the network produced a non-finite value (zeros flown instead)
 };
 
@@ -222,6 +236,7 @@ public:
 	static constexpr int NUM_OBS = policy::NUM_OBS;
 
 	void setRule(const FallbackRule &r) { _rule = r; }
+	void setYawGuard(const YawGuard &g) { _yaw_guard = g; }
 	void setLimits(const SetpointLimits &l) { _limits = l; }
 	const FallbackRule &rule() const { return _rule; }
 	const StructureFrame &frame() const { return _frame; }
@@ -259,6 +274,11 @@ public:
 
 		if (out.fallback_active) {
 			fallbackAction(_rule, _frame, s, _obs, out.action);
+
+		} else if (_yaw_guard.enabled || !policy::YAW_FROM_POLICY) {
+			const float yaw_err = atan2f(_obs[policy::OBS_HEADING + 1], _obs[policy::OBS_HEADING + 0]);
+			out.action[2] = clampf(-_yaw_guard.gain * yaw_err / policy::MAX_RATE_RAD_S, -1.f, 1.f);
+			out.yaw_guarded = true;
 		}
 
 		for (int i = 0; i < 4; i++) { _last_action[i] = out.action[i]; }
@@ -271,6 +291,7 @@ public:
 
 private:
 	FallbackRule _rule{};
+	YawGuard _yaw_guard{};
 	SetpointLimits _limits{};
 	StructureFrame _frame{};
 	policy::ObsHistory<HISTORY, NUM_OBS> _history{};

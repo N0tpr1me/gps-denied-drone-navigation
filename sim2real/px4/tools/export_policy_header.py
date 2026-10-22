@@ -188,6 +188,15 @@ def render_header(net: dict, meta: dict, onnx_path: Path, json_path: Path, sha: 
     out.append(f"static constexpr float MAX_RATE_RAD_S = {max_rate!r}f;")
     out.append(f"static constexpr float MAX_THRUST_N = {max_thrust!r}f;")
     out.append(f"static constexpr float MASS_KG = {float(env['quad']['mass'])!r}f;")
+    # policy.json output.yaw: "policy" when the policy was trained to hold the heading,
+    # "module" (or absent, as for v2) when the module's yaw guard must own the heading.
+    yaw_owner = meta["output"].get("yaw", "module")
+    if yaw_owner not in ("policy", "module"):
+        raise UnsupportedGraph(f"policy.json output.yaw must be 'policy' or 'module', "
+                               f"got {yaw_owner!r}")
+    out.append("// Whether the policy was trained to hold the heading (policy.json output.yaw).")
+    from_policy = "true" if yaw_owner == "policy" else "false"
+    out.append(f"static constexpr bool YAW_FROM_POLICY = {from_policy};")
     out.append("")
     out.append(f"static constexpr float MEAN[INPUT_SIZE] = {{\n{_hexfloats(net['mean'])}\n}};")
     out.append(f"static constexpr float STD[INPUT_SIZE] = {{\n{_hexfloats(net['std'])}\n}};")

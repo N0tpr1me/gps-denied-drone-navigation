@@ -32,6 +32,8 @@ static constexpr float OBS_POS_CLIP_M = 5.0f;
 static constexpr float MAX_RATE_RAD_S = 6.0f;
 static constexpr float MAX_THRUST_N = 16.0f;
 static constexpr float MASS_KG = 0.8f;
+// Whether the policy was trained to hold the heading (policy.json output.yaw).
+static constexpr bool YAW_FROM_POLICY = false;
 
 static constexpr float MEAN[INPUT_SIZE] = {
 	-0.09001018f, 0.15087858f, 0.020139927f, -0.008790956f, 0.0071279868f, -0.00276154f, -0.0014397944f, 0.054778874f,
