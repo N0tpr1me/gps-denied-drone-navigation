@@ -84,7 +84,9 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     meta = read_metadata(onnx_path)
     history = int(meta["input"]["history"])
     rng = np.random.default_rng(seed)
-    cfg = StructureHoldConfig()
+    # The policy's own airframe (policy.json env_cfg), so the fallback vectors use the same
+    # mass and thrust the header's MASS_KG / MAX_THRUST_N carry.
+    cfg = StructureHoldConfig.from_dict(meta.get("env_cfg"))
     env = StructureHoldEnv(cfg, num_envs=n, seed=seed)
 
     # --- states in the mock's frames
