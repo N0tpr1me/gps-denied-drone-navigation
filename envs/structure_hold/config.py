@@ -46,7 +46,9 @@ class RewardWeights:
     # Heading hold: the camera must stay on the structure, and a policy with no heading
     # term yawed freely (v2 commanded a saturated yaw rate on PX4, docs/decisions.md
     # 2026-10-22). Target is the wall-facing heading (+x of the structure frame).
-    heading: float = 0.5  # times 1 - cos(yaw error): 0 facing the wall, at most 2 x heading
+    # 2.0: at 0.5 the first v3 run settled on a 30 deg offset (30 deg cost 0.07 per step, less
+    # than the position shaping it traded for); 2.0 makes 30 deg cost 0.27.
+    heading: float = 2.0  # times 1 - cos(yaw error): 0 facing the wall, at most 2 x heading
     yaw_rate: float = 0.05  # times |yaw rate| clipped at 10 rad/s
     crash: float = 20.0  # once, on contact, ground, tilt or leaving the box
 
