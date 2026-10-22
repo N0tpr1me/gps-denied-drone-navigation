@@ -14,7 +14,7 @@ gpus: 1
 params:
   num_envs: 1024
   # Continue the first v4 run for 1500 more; point this at it before launching.
-  resume: runs/20261022-171612_structure_hold_ppo_v4_s0_3a4a5b2/tb/model_999.pt
+  resume: runs/20261022-180126_structure_hold_ppo_v4_resume_s0_5351992/tb/model_1999.pt
   iterations: 1000  # ~19.5k env-steps/s on 4 CPU cores with the 25-step history: ~50 min
   num_steps_per_env: 48
   history: 25  # 250 ms: covers the 50 to 250 ms delay drawn below
