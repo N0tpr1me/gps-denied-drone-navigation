@@ -97,7 +97,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     ang_vel = rng.normal(0, 1.5, (n, 3))
     last_action = rng.uniform(-1, 1, (n, 4))
     stale = rng.random(n) < 0.5
-    age = np.where(stale, rng.uniform(0.2, 2.5, n), rng.uniform(0.05, 0.15, n))
+    age = np.where(stale, rng.uniform(0.2, 2.5, n), 0.0)  # the env's age: 0 while fresh
     pos[0] = hold[0] + np.array([-7.0, 0.3, 0.1])  # beyond the 5 m clip
     stale[0], age[0] = True, 3.0
 
