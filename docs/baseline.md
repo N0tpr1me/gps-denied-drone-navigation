@@ -142,3 +142,36 @@ every run was GPS-free with vision fused, the watchdog handed back to stock PX4 
 (0.02 s measured in the ulog of each flight that finished the sequence), and no flight hit PX4's own position-loss failsafe while the module
 was flying. The fallback run (8 m/s seed 1, `SH_FB_EN=1`) showed no fallback episodes: the
 position-error trip came before any dropout over 0.5 s, so the fallback could not be judged here.
+
+## Structure Hold v5 vs tuned PX4
+
+Same benchmark as the v3 section above, on policy v5 (trained on the gz x500 airframe),
+module headers at `6f8b72b`, image rebuilt, 2026-10-22:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v5 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v3 / **v5** | worst toward wall m, tuned v1 / v3 / **v5** | crashes, tuned / v3 / v5 | failsafes, tuned / v3 / v5 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 1.873 (1.924) / **0.717 (0.942)** | 0.240 (0.420) / 0.396 (0.548) / **0.136 (0.171)** | 0/3 / 2/3 / 0/3 | 2/3 / 0/3 / 1/3† |
+| 4 m/s | 0.570 (0.919) / 1.675 (1.929) / **0.700 (0.923)** | 0.230 (0.406) / 0.423 (0.554) / **0.177 (0.223)** | 0/3 / 2/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 1.569 (1.925) / **0.759 (1.046)** | 0.214 (0.386) / 0.486 (0.646) / **0.252 (0.477)** | 0/3 / 1/3 / 1/3‡ | 2/3 / 0/3 / 0/3 |
+
+† PX4's position-loss failsafe during takeoff (Land at 16.4 s, seed 3), before Structure Hold
+was engaged; none in the hold. ‡ Not the module: seed 3 held the full 60 s, handed back
+in the scripted test, then flipped during stock PX4's final Land in the 8 m/s wind while a
+vision jump was arriving (EKF2 innovation 3 m), and never reported touchdown. No flight
+touched the wall (0 contacts, closest 0.41 m away from the wall... see per-flight lines; v5's closest was 0.53 m).
+
+**Reading it.** The 2 Hz roll and thrust cycle that sank v3 is gone. On the clean calm
+plumbing flight v5 passes every check, including position_held. Its thrust sits at
+0.717 ± 0.03 (v3 swung 0.44–0.90), and its roll-rate command std is 0.43 rad/s (v3 1.51),
+with no saturation. Its p95 there is 0.41 m against tuned PX4's 0.010 m. Almost all of that is a
+steady offset: v5 holds 0.3–0.45 m above its hold point in every flight and about 0.1 m off
+horizontally. That offset is what keeps v5 behind tuned PX4 on p95: 0.70–0.76 m mean
+against 0.57 m (+23 to +33 %), against v3's 1.57–1.87 m. v5 stays further from the wall than tuned PX4 in calm
+air and at 4 m/s (worst toward wall 0.14 and 0.18 m vs 0.24 and 0.23 m) and slightly
+closer at 8 m/s (0.25 vs 0.21 m, seed 1 0.48 m). The module side was clean in all nine flights: every
+hold ran its full 60 s with no watchdog trip (only the scripted test trip), fallback and
+yaw-guard shares 0, stale time up to 2.25 s in the dropout seeds, handback 0.02 s, every
+flight GPS-free with vision fused, no PX4 failsafe while the module flew. Next lever: the
+vertical offset (hover thrust or altitude bias in the x500 mock), then the horizontal one.
