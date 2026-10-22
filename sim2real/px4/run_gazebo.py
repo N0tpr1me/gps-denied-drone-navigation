@@ -22,12 +22,15 @@ Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same fi
 - ``hold_summary.json``: every check and number in one place, for experiments/LOG.md.
 
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
-EKF2 fused the vision stream.
+EKF2 fused the vision stream. For the benchmark, ``eval.baselines.run_baseline --runner
+hold`` flies this over the baseline's scenarios and seeds and tabulates it next to the
+tuned-PX4 rows.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import subprocess
 import sys
@@ -188,7 +191,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("scenario", help="wall scenario name (sim2real/gazebo/scenarios) or path")
     ap.add_argument("--profile", default="vio_default", help="estimate profile name or path")
     ap.add_argument("--seed", type=int, help="override the profile's seed")
-    ap.add_argument("--params", type=Path, default=DEFAULT_PARAMS, help="PX4 .params file")
+    ap.add_argument("--scenario-seed", type=int, help="override the scenario's (wind) seed")
+    ap.add_argument("--params", type=Path, default=DEFAULT_PARAMS,
+                    help="PX4 .params file (the tuned baseline's for a fair comparison)")
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                     help="module parameter set before the flight (SH_FB_EN=1, SH_CTRL=0, ...)")
     ap.add_argument("--image", default=DEFAULT_IMAGE)
@@ -202,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     sc = load_scenario(args.scenario)
+    if args.scenario_seed is not None:
+        sc = dataclasses.replace(sc, seed=args.scenario_seed)
     prof = load_profile(args.profile)
     if args.seed is not None:
         prof = EstimateProfile(prof.name, args.seed, prof.divisor, prof.estimate)
@@ -216,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     (out / "estimate_config.yaml").write_text(yaml.safe_dump(prof.to_dict(), sort_keys=False))
     config = {
         "scenario": args.scenario, "name": sc.name, "scenario_seed": sc.seed,
-        "profile": prof.to_dict(), "px4_params": px4_params, "module_params": args.param,
+        "profile": prof.to_dict(), "px4_params": str(args.params), "module_params": args.param,
         "commit": commit, "image": args.image, "world": WORLD, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hold_s": args.hold_s, "settle_s": args.settle_s, "disturbance": params_summary(wind),
@@ -274,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
             report["ekf"] = {k: ekf[k] for k in ("gps_free", "vision_fused", "estimate_error",
                                                  "vision", "modes", "window_s", "aiding")}
             report["hold"] = hold
+            report["metrics"] = hold["metrics"]  # where run_baseline's rows read it
             report["gps_free"] = ekf["gps_free"]
             report["vision_fused"] = ekf["vision_fused"]
         except Exception as exc:  # the flight already happened; record why scoring failed

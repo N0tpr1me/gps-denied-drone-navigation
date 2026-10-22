@@ -107,3 +107,38 @@ the wind draw and the estimate corruption.
 - One airframe (gz_x500), one wall geometry, wind straight into the wall. No near-wall
   torque, and no slab effect in the disturbance model yet (sim2real/gazebo/README).
 - Hold quality only (Takeoff → Hold). The 5 m pass is not scored here.
+
+## Structure Hold v3 vs tuned PX4
+
+Gazebo SITL on the Mac, 2026-10-22: the Structure Hold module with policy v3 at its
+defaults (yaw from the policy, fallback off), flown by
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 --params eval/baselines/px4_tuned_v1.params`
+on the same scenarios, seeds, estimate draws, PX4 parameter set and truth scoring as the
+tuned v1 rows above. The 60 s window is the time spent in Structure Hold. One LOG line per flight.
+
+| scenario | p95 hold error m, tuned v1 → v3 | worst toward wall m, tuned v1 → v3 | crashes | failsafes |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) → 1.873 (1.924) | 0.240 (0.420) → 0.396 (0.548) | 0/3 → 2/3* | 2/3 → 0/3 |
+| 4 m/s | 0.570 (0.919) → 1.675 (1.929) | 0.230 (0.406) → 0.423 (0.554) | 0/3 → 2/3* | 2/3 → 0/3 |
+| 8 m/s | 0.570 (0.929) → 1.569 (1.925) | 0.214 (0.386) → 0.486 (0.646) | 0/3 → 1/3* | 2/3 → 0/3 |
+
+Mean over seeds 1–3, worst in brackets. \*No flight touched the wall (0 contacts, closest
+0.41 m). Each "crash" is a flight whose acceptance sequence did not finish: the module's
+watchdog tripped on position error (60–81 s, seeds 1 and 2) and handed back to stock
+Position mode, after which the scripted re-engage was refused, as a latched trip should be.
+Fallback share and yaw-guard share were 0 in every flight; stale time peaked at 2.0 s in
+the seed-2 dropouts. On the clean estimate in calm air (plumbing run) v3 scored p95 1.06 m
+against tuned PX4's 0.010 m.
+
+**Reading it.** Policy v3 does not transfer to Gazebo's x500. It is 2.7 to 3.3 times worse
+than tuned PX4 on p95 in every scenario, and goes further toward the wall. The cause is the
+controller, not the estimate: with an exact, fresh estimate in still air it still holds
+1 m off. Its roll-rate command swings ±1.5 to 2 rad/s and its thrust 0.5 to 0.9 in a 2 Hz limit cycle,
+with the error parked at 0.6 to 1 m and not converging. The mock it was trained on (a 0.8 kg
+5-inch quad with a first-order rate lag) does not reproduce the x500's response, so this is
+a sim-to-sim gap to close in training (the x500's mass, thrust and rate response, or
+randomising them), not something to tune in the module. What did work is the safety layer:
+every run was GPS-free with vision fused, the watchdog handed back to stock PX4 every time it fired
+(0.02 s measured in the ulog of each flight that finished the sequence), and no flight hit PX4's own position-loss failsafe while the module
+was flying. The fallback run (8 m/s seed 1, `SH_FB_EN=1`) showed no fallback episodes: the
+position-error trip came before any dropout over 0.5 s, so the fallback could not be judged here.

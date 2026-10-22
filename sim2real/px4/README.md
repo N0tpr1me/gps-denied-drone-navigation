@@ -231,6 +231,16 @@ Expected results, in order; stop and look at the log the first time one is misse
 
 Log every run in `experiments/LOG.md` against the tuned-PX4 baseline.
 
+For the benchmark itself, fly the baseline's scenarios and seeds with the baseline's own
+batch runner so the rows compare like for like (same wind and estimate draws per seed,
+same PX4 parameter set underneath, same truth scoring over a 60 s window):
+
+```bash
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 \
+    --params eval/baselines/px4_tuned_v1.params
+python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v3>/batch.json
+```
+
 ## Frames
 
 PX4 boundary: NED world, FRD body, quaternion body → world (`docs/conventions.md`).
