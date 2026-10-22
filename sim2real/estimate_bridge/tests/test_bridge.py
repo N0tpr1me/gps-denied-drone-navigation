@@ -43,7 +43,12 @@ def test_clean_profile_passes_truth_through_with_finite_difference_velocity():
 
 
 def test_dropouts_are_not_published_and_stale_rows_are_flagged():
-    cfg = EstimateCorruptionConfig(dropout_rate_hz=5.0, dropout_min_s=0.1, dropout_max_s=0.3)
+    # Stale rows are never published, so what the corruptor reports inside a dropout only
+    # matters to the log; EKF2 dead-reckons on its own IMU meanwhile (which is what the
+    # corruptor's default `dead_reckon` mode mimics for training). `hold` keeps the reported
+    # value frozen, which is what this test checks.
+    cfg = EstimateCorruptionConfig(dropout_rate_hz=5.0, dropout_min_s=0.1, dropout_max_s=0.3,
+                                   dropout_mode="hold")
     b = EstimateBridge(cfg, DT, seed=0)
     t, pos = circle(400)
     out = [b.update(ti, p) for ti, p in zip(t, pos, strict=True)]
