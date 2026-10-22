@@ -34,12 +34,12 @@ static constexpr float GRAVITY_MPS2 = 9.80665f;
 
 /** The brake-and-hover rule of docs/fallback.md (constants are the mock airframe's). */
 struct FallbackRule {
-	bool enabled{true};
+	bool enabled{policy::FALLBACK_DEFAULT_ON};  // SH_FB_EN; -1 defers to policy.json output.fallback
 	bool forced{false};       // test hook: the fallback flies every tick
 	float threshold_s{0.5f};  // T_FB: take over once the estimate has been stale this long
-	float brake_vel{2.5f};    // K_BRAKE [1/s]: acceleration per m/s of dead-reckoned velocity
+	float brake_vel{1.5f};    // K_BRAKE [1/s]: acceleration per m/s of dead-reckoned velocity
 	float max_acc{6.0f};      // A_MAX [m/s^2], per axis of the structure frame
-	float tilt{8.0f};         // K_TILT [rad/s per rad]
+	float tilt{4.0f};         // K_TILT [rad/s per rad]
 	float yaw{3.0f};          // K_YAW [rad/s per rad]
 };
 
@@ -51,9 +51,32 @@ struct FallbackRule {
  * last_action, as the env does for the fallback.
  */
 struct YawGuard {
-	bool enabled{true};  // SH_YAW_GUARD; forced on when the policy does not own yaw (YAW_FROM_POLICY)
+	bool enabled{!policy::YAW_FROM_POLICY};  // SH_YAW_GUARD; -1 defers to policy.json output.yaw
 	float gain{3.0f};  // rad/s per rad of heading error
 };
+
+/**
+ * The per-policy defaults come from policy.json through PolicyWeights.hpp; the PX4
+ * parameters can override them in the field. SH_YAW_GUARD and SH_FB_EN: -1 (auto) takes
+ * the policy's own default, 0 off, 1 on (SH_FB_EN 2: forced, test hook). SH_RATE_MAX: 0
+ * (auto) is the policy's action scale, otherwise the clamp in rad/s.
+ */
+static constexpr int PARAM_AUTO = -1;
+
+inline bool resolveYawGuard(int sh_yaw_guard)
+{
+	return sh_yaw_guard < 0 ? !policy::YAW_FROM_POLICY : sh_yaw_guard != 0;
+}
+
+inline bool resolveFallback(int sh_fb_en)
+{
+	return sh_fb_en < 0 ? policy::FALLBACK_DEFAULT_ON : sh_fb_en != 0;
+}
+
+inline float resolveRateMax(float sh_rate_max)
+{
+	return sh_rate_max > 0.f ? sh_rate_max : policy::MAX_RATE_RAD_S;
+}
 
 /** How an env-convention action becomes a PX4 rates setpoint. */
 struct SetpointLimits {
@@ -239,6 +262,7 @@ public:
 	void setYawGuard(const YawGuard &g) { _yaw_guard = g; }
 	void setLimits(const SetpointLimits &l) { _limits = l; }
 	const FallbackRule &rule() const { return _rule; }
+	const YawGuard &yawGuard() const { return _yaw_guard; }
 	const StructureFrame &frame() const { return _frame; }
 
 	/** New hold: structure frame from the current position and heading, history cleared. */
@@ -275,7 +299,7 @@ public:
 		if (out.fallback_active) {
 			fallbackAction(_rule, _frame, s, _obs, out.action);
 
-		} else if (_yaw_guard.enabled || !policy::YAW_FROM_POLICY) {
+		} else if (_yaw_guard.enabled) {
 			const float yaw_err = atan2f(_obs[policy::OBS_HEADING + 1], _obs[policy::OBS_HEADING + 0]);
 			out.action[2] = clampf(-_yaw_guard.gain * yaw_err / policy::MAX_RATE_RAD_S, -1.f, 1.f);
 			out.yaw_guarded = true;

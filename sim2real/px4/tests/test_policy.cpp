@@ -163,9 +163,9 @@ int main()
 		CHECK(near(actionToSetpoint(hi, 0.42f, lim).rates_frd[0], policy::MAX_RATE_RAD_S, 1e-6f));
 		CHECK(near(actionToSetpoint(hi, 0.42f, lim).thrust, 16.f / (0.8f * GRAVITY_MPS2) * 0.42f, 1e-5f));
 		CHECK(same(actionToSetpoint(hi, 0.5f, lim).thrust, lim.thrust_max));  // 1.02 clamped
-		lim.rate_max = 2.f;
-		CHECK(near(actionToSetpoint(hi, 0.5f, lim).rates_frd[0], 2.f, 1e-6f));
-		CHECK(near(actionToSetpoint(a, 0.5f, lim).rates_frd[1], -1.5f, 1e-6f));  // under the clamp
+		lim.rate_max = 0.3f * policy::MAX_RATE_RAD_S;
+		CHECK(near(actionToSetpoint(hi, 0.5f, lim).rates_frd[0], lim.rate_max, 1e-6f));
+		CHECK(near(actionToSetpoint(a, 0.5f, lim).rates_frd[1], -0.25f * policy::MAX_RATE_RAD_S, 1e-6f));  // under it
 	}
 
 	// 6. The controller: engage fills the history, the fallback takes over at the threshold
@@ -173,6 +173,7 @@ int main()
 	{
 		PolicyController ctl{};
 		FallbackRule rule{};
+		rule.enabled = true;  // the rule itself is under test, whatever this policy's default
 		rule.threshold_s = testvec::FALLBACK_THRESHOLD_S;
 		ctl.setRule(rule);
 		YawGuard no_guard{};
@@ -189,7 +190,7 @@ int main()
 		CHECK(!o.fallback_active && o.ok);
 		CHECK(same(ctl.lastObservation()[policy::OBS_LAST_ACTION], 0.f));
 
-		for (int i = 0; i < 4; i++) { CHECK(i == 2 || same(o.action[i], o.policy_action[i])); }  // yaw: guard
+		for (int i = 0; i < 4; i++) { CHECK(same(o.action[i], o.policy_action[i])); }  // guard off: all the policy's
 
 		// History filled with the first observation: a repeated step gives the same output
 		// as a fresh engage with the same observation would, within float noise.
@@ -226,7 +227,7 @@ int main()
 		o = ctl.step(s, 0.f, 0.5f);
 		CHECK(!o.fallback_active);
 
-		for (int i = 0; i < 4; i++) { CHECK(i == 2 || same(o.action[i], o.policy_action[i])); }
+		for (int i = 0; i < 4; i++) { CHECK(same(o.action[i], o.policy_action[i])); }
 
 		// Disabled rule: never active. Forced (test hook): always.
 		rule.enabled = false;
@@ -245,12 +246,14 @@ int main()
 	{
 		PolicyController ctl{};
 		FallbackRule rule{};
+		rule.enabled = true;
 		ctl.setRule(rule);
 		const int k = 5;
 		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
 		VehicleSample s = sampleOf(k);
 		s.stale = false;
 		YawGuard guard{};
+		guard.enabled = true;
 		ctl.setYawGuard(guard);
 		PolicyOutput o = ctl.step(s, 0.f, 0.5f);
 		const float *obs = ctl.lastObservation();
@@ -266,9 +269,24 @@ int main()
 		guard.enabled = false;
 		ctl.setYawGuard(guard);
 		o = ctl.step(s, 0.f, 0.5f);
-		// A policy that does not own yaw (v2: policy.json has no output.yaw) stays guarded.
-		CHECK(o.yaw_guarded == !policy::YAW_FROM_POLICY);
-		CHECK(policy::YAW_FROM_POLICY || !same(o.action[2], o.policy_action[2]) || same(o.policy_action[2], expect));
+		CHECK(!o.yaw_guarded && same(o.action[2], o.policy_action[2]));  // explicit off: the policy's yaw flies
+	}
+
+	// 9. Parameter resolution: -1 / 0 take the defaults policy.json declared for this policy
+	//    (PolicyWeights.hpp), anything else overrides them in the field.
+	{
+		CHECK(resolveYawGuard(PARAM_AUTO) == !policy::YAW_FROM_POLICY);
+		CHECK(!resolveYawGuard(0) && resolveYawGuard(1));
+		CHECK(resolveFallback(PARAM_AUTO) == policy::FALLBACK_DEFAULT_ON);
+		CHECK(!resolveFallback(0) && resolveFallback(1) && resolveFallback(2));
+		CHECK(same(resolveRateMax(0.f), policy::MAX_RATE_RAD_S));
+		CHECK(same(resolveRateMax(1.5f), 1.5f));
+		const YawGuard g{};
+		const FallbackRule r{};
+		CHECK(g.enabled == !policy::YAW_FROM_POLICY && r.enabled == policy::FALLBACK_DEFAULT_ON);
+		// v3 ships with its own heading hold and without the brake-and-hover rule.
+		CHECK(policy::YAW_FROM_POLICY && !policy::FALLBACK_DEFAULT_ON);
+		CHECK(same(SetpointLimits{}.rate_max, policy::MAX_RATE_RAD_S));
 	}
 
 	// 7. Fallback physics: moving along the wall at 1.5 m/s, level, yawed 10 deg right.

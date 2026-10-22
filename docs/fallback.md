@@ -106,9 +106,13 @@ estimator's dropouts look different from the mock's.
 
 Implemented unchanged in `sim2real/px4/structure_hold/PolicyController.hpp` (`fallbackAction`,
 checked against `acceleration_to_action` to 3e-7 in `tests/test_policy.cpp`). Parameters:
-`SH_FB_EN` (1 on, 0 off, 2 forced for tests), `SH_FB_T` (0.5 s), `SH_FB_K` (K_BRAKE),
-`SH_FB_TILT` (K_TILT), `SH_YAW_P` (K_YAW, shared with the yaw guard), fix source `SH_FIX_SRC`,
+`SH_FB_EN` (-1 the policy's own default from `policy.json output.fallback`: on for v2, off
+for v3; 0 off, 1 on, 2 forced for tests), `SH_FB_T` (0.5 s), `SH_FB_K` (K_BRAKE, 1.5),
+`SH_FB_TILT` (K_TILT, 4), `SH_YAW_P` (K_YAW, shared with the yaw guard), fix source `SH_FIX_SRC`,
 stale flag gap `SH_FIX_GAP`. `SH_WD_EST_TO` is now 5 s (docs/decisions.md). The stale time is
 `now - last fix`, so at engage it is the true fix age rather than zero; a hold engaged inside
 a dropout therefore goes to the fallback immediately instead of 0.5 s later.
-`structure_hold_status` logs `stale_s`, `fallback_active` and the action flown.
+`structure_hold_status` logs `stale_s`, `fallback_active` and the action flown. In SIH
+(cloud, 2026-10-22) the forced rule with the 1.5 / 4 gains is calm but, with no position
+term, follows the bias of SIH's differentiated velocity to the 2 m trip after 19 s; a 20 s
+forced test says nothing about 0.5 to 3 s dropouts, which the Gazebo flight will show.

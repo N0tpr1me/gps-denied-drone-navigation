@@ -5,7 +5,8 @@ released actors are tiny MLPs (``Sub``, ``Div``, ``Gemm``/``Elu`` chains, a few 
 kilobytes), and a flight controller build (NuttX or a companion Linux target) wants no heap,
 no dynamic loading and no third-party library. This script reads the ONNX graph, checks it
 is exactly that shape, and writes the weights (shortest round-trip float32 literals) and the
-``policy.json`` contract (history length, layout, action scaling, the mock airframe) into
+``policy.json`` contract (history length, layout, action scaling, the mock airframe, who
+owns yaw, whether the fallback flies by default) into
 ``structure_hold/PolicyWeights.hpp``, which ``MlpPolicy.hpp`` evaluates.
 
 Run it after every policy release and commit the header; ``tests/test_policy_header.py``
@@ -197,6 +198,16 @@ def render_header(net: dict, meta: dict, onnx_path: Path, json_path: Path, sha: 
     out.append("// Whether the policy was trained to hold the heading (policy.json output.yaw).")
     from_policy = "true" if yaw_owner == "policy" else "false"
     out.append(f"static constexpr bool YAW_FROM_POLICY = {from_policy};")
+    # policy.json output.fallback: "off" when the policy handles dropouts itself and the
+    # brake-and-hover rule costs it (v3), "on" (or absent, as for v2) when the rule helps.
+    fallback = meta["output"].get("fallback", "on")
+    if fallback not in ("on", "off"):
+        raise UnsupportedGraph(f"policy.json output.fallback must be 'on' or 'off', "
+                               f"got {fallback!r}")
+    out.append("// Whether the brake-and-hover fallback flies by default "
+               "(policy.json output.fallback).")
+    fallback_on = "true" if fallback == "on" else "false"
+    out.append(f"static constexpr bool FALLBACK_DEFAULT_ON = {fallback_on};")
     out.append("")
     out.append(f"static constexpr float MEAN[INPUT_SIZE] = {{\n{_hexfloats(net['mean'])}\n}};")
     out.append(f"static constexpr float STD[INPUT_SIZE] = {{\n{_hexfloats(net['std'])}\n}};")

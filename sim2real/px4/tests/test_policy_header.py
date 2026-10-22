@@ -1,9 +1,10 @@
-"""The compiled-in policy must be the released one: regenerating the header from
-training/policies/structure_hold_v2.onnx has to reproduce the committed file byte for byte.
-Needs onnx (the ``torch`` extra); skipped without it."""
+"""The compiled-in policy must be the released one: regenerating the header from the policy
+it names (``NAME`` in PolicyWeights.hpp, training/policies/<name>.onnx) has to reproduce the
+committed file byte for byte. Needs onnx (the ``torch`` extra); skipped without it."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -19,15 +20,17 @@ from sim2real.px4.tools.export_policy_header import (  # noqa: E402
 )
 
 REPO = Path(__file__).resolve().parents[3]
-POLICY = REPO / "training" / "policies" / "structure_hold_v2.onnx"
+COMMITTED = DEFAULT_OUT.read_text()
+NAME = re.search(r'NAME = "([^"]+)"', COMMITTED).group(1)
+POLICY = REPO / "training" / "policies" / f"{NAME}.onnx"
 
 
 def test_committed_header_matches_released_policy(tmp_path: Path):
     text = generate(POLICY, tmp_path / "PolicyWeights.hpp")
-    assert text == DEFAULT_OUT.read_text(), (
-        "sim2real/px4/structure_hold/PolicyWeights.hpp is out of date: run "
-        "python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v2.onnx"
-    )
+    # No `assert a == b`: pytest would diff two 300 KB strings for minutes on a mismatch.
+    if text != COMMITTED:
+        pytest.fail("sim2real/px4/structure_hold/PolicyWeights.hpp is out of date: run "
+                    f"python -m sim2real.px4.tools.export_policy_header {POLICY.relative_to(REPO)}")
 
 
 def test_parsed_mlp_matches_onnxruntime():
