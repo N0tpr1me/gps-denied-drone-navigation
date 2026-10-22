@@ -7,13 +7,15 @@
 name: gate1_x500
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
-expected_hours: 0.6
+expected_hours: 0.8  # three controllers, ~45 min on 4 CPU cores
 gpus: 1
 params:
   controllers:
+    - name: v5
+      policy: runs/20261022-210442_structure_hold_ppo_v5_s0_167e13f/policy.onnx  # v5 candidate: run 3, iteration 999
     - name: v3
       policy: training/policies/structure_hold_v3.onnx
-  gate_controller: v3
+  gate_controller: v5
   seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
   num_envs: 1024
   bootstrap: 2000
