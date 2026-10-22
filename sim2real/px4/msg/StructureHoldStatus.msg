@@ -24,8 +24,16 @@ int8 arming_check_id          # arming check registration id, -1 if unregistered
 float32[3] setpoint_ned       # [m] held position, NED
 float32 yaw_setpoint          # [rad]
 float32[3] position_error_ned # [m] setpoint - estimate
-float32 estimate_age_s        # [s] age of the local position estimate at this tick
+float32 estimate_age_s        # [s] age of the sample the position estimate is based on (last fix)
+float32 stale_s               # [s] time since the last fresh position fix (docs/fallback.md)
+
+uint8 CTRL_CASCADE = 0        # placeholder P cascade (SH_CTRL 0)
+uint8 CTRL_POLICY = 1         # policy v2 with the brake-and-hover fallback (SH_CTRL 1)
+uint8 controller
+bool fallback_active          # the brake-and-hover fallback flew this tick
+bool odometry_fix             # fixes counted from vehicle_visual_odometry (else local position)
+float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 
 float32[3] rates_setpoint     # [rad/s] FRD body rates commanded this tick
 float32 thrust_setpoint       # normalised collective thrust commanded this tick
-uint32 loop_time_us           # [us] wall time of the control step (policy inference later)
+uint32 loop_time_us           # [us] wall time of the control step, policy inference included

@@ -13,6 +13,9 @@ px4_add_module(
 		StructureHold.hpp
 		Watchdog.hpp
 		HoldController.hpp
+		PolicyController.hpp
+		MlpPolicy.hpp
+		PolicyWeights.hpp
 	DEPENDS
 		px4_work_queue
 		mathlib

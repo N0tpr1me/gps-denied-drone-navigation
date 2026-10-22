@@ -47,6 +47,12 @@ void StructureHold::updateParams()
 	_gains.p_vel = _param_p_vel.get();
 	_gains.p_att = _param_p_att.get();
 	_gains.v_max = _param_v_max.get();
+
+	FallbackRule rule{};
+	rule.enabled = _param_fb_en.get() != 0;
+	rule.forced = _param_fb_en.get() == 2;
+	rule.threshold_s = _param_fb_t.get();
+	_policy.setRule(rule);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -154,7 +160,15 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_state = structure_hold_status_s::STATE_ENGAGED;
 	_last_control_us = 0;
 	_vel_fd_valid = false;
-	PX4_INFO("engaged: holding N %.2f E %.2f D %.2f m, yaw %.0f deg",
+	_fallback_active = false;
+
+	for (int i = 0; i < 4; i++) { _last_action[i] = 0.f; }
+
+	float hold[3];
+	_setpoint.pos.copyTo(hold);
+	_policy.engage(hold, _setpoint.yaw);  // structure x = the heading at engage
+	PX4_INFO("engaged (%s): holding N %.2f E %.2f D %.2f m, yaw %.0f deg",
+		 _param_ctrl.get() == 1 ? "policy" : "cascade",
 		 (double)_setpoint.pos(0), (double)_setpoint.pos(1), (double)_setpoint.pos(2),
 		 (double)math::degrees(_setpoint.yaw));
 }
@@ -249,6 +263,36 @@ void StructureHold::handbackStep(const hrt_abstime now)
 	}
 }
 
+bool StructureHold::useOdometryFix() const
+{
+	const int32_t src = _param_fix_src.get();
+	return src == 1 || (src == 0 && _odometry_seen);
+}
+
+void StructureHold::updateFix(const hrt_abstime now)
+{
+	// A fix is a new odometry sample with a finite position. The estimate bridge (and a
+	// real VIO) publishes nothing during a dropout, so the gap is what we measure.
+	vehicle_odometry_s odom;
+
+	while (_visual_odometry_sub.update(&odom)) {
+		if (PX4_ISFINITE(odom.position[0]) && PX4_ISFINITE(odom.position[1]) && PX4_ISFINITE(odom.position[2])) {
+			_last_fix_us = odom.timestamp > 0 ? odom.timestamp : now;
+			_last_fix_sample_us = odom.timestamp_sample > 0 ? odom.timestamp_sample : _last_fix_us;
+			_odometry_seen = true;
+		}
+	}
+
+	if (!useOdometryFix()) {
+		_last_fix_us = _local_position.timestamp;
+		_last_fix_sample_us = _local_position.timestamp_sample > 0 ? _local_position.timestamp_sample
+				      : _local_position.timestamp;
+	}
+
+	_stale_s = now > _last_fix_us ? (now - _last_fix_us) * 1e-6f : 0.f;
+	_last_estimate_age_s = now > _last_fix_sample_us ? (now - _last_fix_sample_us) * 1e-6f : 0.f;
+}
+
 void StructureHold::controlStep(const hrt_abstime now)
 {
 	perf_begin(_loop_perf);
@@ -265,20 +309,21 @@ void StructureHold::controlStep(const hrt_abstime now)
 		_hover_thrust = _param_mpc_thr_hover.get();
 	}
 
-	// Watchdog first: it decides whether the controller runs at all this tick.
+	// Watchdog first: it decides whether the controller runs at all this tick. The stale
+	// trip counts from the last position fix (or the last local position update, whichever
+	// is older), so an EKF2 that stops publishing trips it too.
 	const Quatf q(_attitude.q);
 	const Dcmf r(q);
 
 	WatchdogInputs in{};
 	in.now_us = now;
-	in.estimate_timestamp_us = _local_position.timestamp;
+	in.estimate_timestamp_us = math::min(_last_fix_us, static_cast<hrt_abstime>(_local_position.timestamp));
 	in.xy_valid = _local_position.xy_valid;
 	in.z_valid = _local_position.z_valid;
 	in.v_xy_valid = _local_position.v_xy_valid;
 	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
 	in.position_error_m = (_setpoint.pos - Vector3f(_local_position.x, _local_position.y, _local_position.z)).norm();
 	in.test_fault = _param_test_fault.get() != 0;
-	_last_estimate_age_s = now > _local_position.timestamp ? (now - _local_position.timestamp) * 1e-6f : 0.f;
 
 	const Trip trip = _watchdog.check(in);
 
@@ -293,31 +338,74 @@ void StructureHold::controlStep(const hrt_abstime now)
 		return;
 	}
 
-	// Placeholder policy: hold the captured setpoint.
-	HoldState st{};
-	st.pos = Vector3f(_local_position.x, _local_position.y, _local_position.z);
-	st.vel = Vector3f(_local_position.vx, _local_position.vy, _local_position.vz);
-	st.q = q;
+	const Vector3f pos(_local_position.x, _local_position.y, _local_position.z);
+	Vector3f vel(_local_position.vx, _local_position.vy, _local_position.vz);
 
 	if (_param_vel_src.get() == 1) {
 		// Velocity from the differentiated position estimate, low-pass filtered (about
 		// 5 Hz). For simulators whose velocity estimate is unusable; see README.
 		if (_vel_fd_valid && now > _prev_pos_us) {
 			const float dt = math::constrain((now - _prev_pos_us) * 1e-6f, 0.002f, 0.1f);
-			const Vector3f raw = (st.pos - _prev_pos) / dt;
+			const Vector3f raw = (pos - _prev_pos) / dt;
 			const float alpha = dt / (0.032f + dt);
 			_vel_fd = _vel_fd + (raw - _vel_fd) * alpha;
 
 		} else {
-			_vel_fd = st.vel;
+			_vel_fd = vel;
 		}
 
-		_prev_pos = st.pos;
+		_prev_pos = pos;
 		_prev_pos_us = now;
 		_vel_fd_valid = true;
-		st.vel = _vel_fd;
+		vel = _vel_fd;
 	}
-	_last_output = holdStep(_gains, st, _setpoint, _hover_thrust);
+
+	if (_param_ctrl.get() == 1) {
+		// Policy v2 with the brake-and-hover fallback (PolicyController.hpp).
+		VehicleSample sample{};
+		pos.copyTo(sample.pos_ned);
+		vel.copyTo(sample.vel_ned);
+
+		for (int i = 0; i < 3; i++) {
+			for (int j = 0; j < 3; j++) {
+				sample.R[i][j] = r(i, j);
+			}
+		}
+
+		sample.rates_frd[0] = _angular_velocity.xyz[0];
+		sample.rates_frd[1] = _angular_velocity.xyz[1];
+		sample.rates_frd[2] = _angular_velocity.xyz[2];
+		sample.stale = _stale_s > _param_fix_gap.get();
+		sample.age_s = _last_estimate_age_s;
+
+		const PolicyOutput out = _policy.step(sample, _stale_s, _hover_thrust);
+
+		if (!out.ok) {
+			PX4_WARN("policy produced a non-finite action");
+		}
+
+		if (out.fallback_active != _fallback_active) {
+			PX4_INFO("%s", out.fallback_active ? "fallback: braking, estimate stale" : "fallback: fresh fix, policy flies");
+		}
+
+		_fallback_active = out.fallback_active;
+
+		for (int i = 0; i < 4; i++) { _last_action[i] = out.action[i]; }
+
+		_last_output.rates = Vector3f(out.setpoint.rates_frd);
+		_last_output.thrust = out.setpoint.thrust;
+		_last_output.pos_err = _setpoint.pos - pos;
+		_last_output.vel_sp.zero();
+
+	} else {
+		// Placeholder cascade: hold the captured setpoint.
+		HoldState st{};
+		st.pos = pos;
+		st.vel = vel;
+		st.q = q;
+		_last_output = holdStep(_gains, st, _setpoint, _hover_thrust);
+		_fallback_active = false;
+	}
 
 	vehicle_rates_setpoint_s sp{};
 	sp.timestamp = hrt_absolute_time();
@@ -347,6 +435,13 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.yaw_setpoint = _setpoint.yaw;
 	_last_output.pos_err.copyTo(status.position_error_ned);
 	status.estimate_age_s = _last_estimate_age_s;
+	status.stale_s = _stale_s;
+	status.controller = _param_ctrl.get() == 1 ? structure_hold_status_s::CTRL_POLICY
+			    : structure_hold_status_s::CTRL_CASCADE;
+	status.fallback_active = _fallback_active;
+	status.odometry_fix = useOdometryFix();
+
+	for (int i = 0; i < 4; i++) { status.action[i] = _last_action[i]; }
 	_last_output.rates.copyTo(status.rates_setpoint);
 	status.thrust_setpoint = _last_output.thrust;
 	status.loop_time_us = _last_loop_time_us;
@@ -369,9 +464,8 @@ void StructureHold::Run()
 		return;
 	}
 
-	// Consume the sample that woke us; the data itself is not needed here.
-	vehicle_angular_velocity_s angular_velocity;
-	_angular_velocity_sub.update(&angular_velocity);
+	// Consume the sample that woke us; the policy observes the body rates from it.
+	_angular_velocity_sub.update(&_angular_velocity);
 
 	const hrt_abstime now = hrt_absolute_time();
 
@@ -414,6 +508,7 @@ void StructureHold::Run()
 
 	_local_position_sub.update(&_local_position);
 	_attitude_sub.update(&_attitude);
+	updateFix(now);
 
 	const bool mode_active = _vehicle_status.nav_state == _mode_id;
 
@@ -509,6 +604,10 @@ int StructureHold::print_status()
 	PX4_INFO("state: %s", state_names[_state < 4 ? _state : 0]);
 	PX4_INFO("mode_id %d, arming_check_id %d", _mode_id, _arming_check_id);
 	PX4_INFO("latched trip: %s, trips since boot: %u", Watchdog::name(_watchdog.latched()), _trip_count);
+	PX4_INFO("controller: %s (policy %s, history %d x %d), fallback %s, fix source %s, stale %.2f s",
+		 _param_ctrl.get() == 1 ? "policy" : "cascade", policy::NAME, policy::HISTORY, policy::NUM_OBS,
+		 _fallback_active ? "ACTIVE" : "idle", useOdometryFix() ? "visual odometry" : "local position",
+		 (double)_stale_s);
 
 	if (_state == structure_hold_status_s::STATE_ENGAGED) {
 		PX4_INFO("setpoint NED: %.2f %.2f %.2f m, yaw %.1f deg", (double)_setpoint.pos(0), (double)_setpoint.pos(1),
@@ -530,10 +629,12 @@ int StructureHold::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-Structure Hold flight mode (skeleton). Registers "Structure Hold" as a named mode with
-commander, holds the position and yaw it had when engaged by publishing body-rate and
-thrust setpoints to the stock rate controller, and hands control back to Position mode
-(or Altitude mode) when its watchdog trips. Status is published on structure_hold_status.
+Structure Hold flight mode. Registers "Structure Hold" as a named mode with commander and
+holds the position and yaw it had when engaged by publishing body-rate and thrust setpoints
+to the stock rate controller: policy v2 (compiled-in MLP) with a classical brake-and-hover
+fallback once the position fix is stale (SH_CTRL 1), or a placeholder P cascade (SH_CTRL 0).
+The watchdog hands control back to Position mode (or Altitude mode) when it trips. Status
+is published on structure_hold_status.
 
 Engage from the shell with `commander mode ext1` (first registered external mode) or from
 a ground station / MAVLink as the external mode named "Structure Hold".

@@ -83,3 +83,13 @@ them are steps the bare policy would have spent drifting anyway.
   real EKF2 dead-reckoning drift (the mock uses a 0.3 m/s² per-axis bias), and the estimate
   jump that often ends a real dropout. The SITL benchmark against tuned PX4 (M1) is where the
   rule is confirmed before any flight.
+
+## Status in the module (2026-10-22)
+
+Implemented unchanged in `sim2real/px4/structure_hold/PolicyController.hpp` (`fallbackAction`,
+checked against `acceleration_to_action` to 3e-7 in `tests/test_policy.cpp`). Parameters:
+`SH_FB_EN` (1 on, 0 off, 2 forced for tests), `SH_FB_T` (0.5 s), fix source `SH_FIX_SRC`,
+stale flag gap `SH_FIX_GAP`. `SH_WD_EST_TO` is now 5 s (docs/decisions.md). The stale time is
+`now - last fix`, so at engage it is the true fix age rather than zero; a hold engaged inside
+a dropout therefore goes to the fallback immediately instead of 0.5 s later.
+`structure_hold_status` logs `stale_s`, `fallback_active` and the action flown.

@@ -1,8 +1,8 @@
-# Structure Hold PX4 module (skeleton)
+# Structure Hold PX4 module
 
 One onboard PX4 flight mode, built into `px4_sitl` first and later into the target
-airframe. This is the v0 skeleton: it proves the mode plumbing before any learned policy
-exists.
+airframe. Since 2026-10-22 it flies policy v2 with the brake-and-hover fallback; the v0
+placeholder cascade stays selectable (`SH_CTRL 0`).
 
 What it does today:
 
@@ -12,35 +12,67 @@ What it does today:
   firmware the way `mc_nn_control` does. On the pinned release (v1.17.0) the mode gets
   `nav_state` 23 (EXTERNAL1), shows up in QGC and on an RC mode switch, and PX4's
   failsafes and arming checks apply to it. No commander patch needed.
-- **Holds the position and yaw it had when engaged.** A placeholder P cascade
-  (`HoldController.hpp`: position → velocity → acceleration → attitude → body rates)
-  stands in for the policy. It outputs what the policy will output: FRD body rates and a
-  normalised collective thrust on `vehicle_rates_setpoint`. PX4's stock rate controller
-  and control allocation stay in charge; the attitude and position controllers are idle
-  while the mode is active.
+- **Holds the position and yaw it had when engaged** with policy v2 and the fallback
+  (`PolicyController.hpp`, `SH_CTRL 1`, default) or the placeholder P cascade
+  (`HoldController.hpp`, `SH_CTRL 0`). Both output FRD body rates and a normalised
+  collective thrust on `vehicle_rates_setpoint`. PX4's stock rate controller and control
+  allocation stay in charge; the attitude and position controllers are idle while the mode
+  is active.
+- **Policy inference** is a compiled-in MLP (`MlpPolicy.hpp`, no heap, no PX4 headers, no
+  third-party library; docs/decisions.md). `tools/export_policy_header.py` turns the
+  released `training/policies/structure_hold_v2.onnx` + `.json` into
+  `structure_hold/PolicyWeights.hpp`: weights, the history length (15, from
+  `policy.json input.history`, never hardcoded), the observation layout, the action scaling
+  and the mock airframe the policy was trained on. The module builds the env's observation
+  (structure frame = heading at engage, ENU-style, FLU body) from PX4's NED / FRD state,
+  keeps the rolling history, and maps the action back (FLU → FRD rates, thrust in newtons for
+  the mock airframe scaled through the hover thrust). `tests/test_policy_header.py` fails
+  when the header no longer matches the released policy.
+- **Brake-and-hover fallback** (docs/fallback.md) once the position fix has been stale for
+  `SH_FB_T` (0.5 s): acceleration setpoint `-2.5 × v_est` clamped at 6 m/s², no position
+  term, P attitude loop, heading held on the structure; hands back on the first fresh fix.
+  The policy keeps running meanwhile so its history stays current. A fix is a new
+  `vehicle_visual_odometry` sample (VIO / the estimate bridge) or, with no odometry source,
+  a local position update (`SH_FIX_SRC`). `SH_FB_EN 2` forces the fallback every tick for
+  tests.
 - **Watchdog** (`Watchdog.hpp`, plain C++, no PX4 headers, unit-tested): trips on a
-  test fault, an invalid or stale estimate, too much tilt or too much hold error, in
-  that priority order. A trip latches until disarm. On a trip the module hands back:
+  test fault, an invalid or stale estimate (no fix for `SH_WD_EST_TO`, 5 s so the fallback
+  can fly through dropouts; EKF2-invalid flags trip at once), too much tilt or too much
+  hold error, in that priority order. A trip latches until disarm. On a trip the module hands back:
   Position mode (Altitude mode if the horizontal estimate is gone), then Hold, then Land
   if the previous request was refused, holding level at hover thrust in between.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
-  reason, setpoint, error, commanded rates and thrust, loop time), logged by default.
-- **Parameters** under `SH_`: `SH_EN`, watchdog thresholds `SH_WD_*`, the test hook
+  reason, setpoint, error, commanded rates and thrust, controller, fallback active, stale
+  time, action flown, loop time), logged by default.
+- **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, fallback `SH_FB_EN` / `SH_FB_T`, fix
+  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the test hook
   `SH_TEST_FAULT`, placeholder gains `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
-Not here yet: policy inference, the structure frame and standoff logic, passes along the
-surface, the fault injector that corrupts the estimate the policy sees.
+Not here yet: the standoff logic (the hold point is still the engage point), passes along
+the surface, the fault injector that corrupts the estimate the policy sees.
 
 ## Layout
 
 ```
 sim2real/px4/
   structure_hold/        the module: CMakeLists.txt, Kconfig, StructureHold.{hpp,cpp},
-                         Watchdog.hpp, HoldController.hpp, structure_hold_params.c
+                         Watchdog.hpp, PolicyController.hpp, MlpPolicy.hpp,
+                         PolicyWeights.hpp (generated), HoldController.hpp,
+                         structure_hold_params.c
   msg/StructureHoldStatus.msg
+  tools/                 export_policy_header.py (onnx -> PolicyWeights.hpp),
+                         make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
-  tests/test_watchdog.cpp
+  tests/                 test_watchdog.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
+                         test_policy_header.py
+```
+
+After a policy release, regenerate both headers and commit them:
+
+```bash
+python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v2.onnx
+python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v2.onnx
 ```
 
 ## Build
@@ -94,10 +126,34 @@ exercises the handback escalation (Position refused → Hold).
 ## Unit tests
 
 ```bash
-cd sim2real/px4/tests && g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog && ./test_watchdog
+cd sim2real/px4/tests
+g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog && ./test_watchdog
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
+python -m pytest sim2real/px4/tests
 ```
 
-CI runs this; it needs no PX4 tree.
+CI runs all three; they need no PX4 tree. `test_policy.cpp` checks the compiled-in MLP
+against onnxruntime (within 1e-6), and the observation and fallback action against values
+recorded from the Python env (within 3e-7), plus the hand-back and the action-to-setpoint
+mapping. The c++14 flags mirror PX4's own build.
+
+## SIH flights (2026-10-22, cloud)
+
+`sitl_test.sh` with `SH_CTRL=0` (cascade) and with `SH_FB_EN=2` (fallback rule alone) pass
+every check (experiments/LOG.md): the frame conversions and the attitude loop hold on PX4
+dynamics. Policy v2 bare (`SH_CTRL=1`) trips the position-error watchdog within 3.4 s in
+SIH: from the first tick it commands a saturated yaw rate and bang-bang roll and pitch, which
+is what the same observation gives in onnxruntime and what v2 does in the mock too (it yaws
+freely; the reward has no heading term). That is the policy meeting an airframe it was not
+trained on, not the integration, and SIH is not a hold-quality test anyway (see below).
+
+**Next step:** the Gazebo SITL flight on the Mac (`sim2real/docker`, `sim2real/gazebo`
+wall_slab world, `sim2real/estimate_bridge` for the VIO-like estimate with dropouts):
+engage with `SH_CTRL=1`, confirm the fallback takes over 0.5 s into a dropout and hands
+back, then the benchmark against tuned PX4 (M1). If v2 misbehaves there as in SIH, the
+training side needs a heading term and the real airframe's rate loop in the mock before
+any flight.
 
 ## Frames
 
