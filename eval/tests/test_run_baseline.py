@@ -43,9 +43,16 @@ def test_contact_or_unfinished_flight_is_a_crash():
     assert row_from_summary(summary(contacts=1), ekf(CLEAN))["crash"]
     unfinished = summary(hover={"passed": False, "error": "TimeoutError: touchdown"})
     assert row_from_summary(unfinished, ekf(CLEAN))["crash"]
-    no_metrics = {"scenario": "s", "seed": 1, "run": "r", "ok": False}
-    r = row_from_summary(no_metrics, None)
+    no_log = {"scenario": "s", "seed": 1, "run": "r", "ok": False, "ulog_error": "no flight.ulg"}
+    r = row_from_summary(no_log, None)
     assert r["crash"] and math.isnan(r["p95_m"])
+
+
+def test_flown_but_unscored_flight_is_not_a_crash():
+    unscored = {"scenario": "s", "seed": 1, "run": "r", "ok": False, "hover": {"passed": True},
+                "ulog_error": "ImportError: reading .ulg needs pyulog"}
+    r = row_from_summary(unscored, None)
+    assert not r["crash"] and math.isnan(r["p95_m"])
 
 
 def test_aggregate_and_compare():

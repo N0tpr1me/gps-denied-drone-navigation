@@ -48,10 +48,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--scenario", default="autotune_open_calm")
     ap.add_argument("--profile", default="clean")
     ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--set", nargs="*", default=[], metavar="NAME=VALUE",
+                    help="extra PX4 params, e.g. MC_AT_SYSID_AMP=1.5")
     args = ap.parse_args(argv)
 
     sc, prof = load_scenario(args.scenario), load_profile(args.profile)
-    px4_params = {**read_params(args.params), **AUTOTUNE_PARAMS}
+    extra = {k: float(v) if "." in v else int(v)
+             for k, v in (item.split("=", 1) for item in args.set)}
+    px4_params = {**read_params(args.params), **AUTOTUNE_PARAMS, **extra}
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = REPO_ROOT / "runs" / f"{stamp}_px4_autotune_{commit}"

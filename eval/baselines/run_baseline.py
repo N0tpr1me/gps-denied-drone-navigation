@@ -62,7 +62,9 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None) -> dic
     """One table row from a run's estimate_summary.json and ekf.json."""
     metrics = summary.get("metrics") or {}
     hover = summary.get("hover") or {}
-    completed = bool(metrics) and "error" not in hover
+    # A flight that ran to the end but could not be scored is not a crash, just unscored.
+    completed = "error" not in hover and summary.get("ulog_error") != "no flight.ulg" and (
+        bool(metrics) or "ulog_error" in summary)
     modes = (ekf or {}).get("modes")
     fs_fraction = float(modes["failsafe_fraction"]) if modes else math.nan
     window = metrics.get("window_s")
