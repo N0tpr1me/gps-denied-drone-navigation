@@ -6,7 +6,8 @@ import pytest
 from envs.disturbance import disturbance_force, wind_velocity
 from sim2real.gazebo.scenario import SCENARIO_DIR, Scenario, load_scenario, sample_scenario
 
-NAMES = ["calm_0ms", "wind_4ms", "wind_8ms"]
+NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
+         "wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms"]
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -23,7 +24,8 @@ def test_calm_scenario_is_exactly_still_air():
         assert np.array_equal(wind_velocity(p, t), np.zeros((1, 3)))
 
 
-@pytest.mark.parametrize("name, speed", [("wind_4ms", 4.0), ("wind_8ms", 8.0)])
+@pytest.mark.parametrize("name, speed", [("wind_4ms", 4.0), ("wind_8ms", 8.0),
+                                         ("wall1m_wind_4ms", 4.0), ("wall1m_wind_8ms", 8.0)])
 def test_wind_scenarios_blow_into_the_wall(name, speed):
     sc = load_scenario(name)
     p = sample_scenario(sc)
