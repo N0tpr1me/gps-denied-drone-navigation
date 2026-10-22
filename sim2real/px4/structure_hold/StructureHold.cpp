@@ -48,8 +48,10 @@ void StructureHold::updateParams()
 	_gains.p_att = _param_p_att.get();
 	_gains.v_max = _param_v_max.get();
 
+	// Per-policy defaults (policy.json: output.yaw, output.fallback, output.max_rate_rad_s)
+	// unless the parameter overrides them (PolicyController.hpp, resolve*).
 	FallbackRule rule{};
-	rule.enabled = _param_fb_en.get() != 0;
+	rule.enabled = resolveFallback(_param_fb_en.get());
 	rule.forced = _param_fb_en.get() == 2;
 	rule.threshold_s = _param_fb_t.get();
 	rule.brake_vel = _param_fb_k.get();
@@ -58,14 +60,14 @@ void StructureHold::updateParams()
 	_policy.setRule(rule);
 
 	YawGuard guard{};
-	guard.enabled = _param_yaw_guard.get() != 0;
+	guard.enabled = resolveYawGuard(_param_yaw_guard.get());
 	guard.gain = _param_yaw_p.get();
 	_policy.setYawGuard(guard);
 
 	SetpointLimits limits_sp{};
 	limits_sp.thrust_min = _gains.thrust_min;
 	limits_sp.thrust_max = _gains.thrust_max;
-	limits_sp.rate_max = _param_rate_max.get();
+	limits_sp.rate_max = resolveRateMax(_param_rate_max.get());
 	_policy.setLimits(limits_sp);
 }
 
@@ -453,7 +455,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.controller = _param_ctrl.get() == 1 ? structure_hold_status_s::CTRL_POLICY
 			    : structure_hold_status_s::CTRL_CASCADE;
 	status.fallback_active = _fallback_active;
-	status.yaw_guarded = _param_ctrl.get() == 1 && _param_yaw_guard.get() != 0 && !_fallback_active;
+	status.yaw_guarded = _param_ctrl.get() == 1 && _policy.yawGuard().enabled && !_fallback_active;
 	status.odometry_fix = useOdometryFix();
 
 	for (int i = 0; i < 4; i++) { status.action[i] = _last_action[i]; }
@@ -623,6 +625,11 @@ int StructureHold::print_status()
 		 _param_ctrl.get() == 1 ? "policy" : "cascade", policy::NAME, policy::HISTORY, policy::NUM_OBS,
 		 _fallback_active ? "ACTIVE" : "idle", useOdometryFix() ? "visual odometry" : "local position",
 		 (double)_stale_s);
+	PX4_INFO("policy defaults: yaw %s, fallback %s, rates %.1f rad/s; flying: yaw guard %s, fallback %s, rate clamp %.1f rad/s",
+		 policy::YAW_FROM_POLICY ? "policy" : "module", policy::FALLBACK_DEFAULT_ON ? "on" : "off",
+		 (double)policy::MAX_RATE_RAD_S, _policy.yawGuard().enabled ? "on" : "off",
+		 _policy.rule().forced ? "forced" : (_policy.rule().enabled ? "on" : "off"),
+		 (double)resolveRateMax(_param_rate_max.get()));
 
 	if (_state == structure_hold_status_s::STATE_ENGAGED) {
 		PX4_INFO("setpoint NED: %.2f %.2f %.2f m, yaw %.1f deg", (double)_setpoint.pos(0), (double)_setpoint.pos(1),

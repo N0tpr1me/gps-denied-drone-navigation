@@ -139,15 +139,20 @@ PARAM_DEFINE_INT32(SH_CTRL, 1);
  *
  * While the estimate has had no fresh position fix for SH_FB_T or longer, the fallback
  * brakes on the dead-reckoned velocity and hovers level until the next fix
- * (docs/fallback.md). 0: the policy flies through every dropout. 2: test hook, the
- * fallback flies every tick (checks the rule and the frame conversions on their own).
+ * (docs/fallback.md). -1: the compiled-in policy's own default (policy.json
+ * output.fallback: on for v2, off for v3, which handles dropouts itself). 0: the policy
+ * flies through every dropout. 2: test hook, the fallback flies every tick (checks the
+ * rule and the frame conversions on their own).
  *
+ * @value -1 Policy default
  * @value 0 Off
  * @value 1 On
  * @value 2 Forced (test)
+ * @min -1
+ * @max 2
  * @group Structure Hold
  */
-PARAM_DEFINE_INT32(SH_FB_EN, 1);
+PARAM_DEFINE_INT32(SH_FB_EN, -1);
 
 /**
  * Brake-and-hover fallback: take-over time
@@ -196,14 +201,19 @@ PARAM_DEFINE_FLOAT(SH_FIX_GAP, 0.1f);
  * Yaw guard: hold the heading with the module's own loop
  *
  * 1: the module holds the wall-facing heading captured at engage with a P loop (SH_YAW_P)
- * and ignores the policy's yaw output. 0: the policy's yaw output flies, but only for a
- * policy exported with policy.json output.yaw = "policy"; policy v2 has no heading term
- * and yaws freely, so for it the guard is always on.
+ * and ignores the policy's yaw output. 0: the policy's yaw output flies. -1: the
+ * compiled-in policy's own default (policy.json output.yaw): on for v2, which has no
+ * heading term and yaws freely; off for v3, which holds heading itself and hits the wall
+ * when the guard replaces its yaw.
  *
- * @boolean
+ * @value -1 Policy default
+ * @value 0 Off
+ * @value 1 On
+ * @min -1
+ * @max 1
  * @group Structure Hold
  */
-PARAM_DEFINE_INT32(SH_YAW_GUARD, 1);
+PARAM_DEFINE_INT32(SH_YAW_GUARD, -1);
 
 /**
  * Yaw guard gain
@@ -221,22 +231,24 @@ PARAM_DEFINE_FLOAT(SH_YAW_P, 3.0f);
 /**
  * Body rate setpoint limit for the policy and the fallback
  *
- * The policy was trained with the mock's 6 rad/s limit and a fast rate loop; a real
- * airframe's rate loop may need a lower clamp. Applies to the commanded roll, pitch and
- * yaw rates after the action scaling.
+ * Applies to the commanded roll, pitch and yaw rates after the action scaling. 0: the
+ * compiled-in policy's own action scale (policy.json output.max_rate_rad_s: 6 rad/s for
+ * v2, 2 rad/s for v3). A real airframe's rate loop may need a lower clamp (v2 flew SIH
+ * only at 1 to 2 rad/s).
  *
  * @unit rad/s
- * @min 0.5
+ * @min 0.0
  * @max 6.0
  * @decimal 1
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_RATE_MAX, 6.0f);
+PARAM_DEFINE_FLOAT(SH_RATE_MAX, 0.0f);
 
 /**
  * Brake-and-hover fallback: braking gain
  *
- * Acceleration setpoint per m/s of dead-reckoned velocity (K_BRAKE in docs/fallback.md).
+ * Acceleration setpoint per m/s of dead-reckoned velocity (K_BRAKE in docs/fallback.md,
+ * retuned 2.5 to 1.5 for the lagged rate loop with policy v3).
  *
  * @unit 1/s
  * @min 0.2
@@ -244,13 +256,14 @@ PARAM_DEFINE_FLOAT(SH_RATE_MAX, 6.0f);
  * @decimal 2
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_FB_K, 2.5f);
+PARAM_DEFINE_FLOAT(SH_FB_K, 1.5f);
 
 /**
  * Brake-and-hover fallback: attitude gain
  *
  * Body rate per radian of tilt error of the fallback's attitude loop (K_TILT in
- * docs/fallback.md); scale with the airframe's rate loop.
+ * docs/fallback.md, retuned 8 to 4 for the lagged rate loop with policy v3); scale with
+ * the airframe's rate loop.
  *
  * @unit 1/s
  * @min 1.0
@@ -258,4 +271,4 @@ PARAM_DEFINE_FLOAT(SH_FB_K, 2.5f);
  * @decimal 1
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_FB_TILT, 8.0f);
+PARAM_DEFINE_FLOAT(SH_FB_TILT, 4.0f);
