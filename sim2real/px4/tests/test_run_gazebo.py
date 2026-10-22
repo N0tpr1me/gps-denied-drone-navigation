@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from sim2real.px4 import run_gazebo
-from sim2real.px4.sitl_test import STATE_ENGAGED, STATE_HANDBACK, STATE_STANDBY
+from sim2real.px4.run_gazebo import STATE_ENGAGED, STATE_HANDBACK, STATE_STANDBY
 
 START = 5_000_000
 

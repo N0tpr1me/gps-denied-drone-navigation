@@ -51,11 +51,13 @@ from sim2real.gazebo.params_io import write_params
 from sim2real.gazebo.run_scenario import DEFAULT_IMAGE, WORLD, git_commit, params_summary
 from sim2real.gazebo.scenario import load_scenario, sample_scenario
 from sim2real.gazebo.verify_trace import verify as verify_wind
-from sim2real.px4.sitl_test import STATE_ENGAGED, check_ulog
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 STATUS_TOPIC = "structure_hold_status"
+# structure_hold_status.state (msg/StructureHoldStatus.msg); sitl_test.py has the same
+# values but needs pymavlink, which the host and CI do not have.
+STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
@@ -238,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     if summary_path.exists():
         summary = json.loads(summary_path.read_text())
         if ulog.exists() and "error" not in summary:
+            from sim2real.px4.sitl_test import check_ulog  # needs pymavlink (in [dev])
+
             check_ulog(ulog, summary)  # the status-topic checks sitl_test.sh adds
             summary["passed"] = all(summary["checks"].values())
             summary_path.write_text(json.dumps(summary, indent=2) + "\n")
