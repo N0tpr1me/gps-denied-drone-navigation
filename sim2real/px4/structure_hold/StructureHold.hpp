@@ -169,8 +169,13 @@ private:
 		(ParamInt<px4::params::SH_CTRL>) _param_ctrl,
 		(ParamInt<px4::params::SH_FB_EN>) _param_fb_en,
 		(ParamFloat<px4::params::SH_FB_T>) _param_fb_t,
+		(ParamFloat<px4::params::SH_FB_K>) _param_fb_k,
+		(ParamFloat<px4::params::SH_FB_TILT>) _param_fb_tilt,
 		(ParamInt<px4::params::SH_FIX_SRC>) _param_fix_src,
 		(ParamFloat<px4::params::SH_FIX_GAP>) _param_fix_gap,
+		(ParamInt<px4::params::SH_YAW_GUARD>) _param_yaw_guard,
+		(ParamFloat<px4::params::SH_YAW_P>) _param_yaw_p,
+		(ParamFloat<px4::params::SH_RATE_MAX>) _param_rate_max,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover
 	)
 };

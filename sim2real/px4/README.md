@@ -28,6 +28,11 @@ What it does today:
   keeps the rolling history, and maps the action back (FLU → FRD rates, thrust in newtons for
   the mock airframe scaled through the hover thrust). `tests/test_policy_header.py` fails
   when the header no longer matches the released policy.
+- **Yaw guard** (`SH_YAW_GUARD`, `SH_YAW_P`): the module holds the wall-facing heading
+  captured at engage with its own P loop and ignores the policy's yaw output; forced on for
+  a policy whose `policy.json` lacks `output.yaw = "policy"` (v2 has no heading term). The
+  body-rate setpoints are clamped by `SH_RATE_MAX` (6 rad/s default, the mock's limit; 1 to
+  2 rad/s flew in SIH, see below).
 - **Brake-and-hover fallback** (docs/fallback.md) once the position fix has been stale for
   `SH_FB_T` (0.5 s): acceleration setpoint `-2.5 × v_est` clamped at 6 m/s², no position
   term, P attitude loop, heading held on the structure; hands back on the first fresh fix.
@@ -44,7 +49,8 @@ What it does today:
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, stale
   time, action flown, loop time), logged by default.
-- **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, fallback `SH_FB_EN` / `SH_FB_T`, fix
+- **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
+  rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the test hook
   `SH_TEST_FAULT`, placeholder gains `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
@@ -142,18 +148,23 @@ mapping. The c++14 flags mirror PX4's own build.
 
 `sitl_test.sh` with `SH_CTRL=0` (cascade) and with `SH_FB_EN=2` (fallback rule alone) pass
 every check (experiments/LOG.md): the frame conversions and the attitude loop hold on PX4
-dynamics. Policy v2 bare (`SH_CTRL=1`) trips the position-error watchdog within 3.4 s in
-SIH: from the first tick it commands a saturated yaw rate and bang-bang roll and pitch, which
-is what the same observation gives in onnxruntime and what v2 does in the mock too (it yaws
-freely; the reward has no heading term). That is the policy meeting an airframe it was not
-trained on, not the integration, and SIH is not a hold-quality test anyway (see below).
+dynamics. Policy v2 with the policy's own yaw (`SH_CTRL=1`, guard off, before the guard
+existed) tripped the position-error watchdog within 3.4 s: a saturated yaw rate from the
+first tick, which is what the same observation gives in onnxruntime and what v2 does in the
+mock too (the reward has no heading term). With the yaw guard the heading holds but the
+roll/pitch bang-bang at 6 rad/s tips the SIH quad over in 1.5 s: PX4's rate loop reaches the
+setpoint 100 to 200 ms late, the mock's does not. With the guard and `SH_RATE_MAX` 1 to
+2 rad/s, v2 flies the whole acceptance sequence with no trip (drift 0.58 m at 1 rad/s,
+stock Position mode wanders 0.8 m in the same run); 3 rad/s trips. SIH is not a
+hold-quality test (see below); the numbers say the integration is sound and that the
+policy's rate commands are the sim-to-PX4 gap to close in training (docs/decisions.md).
 
 **Next step:** the Gazebo SITL flight on the Mac (`sim2real/docker`, `sim2real/gazebo`
 wall_slab world, `sim2real/estimate_bridge` for the VIO-like estimate with dropouts):
-engage with `SH_CTRL=1`, confirm the fallback takes over 0.5 s into a dropout and hands
-back, then the benchmark against tuned PX4 (M1). If v2 misbehaves there as in SIH, the
-training side needs a heading term and the real airframe's rate loop in the mock before
-any flight.
+engage with `SH_CTRL=1` (try `SH_RATE_MAX` 2 first), confirm the fallback takes over
+0.5 s into a dropout and hands back, then the benchmark against tuned PX4 (M1). Policy v3
+(heading term, scored with the same yaw guard) is in training; the rate-loop gap needs the
+x500's response in the mock before any flight.
 
 ## Frames
 

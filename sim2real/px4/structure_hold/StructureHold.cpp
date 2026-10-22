@@ -52,7 +52,21 @@ void StructureHold::updateParams()
 	rule.enabled = _param_fb_en.get() != 0;
 	rule.forced = _param_fb_en.get() == 2;
 	rule.threshold_s = _param_fb_t.get();
+	rule.brake_vel = _param_fb_k.get();
+	rule.tilt = _param_fb_tilt.get();
+	rule.yaw = _param_yaw_p.get();  // one heading gain for the guard and the fallback
 	_policy.setRule(rule);
+
+	YawGuard guard{};
+	guard.enabled = _param_yaw_guard.get() != 0;
+	guard.gain = _param_yaw_p.get();
+	_policy.setYawGuard(guard);
+
+	SetpointLimits limits_sp{};
+	limits_sp.thrust_min = _gains.thrust_min;
+	limits_sp.thrust_max = _gains.thrust_max;
+	limits_sp.rate_max = _param_rate_max.get();
+	_policy.setLimits(limits_sp);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -439,6 +453,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.controller = _param_ctrl.get() == 1 ? structure_hold_status_s::CTRL_POLICY
 			    : structure_hold_status_s::CTRL_CASCADE;
 	status.fallback_active = _fallback_active;
+	status.yaw_guarded = _param_ctrl.get() == 1 && _param_yaw_guard.get() != 0 && !_fallback_active;
 	status.odometry_fix = useOdometryFix();
 
 	for (int i = 0; i < 4; i++) { status.action[i] = _last_action[i]; }

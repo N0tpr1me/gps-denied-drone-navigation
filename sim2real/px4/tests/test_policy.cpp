@@ -103,10 +103,14 @@ int main()
 		CHECK(same(obs[policy::OBS_AGE], 1.f));
 	}
 
-	// 3. The fallback action matches acceleration_to_action.
+	// 3. The fallback action matches acceleration_to_action, with the gains Python used.
 	{
 		float worst = 0.f;
 		FallbackRule rule{};
+		rule.brake_vel = testvec::FALLBACK_BRAKE_VEL;
+		rule.max_acc = testvec::FALLBACK_MAX_ACC;
+		rule.tilt = testvec::FALLBACK_TILT;
+		rule.yaw = testvec::FALLBACK_YAW;
 
 		for (int k = 0; k < testvec::N; k++) {
 			float action[4];
@@ -159,6 +163,9 @@ int main()
 		CHECK(near(actionToSetpoint(hi, 0.42f, lim).rates_frd[0], policy::MAX_RATE_RAD_S, 1e-6f));
 		CHECK(near(actionToSetpoint(hi, 0.42f, lim).thrust, 16.f / (0.8f * GRAVITY_MPS2) * 0.42f, 1e-5f));
 		CHECK(same(actionToSetpoint(hi, 0.5f, lim).thrust, lim.thrust_max));  // 1.02 clamped
+		lim.rate_max = 2.f;
+		CHECK(near(actionToSetpoint(hi, 0.5f, lim).rates_frd[0], 2.f, 1e-6f));
+		CHECK(near(actionToSetpoint(a, 0.5f, lim).rates_frd[1], -1.5f, 1e-6f));  // under the clamp
 	}
 
 	// 6. The controller: engage fills the history, the fallback takes over at the threshold
@@ -168,6 +175,9 @@ int main()
 		FallbackRule rule{};
 		rule.threshold_s = testvec::FALLBACK_THRESHOLD_S;
 		ctl.setRule(rule);
+		YawGuard no_guard{};
+		no_guard.enabled = false;  // the policy's own yaw here; the guard has its own test
+		ctl.setYawGuard(no_guard);
 		const int k = 3;
 		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
 		VehicleSample s = sampleOf(k);
@@ -179,12 +189,13 @@ int main()
 		CHECK(!o.fallback_active && o.ok);
 		CHECK(same(ctl.lastObservation()[policy::OBS_LAST_ACTION], 0.f));
 
-		for (int i = 0; i < 4; i++) { CHECK(same(o.action[i], o.policy_action[i])); }
+		for (int i = 0; i < 4; i++) { CHECK(i == 2 || same(o.action[i], o.policy_action[i])); }  // yaw: guard
 
 		// History filled with the first observation: a repeated step gives the same output
 		// as a fresh engage with the same observation would, within float noise.
 		PolicyController ctl2{};
 		ctl2.setRule(rule);
+		ctl2.setYawGuard(no_guard);
 		ctl2.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
 		PolicyOutput o2 = ctl2.step(s, 0.f, 0.5f);
 
@@ -215,7 +226,7 @@ int main()
 		o = ctl.step(s, 0.f, 0.5f);
 		CHECK(!o.fallback_active);
 
-		for (int i = 0; i < 4; i++) { CHECK(same(o.action[i], o.policy_action[i])); }
+		for (int i = 0; i < 4; i++) { CHECK(i == 2 || same(o.action[i], o.policy_action[i])); }
 
 		// Disabled rule: never active. Forced (test hook): always.
 		rule.enabled = false;
@@ -226,6 +237,38 @@ int main()
 		ctl.setRule(rule);
 		o = ctl.step(s, 0.f, 0.5f);
 		CHECK(o.fallback_active);
+	}
+
+	// 8. Yaw guard: the policy's yaw output is replaced by the heading hold, the flown
+	//    action is what the policy sees next, roll/pitch/thrust stay the policy's, and the
+	//    fallback (which holds heading itself) is unaffected.
+	{
+		PolicyController ctl{};
+		FallbackRule rule{};
+		ctl.setRule(rule);
+		const int k = 5;
+		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
+		VehicleSample s = sampleOf(k);
+		s.stale = false;
+		YawGuard guard{};
+		ctl.setYawGuard(guard);
+		PolicyOutput o = ctl.step(s, 0.f, 0.5f);
+		const float *obs = ctl.lastObservation();
+		const float expect = clampf(-guard.gain * atan2f(obs[policy::OBS_HEADING + 1], obs[policy::OBS_HEADING])
+					    / policy::MAX_RATE_RAD_S, -1.f, 1.f);
+		CHECK(o.yaw_guarded && same(o.action[2], expect));
+		CHECK(same(o.action[0], o.policy_action[0]) && same(o.action[1], o.policy_action[1])
+		      && same(o.action[3], o.policy_action[3]));
+		ctl.step(s, 0.f, 0.5f);
+		CHECK(same(ctl.lastObservation()[policy::OBS_LAST_ACTION + 2], expect));
+		o = ctl.step(s, 10.f, 0.5f);  // fallback: its own heading hold, not flagged as guarded
+		CHECK(o.fallback_active && !o.yaw_guarded);
+		guard.enabled = false;
+		ctl.setYawGuard(guard);
+		o = ctl.step(s, 0.f, 0.5f);
+		// A policy that does not own yaw (v2: policy.json has no output.yaw) stays guarded.
+		CHECK(o.yaw_guarded == !policy::YAW_FROM_POLICY);
+		CHECK(policy::YAW_FROM_POLICY || !same(o.action[2], o.policy_action[2]) || same(o.policy_action[2], expect));
 	}
 
 	// 7. Fallback physics: moving along the wall at 1.5 m/s, level, yawed 10 deg right.
