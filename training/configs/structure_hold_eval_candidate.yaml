@@ -18,6 +18,7 @@ params:
   episodes: 1
   score_envs: 64
   seeds: [1, 2, 3]
+  yaw_guard: true
   sim: torch
   env:
     estimate:
