@@ -123,7 +123,7 @@ struct VehicleSample {
 	float R[3][3] {{1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}};  // body FRD -> NED
 	float rates_frd[3] {0.f, 0.f, 0.f};
 	bool stale{false};  // no fresh position fix within the expected interval
-	float age_s{0.f};   // time since the sample the estimate is based on
+	float age_s{0.f};   // 0 while fresh, time since the last fix while stale (the env's age)
 };
 
 struct Setpoint {

@@ -392,7 +392,13 @@ void StructureHold::controlStep(const hrt_abstime now)
 		sample.rates_frd[1] = _angular_velocity.xyz[1];
 		sample.rates_frd[2] = _angular_velocity.xyz[2];
 		sample.stale = _stale_s > _param_fix_gap.get();
-		sample.age_s = _last_estimate_age_s;
+		// The env's age is 0 whenever the estimate is fresh and counts up only during a
+		// dropout (envs/estimate/core.py), so the policy never saw a nonzero age with
+		// stale = 0. Feeding the time since the last fix instead (a 0 to 24 ms sawtooth at
+		// the 50 Hz vision rate in Gazebo; a constant 0.1 s shifts the v5 hold 0.1 m in the
+		// mock) is an input it was not trained on. It stays in the status message as
+		// estimate_age_s.
+		sample.age_s = sample.stale ? _stale_s : 0.f;
 
 		const PolicyOutput out = _policy.step(sample, _stale_s, _hover_thrust);
 

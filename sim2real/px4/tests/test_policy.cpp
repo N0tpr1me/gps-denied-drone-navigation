@@ -185,7 +185,7 @@ int main()
 		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
 		VehicleSample s = sampleOf(k);
 		s.stale = false;
-		s.age_s = 0.08f;
+		s.age_s = 0.f;  // the env's age: 0 while fresh
 
 		// Fresh: policy flies, last_action starts at zero.
 		PolicyOutput o = ctl.step(s, 0.f, 0.5f);
@@ -225,7 +225,7 @@ int main()
 
 		// Fresh fix: hand back on the first tick.
 		s.stale = false;
-		s.age_s = 0.1f;
+		s.age_s = 0.f;
 		o = ctl.step(s, 0.f, 0.5f);
 		CHECK(!o.fallback_active);
 

@@ -26,7 +26,9 @@ What it does today:
   `policy.json input.history`, never hardcoded), the observation layout, the action scaling,
   the mock airframe the policy was trained on, and the policy's own defaults for the two
   options below (`output.yaw`, `output.fallback`, `output.max_rate_rad_s`). The module builds the env's observation
-  (structure frame = heading at engage, ENU-style, FLU body) from PX4's NED / FRD state,
+  (structure frame = heading at engage, ENU-style, FLU body) from PX4's NED / FRD state
+  (the age input is the env's: 0 while the fix is fresh, the time since the last fix while
+  stale; the sample latency is reported in the status message only),
   keeps the rolling history, and maps the action back (FLU → FRD rates, thrust in newtons for
   the mock airframe scaled through the hover thrust). `tests/test_policy_header.py` fails
   when the header no longer matches the released policy.
