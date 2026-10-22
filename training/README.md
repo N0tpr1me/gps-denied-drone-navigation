@@ -13,7 +13,12 @@ smoke mode, run folder, `experiments/LOG.md` line). The entrypoints:
 ```
 python -m training.launch --config training/configs/structure_hold_ppo.yaml --smoke --device cpu
 python -m training.launch --config training/configs/structure_hold_ppo.yaml --device cpu   # real run, logged
+python -m training.launch --config training/configs/structure_hold_ppo.yaml --sim isaac --smoke --device cuda
 ```
+
+`--sim torch|isaac` runs the same recipe on another simulator backend by overriding the
+config's `params.sim` (the LOG line says so). Isaac needs Isaac Lab and a GPU; see
+`docs/isaac-lab.md`.
 
 ## The PPO loop
 

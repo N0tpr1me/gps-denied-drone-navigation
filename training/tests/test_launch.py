@@ -201,3 +201,27 @@ def test_selfcheck_smoke_end_to_end(dirs):
     assert summary["status"] == "ok" and summary["headline"]["iterations"] == 20
     metrics = [json.loads(line) for line in (run_dir / "metrics.jsonl").read_text().splitlines()]
     assert metrics[-1]["step"] == 20 and metrics[-1]["loss"] < metrics[0]["loss"]
+
+
+# ---------------------------------------------------------------- --sim (simulator backend)
+
+
+def test_sim_overrides_params_and_shows_in_the_log(tmp_path, dirs, monkeypatch):
+    monkeypatch.setattr(launch, "git_state", lambda: ("abc1234def", False))
+    cfg = write_config(tmp_path, params={"mode": "ok", "sim": "isaac"})
+    assert run(cfg, dirs, "--device", "cpu", "--sim", "torch") == 0
+    resolved = yaml.safe_load((only_run_dir(dirs) / "config.yaml").read_text())
+    assert resolved["params"]["sim"] == "torch"
+    assert "cfg.yaml` --sim torch |" in dirs["log"].read_text().splitlines()[-1]
+
+
+def test_sim_refused_for_configs_without_a_simulator(tmp_path, dirs):
+    cfg = write_config(tmp_path)  # params has no sim key
+    assert run(cfg, dirs, "--device", "cpu", "--smoke", "--sim", "torch") == launch.EXIT_REFUSED
+    assert not dirs["runs"].exists()
+
+
+def test_isaac_needs_cuda(tmp_path, dirs):
+    cfg = write_config(tmp_path, params={"mode": "ok", "sim": "torch"})
+    assert run(cfg, dirs, "--device", "cpu", "--smoke", "--sim", "isaac") == launch.EXIT_REFUSED
+    assert not dirs["runs"].exists()
