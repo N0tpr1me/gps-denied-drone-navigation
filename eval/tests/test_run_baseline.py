@@ -72,3 +72,20 @@ def test_never_armed_is_not_flown_and_not_a_crash():
          "hover": {"passed": False, "error": "TimeoutError: vehicle never became armable"}}
     r = row_from_summary(s, None)
     assert not r["flown"] and not r["crash"]
+
+
+def test_hold_runner_rows_read_the_flight_summary_and_expect_external_mode():
+    # sim2real.px4.run_gazebo writes "flight" instead of "hover"; the scored window is
+    # flown in External 1, which is not a failsafe for the hold runner.
+    seq = [(0.0, "Hold"), (16.0, "Takeoff"), (23.0, "Position"), (28.0, "External 1"),
+           (90.0, "Position"), (96.0, "External 1"), (98.0, "Position"), (100.0, "Land")]
+    s = summary(hover={"passed": True})
+    s["flight"] = s.pop("hover")
+    s["metrics"]["window_s"] = [30.0, 89.9]
+    r = row_from_summary(s, ekf(seq), "External 1")
+    assert not r["crash"] and not r["failsafe_in_hover"]
+    # The same window judged against Hold (the stock runner) would count it as a failsafe.
+    assert row_from_summary(s, ekf(seq), "Hold")["failsafe_in_hover"]
+    # A failsafe Land inside the hold still counts.
+    seq_fs = seq[:4] + [(50.0, "Land"), (52.0, "External 1")] + seq[4:]
+    assert row_from_summary(s, ekf(seq_fs, 0.02), "External 1")["failsafe_in_hover"]

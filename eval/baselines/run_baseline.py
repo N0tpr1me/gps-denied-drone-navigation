@@ -5,11 +5,16 @@
     python -m eval.baselines.run_baseline --label tuned_v1 \\
         --params eval/baselines/px4_tuned_v1.params
     python -m eval.baselines.run_baseline --compare runs/<stock>/batch.json runs/<tuned>/batch.json
+    python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 \\
+        --params eval/baselines/px4_tuned_v1.params -- --param SH_FB_EN=1
 
 Each flight is one ``sim2real.estimate_bridge.run_estimate`` run (Gazebo wall_slab, wind
 plugin, GPS off, EKF2 on the corrupted vision estimate), scored on the TRUE position with
-``eval.metrics``. Seed ``s`` sets both the estimate profile's seed and the scenario's wind
-seed, so seed 2 is a different estimate corruption and a different gust/turbulence draw.
+``eval.metrics``; with ``--runner hold`` it is one ``sim2real.px4.run_gazebo`` run instead
+(the Structure Hold mode holding over the same window, scored the same way), so the two
+tables compare like for like. Seed ``s`` sets both the estimate profile's seed and the
+scenario's wind seed, so seed 2 is a different estimate corruption and a different
+gust/turbulence draw.
 
 Writes ``runs/<time>_px4_baseline_<label>_<commit>/``:
 
@@ -37,6 +42,9 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# runner -> (module, summary file, the mode the scored window is flown in)
+RUNNERS = {"estimate": ("sim2real.estimate_bridge.run_estimate", "estimate_summary.json", "Hold"),
+           "hold": ("sim2real.px4.run_gazebo", "hold_summary.json", "External 1")}
 DEFAULT_SCENARIOS = ("wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms")
 DEFAULT_SEEDS = (1, 2, 3)
 METRICS = ("p95_m", "rms_m", "max_m", "worst_toward_surface_m", "min_clearance_m",
@@ -49,19 +57,23 @@ def git_commit() -> str:
     return out.stdout.strip() or "unknown"
 
 
-def failsafe_in_window(modes: dict[str, Any] | None, window: list[float] | None) -> bool:
-    """True when PX4 left Hold for anything but the commanded Land inside the window."""
+def failsafe_in_window(modes: dict[str, Any] | None, window: list[float] | None,
+                       expected: str = "Hold") -> bool:
+    """True when PX4 left the expected mode for anything but the commanded Land inside
+    the window."""
     if not modes or not window:
         return False
     t0, t1 = window
-    return any(t0 <= m["t"] <= t1 and m["mode"] != "Hold"
+    return any(t0 <= m["t"] <= t1 and m["mode"] != expected
                for m in modes.get("sequence", []))
 
 
-def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None) -> dict[str, Any]:
-    """One table row from a run's estimate_summary.json and ekf.json."""
+def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
+                     expected_mode: str = "Hold") -> dict[str, Any]:
+    """One table row from a run's estimate_summary.json (or hold_summary.json) and
+    ekf.json."""
     metrics = summary.get("metrics") or {}
-    hover = summary.get("hover") or {}
+    hover = summary.get("hover") or summary.get("flight") or {}
     # A flight that ran to the end but could not be scored is not a crash, just unscored.
     completed = "error" not in hover and summary.get("ulog_error") != "no flight.ulg" and (
         bool(metrics) or "ulog_error" in summary)
@@ -74,15 +86,18 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None) -> dic
         "contacts": int(metrics.get("contacts", 0)),
         "failsafe_fraction": fs_fraction,
         "failsafe": bool(fs_fraction > 0) if modes else False,
-        "failsafe_in_hover": failsafe_in_window(modes, window),
+        "failsafe_in_hover": failsafe_in_window(modes, window, expected_mode),
         "window_s": window,
     }
-    # Mode changes inside the window are cut at the commanded Land at the end of the hover.
-    if window and modes:
+    # Mode changes inside the window are cut at the commanded Land at the end of the hover
+    # (stock runner only: the hold runner's window ends at the commanded disengage, and the
+    # rest of its sequence is commanded mode changes, not failsafes).
+    if window and modes and expected_mode == "Hold":
         land = [m["t"] for m in modes.get("sequence", []) if m["mode"] == "Land"
                 and m["t"] >= window[1] - 1.0]
         if land:
-            row["failsafe_in_hover"] = failsafe_in_window(modes, [window[0], land[0] - 1e-3])
+            row["failsafe_in_hover"] = failsafe_in_window(modes, [window[0], land[0] - 1e-3],
+                                                          expected_mode)
     # Never armed (preflight checks failed): nothing flew, so not a crash either.
     row["flown"] = "never became armable" not in str(hover.get("error", ""))
     row["crash"] = row["flown"] and (row["contacts"] > 0 or not completed)
@@ -167,15 +182,20 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
               f"{fmt(r['min_clearance_m'], 2)} m, {r['contacts']} contacts, failsafe "
               f"{'yes' if r['failsafe'] else 'no'}"
               f"{' (in hover)' if r['failsafe_in_hover'] else ''}")
+    runner = batch.get("runner", "estimate")
+    what = f"{runner} runner" if runner != "estimate" else "stock hover"
+    extra = " " + " ".join(batch["run_args"]) if batch.get("run_args") else ""
     return (f"| {when} | {r['run']} | {batch['commit']} | eval/baselines/run_baseline "
-            f"{batch['label']}: {r['scenario']} seed {r['seed']}, vio_default estimate, "
-            f"`{batch['params']}`, GPS off | MacBook (Apple Silicon), Docker arm64 | {status} "
-            f"| {result} | {{vs}} |")
+            f"{batch['label']} ({what}{extra}): {r['scenario']} seed {r['seed']}, vio_default "
+            f"estimate, `{batch['params']}`, GPS off | MacBook (Apple Silicon), Docker arm64 "
+            f"| {status} | {result} | {{vs}} |")
 
 
-def fly(scenario: str, seed: int, params: Path, extra: list[str]) -> Path | None:
-    """One run_estimate flight; return its run folder."""
-    cmd = [sys.executable, "-m", "sim2real.estimate_bridge.run_estimate", scenario,
+def fly(scenario: str, seed: int, params: Path, extra: list[str],
+        runner: str = "estimate") -> Path | None:
+    """One flight of the runner; return its run folder."""
+    module = RUNNERS[runner][0]
+    cmd = [sys.executable, "-m", module, scenario,
            "--seed", str(seed), "--scenario-seed", str(seed), "--params", str(params), *extra]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     for line in proc.stdout.splitlines():
@@ -191,22 +211,24 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = REPO_ROOT / "runs" / f"{stamp}_px4_baseline_{args.label}_{commit}"
     out.mkdir(parents=True)
+    _, summary_name, expected_mode = RUNNERS[args.runner]
     batch: dict[str, Any] = {"label": args.label, "params": str(params), "commit": commit,
+                             "runner": args.runner, "run_args": list(args.run_args),
                              "scenarios": list(args.scenarios), "seeds": list(args.seeds),
                              "rows": []}
     log_lines = []
     for scenario in args.scenarios:
         for seed in args.seeds:
             when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-            folder = fly(scenario, seed, args.params, args.run_args)
-            summary_path = folder / "estimate_summary.json" if folder else None
+            folder = fly(scenario, seed, args.params, args.run_args, args.runner)
+            summary_path = folder / summary_name if folder else None
             if summary_path is None or not summary_path.exists():
                 print(f"{scenario} seed {seed}: no summary", flush=True)
                 continue
             summary = json.loads(summary_path.read_text())
             ekf_path = folder / "ekf.json"
             ekf = json.loads(ekf_path.read_text()) if ekf_path.exists() else None
-            row = row_from_summary(summary, ekf)
+            row = row_from_summary(summary, ekf, expected_mode)
             batch["rows"].append(row)
             log_lines.append(log_line(row, batch, when))
             print(f"{scenario} seed {seed}: p95 {fmt(row['p95_m'])} m, worst toward wall "
@@ -229,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--params", type=Path, help="PX4 .params file (EKF2 settings included)")
     ap.add_argument("--scenarios", nargs="+", default=list(DEFAULT_SCENARIOS))
     ap.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
+    ap.add_argument("--runner", choices=sorted(RUNNERS), default="estimate",
+                    help="estimate: stock PX4 hover (run_estimate); hold: the Structure Hold "
+                         "mode (sim2real.px4.run_gazebo)")
     ap.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
                     help="print A vs B from two batch.json files and exit")
     ap.add_argument("run_args", nargs="*", help="extra run_estimate arguments, after --")
