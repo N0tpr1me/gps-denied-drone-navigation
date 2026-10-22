@@ -65,3 +65,10 @@ def test_aggregate_and_compare():
     a = {"label": "stock", "aggregate": {"wall1m_wind_8ms": agg}}
     b = {"label": "tuned", "aggregate": {"wall1m_wind_8ms": {**agg, "p95_m_mean": 0.15}}}
     assert "-50 %" in compare(a, b)
+
+
+def test_never_armed_is_not_flown_and_not_a_crash():
+    s = {"scenario": "s", "seed": 1, "run": "r", "ok": False,
+         "hover": {"passed": False, "error": "TimeoutError: vehicle never became armable"}}
+    r = row_from_summary(s, None)
+    assert not r["flown"] and not r["crash"]

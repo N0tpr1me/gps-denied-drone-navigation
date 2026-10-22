@@ -83,7 +83,9 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None) -> dic
                 and m["t"] >= window[1] - 1.0]
         if land:
             row["failsafe_in_hover"] = failsafe_in_window(modes, [window[0], land[0] - 1e-3])
-    row["crash"] = row["contacts"] > 0 or not completed
+    # Never armed (preflight checks failed): nothing flew, so not a crash either.
+    row["flown"] = "never became armable" not in str(hover.get("error", ""))
+    row["crash"] = row["flown"] and (row["contacts"] > 0 or not completed)
     for key in METRICS:
         row[key] = float(metrics[key]) if key in metrics else math.nan
     return row
@@ -158,7 +160,8 @@ def compare(a: dict[str, Any], b: dict[str, Any]) -> str:
 
 
 def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
-    status = "crash" if r["crash"] else ("ok" if r["ok"] else "flown, check failed")
+    status = ("not flown (never armable)" if not r.get("flown", True) else
+              "crash" if r["crash"] else ("ok" if r["ok"] else "flown, check failed"))
     result = (f"truth vs setpoint: p95 {fmt(r['p95_m'])} m, rms {fmt(r['rms_m'])} m, worst "
               f"toward wall {fmt(r['worst_toward_surface_m'])} m, min clearance "
               f"{fmt(r['min_clearance_m'], 2)} m, {r['contacts']} contacts, failsafe "
