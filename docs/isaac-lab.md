@@ -36,18 +36,22 @@ body". Mock parameters map one to one:
 | --- | --- |
 | `mass` 0.8 kg | PhysX body mass (`set_masses`, read back, fails loudly if not taken) |
 | `inertia` (0.0035, 0.0035, 0.0060) kg m^2 | PhysX diagonal inertia, centre of mass at the body origin with axes = body FLU (`set_inertias`, `set_coms`, read back) |
-| `max_thrust` 16 N, `max_torque` (0.3, 0.3, 0.05) N m | Clipped in `IsaacQuadSim.step` with the mock's code |
-| `motor_tau` 0.02 s | First-order lag in torch per physics sub-step, the mock's formula |
+| `max_thrust` 16 N, `max_torque` (0.3, 0.3, 0.05) N m | Clipped in `IsaacQuadSim.step` with the mock's code, per env |
+| `motor_tau` 0.02 s | First-order lag in torch per physics sub-step, the mock's formula, per env |
+| `set_airframe(env_ids, mass=, inertia=, max_thrust=, max_torque=, motor_tau=)` (per-env airframe, Gate 1 randomisation) | Same call and validation as the mock. Mass and inertia go into PhysX for just those envs (`set_masses` / `set_inertias` with env indices, read back); limits and motor lag are per-env tensors in torch |
+| `step(..., torque_ext_body)` (near-wall yaw moment) | Added to the lagged motor torque in the body frame, neither clipped nor lagged, then written with the rest of the wrench |
+| hover-thrust error, rate loop `RatePid`, rate lag `rate_lag_s` 0.1 to 0.2 s, action limit `max_rate_rad_s` 2 rad/s | Unchanged: they live in `envs/structure_hold`, above the seam |
 | `substeps` 2 | PhysX `dt` = 0.01 / 2 = 5 ms, one wrench write per sub-step |
 | gravity 9.80665 m/s^2 | `SimulationCfg.gravity = (0, 0, -9.80665)` (Isaac's default is 9.81) |
 | no drag, no damping | `linear_damping = angular_damping = 0` (PhysX default angular damping is 0.05), sleeping and stabilisation off, gyroscopic forces on, angular velocity cap lifted, collisions off |
-| rate loop `RatePid`, rate lag `rate_lag_s` 0.1 to 0.2 s, action limit `max_rate_rad_s` 2 rad/s | Unchanged: they live in `envs/structure_hold`, above the seam |
 | frames ENU / FLU, quaternion (w, x, y, z) | Isaac Lab is Z-up with (w, x, y, z) quaternions; positions are returned relative to each env's origin, PhysX's world-frame angular velocity is rotated to body FLU |
 
-Coming soon on the mock side (the "Policy robustness for Gate 1" work): per-episode airframe
-randomisation of mass, inertia, motor lag and hover-thrust error. When it lands on main,
-the backend maps each knob one to one (PhysX takes per-env masses and inertias through the
-same `set_masses` / `set_inertias` calls, indexed by env) and parity is rerun.
+The per-episode airframe randomisation (mass, inertia, thrust-to-weight, motor lag) and the
+near-wall yaw moment of the Gate 1 work reach the backend only through `set_airframe` and the
+fourth `step` argument, so the Isaac backend flies them the way the mock does; the parity
+check below runs with them on as well as off. Mass and inertia change between steps the
+way Isaac Lab's own `randomize_rigid_body_mass` event changes them, and the backend reads
+every write back and fails loudly if PhysX did not take it.
 
 Isaac Lab is imported only when an `IsaacQuadSim` is built, so CI and the Mac never need it;
 asking for `--sim isaac` without it raises `IsaacLabUnavailable` pointing here. Isaac Lab
@@ -127,7 +131,8 @@ Run in order; stop and post the output in the project if a step fails.
    `test_isaac_lab_matches_the_mock` runs on the GPU. Nothing in that list may say SKIPPED for
    an Isaac reason.
 6. **Parity report.** `$PY -m eval.sim_parity --a torch --b isaac --device cuda --out runs/parity_isaac.json`.
-   Must end `parity: PASS` (about a minute). Keep the JSON; paste the printed table in the
+   Open loop, then the closed loop on the nominal airframe and with the Gate 1 airframe
+   randomisation on. Must end `parity: PASS` (a minute or two). Keep the JSON; paste the printed table in the
    project. `--a torch --b torch-fine` prints the reference gaps the limits come from.
 7. **Mock on the GPU, for comparison.**
    `$PY -m training.launch --config training/configs/structure_hold_ppo.yaml --sim torch --smoke --device cuda`
@@ -145,17 +150,24 @@ Run in order; stop and post the output in the project if a step fails.
 `eval/sim_parity.py` (test: `eval/tests/test_sim_parity.py`) feeds both backends identical
 inputs and compares true state.
 
-- **Open loop:** ten one-second scenarios, one per env: hover, free fall, climb, roll and
+- **Open loop:** twelve one-second scenarios, one per env: hover, free fall, climb, roll and
   pitch torque pulses, yaw spin, external force, a tilted / moving / spinning start
-  (gyroscopic term, reset frames), saturated commands (clipping, motor lag) and an
-  aggressive all-axis sweep. Worst difference over the second, per scenario.
+  (gyroscopic term, reset frames), saturated commands (clipping, motor lag), an aggressive
+  all-axis sweep, the same kind of sweep on another airframe set with `set_airframe` (mass
+  x1.3, unequal inertia scales, 50 ms motors, lower thrust and yaw limits it runs into), and
+  an external body moment like the near-wall yaw moment on a rolled body. Worst difference
+  over the second, per scenario.
 - **Closed loop:** Structure Hold with the cascaded PD on the corrupted estimate, same seed,
   wind and estimate noise on both, 256 envs x 10 s. The env's crash rules are switched off
   for this run so no env resets (a reset draws new random numbers; one crash a step apart
   in the two backends would change every later draw for every env). Whether an env would
   have crashed is judged afterwards with the standard rules. Reported: per env, the worst
   position difference (median and p95 over envs that would not have crashed); the share of
-  envs that would crash in one backend only; the hold-error p95 of each.
+  envs that would crash in one backend only; the hold-error p95 of each. It runs twice: on
+  the nominal airframe, and with the airframe and wall yaw moment of the Gate 1 "combined"
+  stress row on (`RANDOMISED`: mass x0.8 to 1.3, inertia x0.7 to 1.5, hover-thrust error
+  +/-10 %, motors 20 to 50 ms, yaw moment up to 25 % of yaw authority), so every env flies its
+  own airframe through `set_airframe`.
 
 The tolerances come from one rule: Isaac must agree with the mock at least as well as the
 mock agrees with itself at an 8x finer physics step (the discretisation error every mock
@@ -175,6 +187,8 @@ with floors of 1 mm, 1 mm/s, 1 mrad, 0.01 rad/s):
 | tilted_spinning_start | 9.9 mm | 16 mm/s | 6.1 mrad | 0.0038 rad/s |
 | saturated | 29 mm | 46 mm/s | 26 mrad | 0.23 rad/s |
 | aggressive | 40 mm | 38 mm/s | 23 mrad | 0.074 rad/s |
+| other_airframe | 51 mm | 52 mm/s | 35 mrad | 0.11 rad/s |
+| external_moment | 11 mm | 2.4 mm/s | 5.0 mrad | 0.0021 rad/s |
 
 Closed loop, 256 envs x 10 s, seeds 0 and 1: worst position gap median 7 to 10 mm and p95
 43 mm, no crash mismatch, hold p95 within 0.2 %. Limits: median 20 mm, p95 100 mm, crash
@@ -182,9 +196,18 @@ mismatch 2 % of envs, hold p95 within 1 %. Isaac at the same 5 ms physics step a
 semi-implicit integration should sit well inside these; the Isaac backend's own code over
 the PhysX stand-in is within 1e-5 of the mock.
 
+Closed loop with the airframe randomisation on, 256 envs x 10 s, seeds 0 to 3: median 13 to
+16 mm, p95 0.13 to 0.17 m, crash mismatch 0 to 1.6 % (up to 4 envs), hold p95 within 0.6 to
+1.5 %. Its own limits, twice the worst seed: median 33 mm, p95 0.33 m, crash mismatch 3.2 %,
+hold p95 within 3 %. The tail is wider than nominal because a heavy, slow-motor, high-inertia
+airframe is marginal under the PD, so small step-size differences grow there. The Isaac
+backend's own code, driven by the env (per-env airframes into the PhysX stand-in, the yaw
+moment through `step`), is within 1e-5 of the mock here too.
+
 The check has teeth: in CI it fails a backend whose mass is 5 % off, whose roll inertia is
-10 % off, whose motor lag is doubled, or that swaps the roll and pitch torque axes
-(`test_parity_catches_a_wrong_backend`), and the Isaac backend's own code passes it at 1e-4
+10 % off, whose motor lag is doubled, that swaps the roll and pitch torque axes, that
+ignores `set_airframe` or only its motor lag, or that applies the external moment about the
+world axes (`test_parity_catches_a_wrong_backend`), and the Isaac backend's own code passes it at 1e-4
 over a PhysX stand-in that keeps state the way PhysX does (`envs/sims/tests/fake_physx.py`).
 
 ## If parity fails
@@ -200,6 +223,9 @@ Read the per-scenario table first; the scenario that fails points at the cause.
 | `tilted_spinning_start` | reset frames (body rates must be written to PhysX as world rates); gyroscopic forces flag |
 | `aggressive` | angular damping not 0, angular velocity cap, sleep / stabilisation thresholds |
 | `saturated` | clipping or motor lag; this is our code and passes in CI, so suspect a version change |
+| `other_airframe` (the others pass) | per-env mass or inertia not taken by PhysX (the backend reads them back; check the log), or env indices off by one in `set_mass_properties` |
+| `external_moment` | the moment must be added in the body frame, before `body_wrench` |
+| nominal closed loop passes, randomised fails | same as `other_airframe`; or the PhysX mass write landed after the step it was meant for |
 | open loop passes, closed loop fails | the two runs did not see the same randomness: both must run on the same device (`--device cuda`); or many envs sit at a crash boundary (rerun with `--num-envs 1024`) |
 | everything off by a small steady drift | PhysX put bodies to sleep or the TGS solver applies external forces differently: try `PhysxCfg(enable_external_forces_every_iteration=True)` |
 
@@ -210,8 +236,9 @@ PyTorch sim on the GPU) and Zain is told.
 
 ## What is verified and what is not
 
-Verified here (CI, no GPU): the backend's glue (frames, clipping, motor lag, resets, env
-origins) step for step against the mock over a PhysX stand-in; the contract tests on that
+Verified here (CI, no GPU): the backend's glue (frames, clipping, motor lag, per-env
+airframes, the external moment, resets, env origins) step for step against the mock over a
+PhysX stand-in, and driven by the Structure Hold env with the airframe randomisation on; the contract tests on that
 glue; the lazy import (the repo never imports Isaac Lab unless asked); the parity check and
 its tolerances on the mock (`python -m eval.sim_parity --a torch --b torch-fine` passes);
 `launch.py --sim` (override, refusals, LOG line); the PPO smoke run through

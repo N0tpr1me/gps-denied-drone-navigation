@@ -181,8 +181,8 @@ def test_torch_sim_is_deterministic_and_fast_enough():
 
 # ---------------------------------------------------------------- per-env airframe
 # ``set_airframe`` and the external body torque are part of the seam (domain randomisation,
-# the near-wall yaw moment). The Isaac backend joins this list once it maps them.
-AIRFRAME_BACKENDS = ["torch"]
+# the near-wall yaw moment), so every backend runs these.
+AIRFRAME_BACKENDS = BACKENDS_UNDER_TEST
 
 
 @pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
