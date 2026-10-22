@@ -18,7 +18,7 @@ python -m training.launch --config training/configs/structure_hold_ppo.yaml --de
 ## The PPO loop
 
 `ppo_env.py` wraps `envs.structure_hold.StructureHoldEnv` in the shape rsl_rl 5.x trains on:
-the actor sees the last 3 env observations stacked (oldest first, 60 values), the critic
+the actor sees the last `history` env observations stacked (oldest first; 15 x 20 = 300 values for policy v2, 3 for v1), the critic
 additionally sees what only the simulator knows (true position error and velocity, wind
 force, estimate error). `train_ppo.py` builds the rsl_rl runner (64x64 ELU actor, about 8k
 parameters, Gaussian actions, observation normalisation), trains, writes one
@@ -53,7 +53,7 @@ A run folder ends with:
 
 | File | What |
 | --- | --- |
-| `policy.onnx` | The deterministic actor, normalisation folded in. Input `obs` (N, 60), output `actions` (N, 4) in [-1, 1]. What the PX4 module runs. |
+| `policy.onnx` | The deterministic actor, normalisation folded in. Input `obs` (N, history x 20), output `actions` (N, 4) in [-1, 1]. What the PX4 module runs. |
 | `policy.json` | Input layout (which slice is which, history length and order), action scaling (rates = `actions[0:3] * max_rate`, thrust = `0.5 * (actions[3] + 1) * max_thrust`), the env config and training config. |
 | `policy.pt` | rsl_rl's full checkpoint (actor, critic, optimiser) for resuming or re-exporting. |
 | `summary.json` | Policy and PD p95 error, crash rates, and the `vs_baseline` wording that goes to `experiments/LOG.md`. |
