@@ -2,7 +2,8 @@
 
 The classical reference every Structure Hold result is compared against:
 `eval/baselines/px4_tuned_v1.params`, stock PX4 v1.17.0 on the Gazebo `gz_x500`, GPS-free on
-the estimate bridge, tuned for wind 1 m from a wall. Frozen on 2026-10-22 (commit `4ce5c63`).
+the estimate bridge, tuned for wind 1 m from a wall. Frozen on 2026-10-22. The commits in the LOG lines (`6753b79`, `fa992fd`, `4ce5c63`) are
+this work's branch before its rebase onto main. The flight code and parameter files are the ones in this PR.
 Every flight below is a line in `experiments/LOG.md`.
 
 ## Headline
