@@ -1,6 +1,8 @@
 """Backend contract: every simulator behind the seam must pass these, parametrised by
-backend. Only ``torch`` exists today; ``isaac`` is added to BACKENDS_UNDER_TEST when
-envs/sims/isaac_quad.py lands, and this file checks it unchanged."""
+backend. ``torch`` is the mock; ``isaac-glue`` is the Isaac backend's own code
+(``IsaacQuadSim``) over a PhysX stand-in (``fake_physx.py``), so its frames, clipping, motor
+lag and resets are checked on every CI run; ``isaac`` is the real Isaac Lab backend and runs
+only where Isaac Lab is installed (docs/isaac-lab.md)."""
 
 from __future__ import annotations
 
@@ -11,16 +13,23 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from envs.sims import QuadParams, QuadState, make_sim  # noqa: E402
+from envs.sims.isaac_quad import IsaacLabUnavailable, IsaacQuadSim, isaac_available  # noqa: E402
+from envs.sims.tests.fake_physx import FakePhysxWorld  # noqa: E402
 from envs.sims.torch_quad import GRAVITY, quat_from_yaw, quat_rotate  # noqa: E402
 
-BACKENDS_UNDER_TEST = ["torch"]
+BACKENDS_UNDER_TEST = ["torch", "isaac-glue"] + (["isaac"] if isaac_available() else [])
 DT = 0.01
 N = 4
 
 
 def sim_for(backend: str, **kw):
     params = QuadParams(**kw) if kw else QuadParams()
-    return make_sim(backend, params, N, DT)
+    if backend == "isaac-glue":
+        world = FakePhysxWorld(params, N, DT / params.substeps)
+        return IsaacQuadSim(params, N, DT, device="cpu", world=world)
+    # Real Isaac runs on PhysX's CPU pipeline here so the asserts compare CPU tensors; the
+    # GPU pipeline is exercised by the parity check (eval/sim_parity.py).
+    return make_sim(backend, params, N, DT, device="cpu")
 
 
 def hover_inputs(sim, thrust=None):
@@ -137,8 +146,9 @@ def test_bad_shapes_and_backends_fail_loudly(backend):
         sim.step(torch.zeros(N), torch.zeros(N, 3), torch.zeros(3))
     with pytest.raises(ValueError, match="finite"):
         sim.reset(state=QuadState.hover(N, pos=(float("nan"), 0.0, 0.0)))
-    with pytest.raises(NotImplementedError, match="isaac"):
-        make_sim("isaac", QuadParams(), N, DT)
+    if not isaac_available():
+        with pytest.raises(IsaacLabUnavailable, match="docs/isaac-lab.md"):
+            make_sim("isaac", QuadParams(), N, DT)
     with pytest.raises(ValueError, match="unknown"):
         make_sim("gazebo", QuadParams(), N, DT)
 

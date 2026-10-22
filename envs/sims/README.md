@@ -7,7 +7,7 @@ makes the task (wind, estimate corruption, the rate loop, observations, reward) 
 ```python
 from envs.sims import QuadParams, QuadState, make_sim
 
-sim = make_sim("torch", QuadParams(), num_envs=1024, dt=0.01)   # "isaac": later, GPU server
+sim = make_sim("torch", QuadParams(), num_envs=1024, dt=0.01)   # or "isaac" (needs Isaac Lab)
 sim.reset()                                   # or reset(env_ids, QuadState(...))
 state = sim.step(thrust, torque_body, force_ext_world)
 ```
@@ -26,13 +26,18 @@ state = sim.step(thrust, torque_body, force_ext_world)
 - `rate_pid.py`: a body-rate PID in the shape of PX4's `RateControl` (normalised torque,
   D on the filtered measurement, integrator freeze on saturation, PX4 default gains), so the
   policy closes the same inner loop the onboard module will.
-- `isaac_quad.py` (not yet written): the Isaac Lab backend, same two calls, same
-  `QuadState`. `make_sim("isaac", ...)` raises `NotImplementedError` until then.
+- `isaac_quad.py`: the Isaac Lab backend (Isaac Lab 2.3.2 / Isaac Sim 5.1.0), same two calls,
+  same `QuadState`. One PhysX rigid body per env with the mock's mass and inertia; clipping
+  and motor lag use the mock's code. Isaac Lab is imported only when the backend is built;
+  without it `make_sim("isaac", ...)` raises `IsaacLabUnavailable`. Install, first-hour
+  checklist and parity: `docs/isaac-lab.md`.
 
 The default `QuadParams` is a placeholder 5-inch-class airframe (0.8 kg, 2:1 thrust to
 weight) until the airframe is chosen (docs/decisions.md).
 
-Tests: `pytest envs/sims`. `tests/test_contract.py` is parametrised by backend and is the
-file Isaac Lab must pass unchanged: free fall matches g, hover thrust holds still, a body
+Tests: `pytest envs/sims`. `tests/test_isaac_quad.py` checks the Isaac backend's own code
+step for step against the mock over a PhysX stand-in (`tests/fake_physx.py`), so it runs
+without Isaac Lab. `tests/test_contract.py` is parametrised by backend (`torch`, `isaac-glue`,
+and `isaac` where Isaac Lab is installed) and is the file every backend must pass: free fall matches g, hover thrust holds still, a body
 torque gives the right rotation sign and rate, an external force gives F/m, frames are ENU
 and FLU, inputs are clipped, partial resets touch only their envs.

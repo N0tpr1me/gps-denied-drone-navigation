@@ -11,6 +11,8 @@ What it does, in order:
    (little memory used, low utilisation, no compute processes). ``--device cpu`` skips this.
 4. Refuses a real (non-smoke) run on a dirty git tree unless ``--allow-dirty``, because the
    log line must name the code that ran.
+   ``--sim torch|isaac`` overrides the config's ``params.sim`` (refused for a config that
+   does not choose a simulator, and Isaac with ``--device cpu``, since Isaac Sim needs the GPU).
 5. Creates ``runs/<time>_<name>_s<seed>_<commit>[-dirty][-smoke]/`` with the resolved
    ``config.yaml``, runs the entrypoint, tees its output to ``stdout.log``, and enforces a
    timeout.
@@ -157,6 +159,20 @@ def resolve_config(raw: dict[str, Any], smoke: bool) -> dict[str, Any]:
     return cfg
 
 
+SIMS = ("torch", "isaac")
+
+
+def apply_sim(cfg: dict[str, Any], sim: str | None, device: str) -> None:
+    """``--sim``: run the same recipe on another simulator backend (envs/sims)."""
+    if sim is None:
+        return
+    if "sim" not in cfg["params"]:
+        raise Refused(f"--sim {sim}: this config has no params.sim, so it does not use a simulator")
+    if sim == "isaac" and device != "cuda":
+        raise Refused("--sim isaac needs --device cuda: Isaac Sim does not start without the GPU")
+    cfg["params"]["sim"] = sim
+
+
 def check_rules(cfg: dict[str, Any], *, device: str, smoke: bool, approved: bool) -> None:
     gpus = int(cfg["gpus"]) if device == "cuda" else 0
     if smoke and gpus > 1:
@@ -261,7 +277,8 @@ def format_headline(headline: dict[str, Any] | None) -> str:
 
 
 def append_log_line(log_path: Path, *, when: dt.datetime, run_dir: Path, commit: str,
-                    dirty: bool, config_path: Path, device: str, summary: dict[str, Any]) -> None:
+                    dirty: bool, config_path: Path, device: str, summary: dict[str, Any],
+                    sim: str | None = None) -> None:
     def cell(text: str) -> str:
         return str(text).replace("|", "/").replace("\n", " ")
 
@@ -273,7 +290,7 @@ def append_log_line(log_path: Path, *, when: dt.datetime, run_dir: Path, commit:
         when.strftime("%Y-%m-%d %H:%M"),
         f"`{run_dir.name}`",
         f"`{commit[:7]}`" + (" (dirty)" if dirty else ""),
-        f"`{config_path.as_posix()}`",
+        f"`{config_path.as_posix()}`" + (f" --sim {sim}" if sim else ""),
         device,
         status.upper() if status != "ok" else "ok",
         result,
@@ -288,6 +305,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--smoke", action="store_true", help="a few iterations; never logged")
     p.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+    p.add_argument("--sim", choices=SIMS, default=None,
+                   help="simulator backend, overriding the config's params.sim")
     p.add_argument("--approved", action="store_true",
                    help="Zain has agreed to a run over 1 hour or on more than 1 GPU")
     p.add_argument("--allow-dirty", action="store_true",
@@ -303,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         cfg = resolve_config(load_yaml(args.config), args.smoke)
+        apply_sim(cfg, args.sim, args.device)
         check_rules(cfg, device=args.device, smoke=args.smoke, approved=args.approved)
         commit, dirty = git_state()
         if dirty and not args.smoke and not args.allow_dirty:
@@ -367,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.smoke:
         append_log_line(args.log, when=started, run_dir=run_dir, commit=commit, dirty=dirty,
-                        config_path=args.config, device=args.device, summary=summary)
+                        config_path=args.config, device=args.device, summary=summary,
+                        sim=args.sim)
     print(f"launch: {status} in {duration} s -> {run_dir / 'summary.json'}", flush=True)
     return EXIT_OK if status == "ok" else EXIT_FAILED
 

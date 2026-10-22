@@ -1,0 +1,235 @@
+# Isaac Lab: the second simulator
+
+Isaac Lab plugs in behind the simulator seam (`envs/sims`, docs/decisions.md): it moves the
+rigid body, and everything else (rate loop, PX4-like rate lag, wind, estimate corruption,
+observations, reward, PPO) is the same code that trains on the mock. This page is what to
+do when the GPU server arrives, so that bringing Isaac Lab up stays inside the 5 working
+days the plan allows. Nothing here has been run on Isaac Lab yet: there is no GPU machine
+(see "What is verified and what is not").
+
+## Pinned versions
+
+| What | Pin | Why |
+| --- | --- | --- |
+| Isaac Lab | **2.3.2** (git tag `v2.3.2`) | Newest release on the stable 2.x line. 3.0 is beta / early access and moves the physics backend (Newton) and APIs; revisit at its GA |
+| Isaac Sim | **5.1.0** | The Isaac Sim that Isaac Lab 2.3 is built on |
+| Docker image | **`nvcr.io/nvidia/isaac-lab:2.3.2`** (headless; record its digest on first pull) | NVIDIA's prebuilt Isaac Lab image, Isaac Sim 5.1 inside; no image build of our own |
+| Python | 3.11 (Isaac Sim 5.x's own) | Inside our 3.10 to 3.12 support; CI already tests 3.11 |
+| PyTorch | 2.7.0 + CUDA 12.8, as shipped in the image | Keep Isaac's torch; our `torch>=2.6` extra accepts it |
+| rsl_rl | `rsl-rl-lib==5.5.1` (ours) over the image's 3.1.2 | We train with our own rsl_rl pin (docs/decisions.md); Isaac Lab's `isaaclab_rl` wrapper is not used, so its pin does not matter |
+
+Host requirements for Isaac Sim 5.1 (NVIDIA's requirements page): an RTX-class GPU with
+RT cores and at least 16 GB of VRAM (A100 / H100 are **not supported**; the RTX 4500 Ada in
+the project brief is fine), Ubuntu 22.04 or 24.04, NVIDIA driver 580.65.06 or a newer
+production-branch driver, 32 GB RAM or more, Docker with the NVIDIA Container Toolkit.
+
+## What the backend does (envs/sims/isaac_quad.py)
+
+One PhysX rigid body per env, spawned with Isaac Lab's `InteractiveScene` and driven the way
+Isaac Lab's direct-workflow quadcopter task (`Isaac-Quadcopter-Direct-v0`) drives its
+Crazyflie: a body-frame force and torque written through `permanent_wrench_composer` every
+physics step. The task's Crazyflie articulation is not used, because its four propeller
+links add mass, inertia and spin the mock does not have, and the seam promises "one rigid
+body". Mock parameters map one to one:
+
+| Mock (`QuadParams` / env config) | Isaac Lab |
+| --- | --- |
+| `mass` 0.8 kg | PhysX body mass (`set_masses`, read back, fails loudly if not taken) |
+| `inertia` (0.0035, 0.0035, 0.0060) kg m^2 | PhysX diagonal inertia, centre of mass at the body origin with axes = body FLU (`set_inertias`, `set_coms`, read back) |
+| `max_thrust` 16 N, `max_torque` (0.3, 0.3, 0.05) N m | Clipped in `IsaacQuadSim.step` with the mock's code |
+| `motor_tau` 0.02 s | First-order lag in torch per physics sub-step, the mock's formula |
+| `substeps` 2 | PhysX `dt` = 0.01 / 2 = 5 ms, one wrench write per sub-step |
+| gravity 9.80665 m/s^2 | `SimulationCfg.gravity = (0, 0, -9.80665)` (Isaac's default is 9.81) |
+| no drag, no damping | `linear_damping = angular_damping = 0` (PhysX default angular damping is 0.05), sleeping and stabilisation off, gyroscopic forces on, angular velocity cap lifted, collisions off |
+| rate loop `RatePid`, rate lag `rate_lag_s` 0.1 to 0.2 s, action limit `max_rate_rad_s` 2 rad/s | Unchanged: they live in `envs/structure_hold`, above the seam |
+| frames ENU / FLU, quaternion (w, x, y, z) | Isaac Lab is Z-up with (w, x, y, z) quaternions; positions are returned relative to each env's origin, PhysX's world-frame angular velocity is rotated to body FLU |
+
+Coming soon on the mock side (the "Policy robustness for Gate 1" work): per-episode airframe
+randomisation of mass, inertia, motor lag and hover-thrust error. When it lands on main,
+the backend maps each knob one to one (PhysX takes per-env masses and inertias through the
+same `set_masses` / `set_inertias` calls, indexed by env) and parity is rerun.
+
+Isaac Lab is imported only when an `IsaacQuadSim` is built, so CI and the Mac never need it;
+asking for `--sim isaac` without it raises `IsaacLabUnavailable` pointing here. Isaac Lab
+runs one physics scene per process: building a second `IsaacQuadSim` closes the first, and
+stepping the old one fails loudly. Training and scoring build envs one after another, so
+this does not bite.
+
+## Install (on the server)
+
+Prefer the Docker image; use the pip route only if Docker is not allowed on the server.
+
+**Docker (recommended).**
+
+```bash
+docker pull nvcr.io/nvidia/isaac-lab:2.3.2
+docker inspect --format '{{index .RepoDigests 0}}' nvcr.io/nvidia/isaac-lab:2.3.2   # record it
+mkdir -p ~/docker/isaac-sim/{cache/kit,cache/ov,cache/pip,cache/glcache,cache/computecache,logs,data,documents}
+cd ~/gps-denied-drone-navigation          # the repo, cloned on the server
+docker run --name dronenav-isaac --entrypoint bash -it --gpus all --rm --network=host \
+  -e ACCEPT_EULA=Y -e PRIVACY_CONSENT=Y \
+  -v ~/docker/isaac-sim/cache/kit:/isaac-sim/kit/cache:rw \
+  -v ~/docker/isaac-sim/cache/ov:/root/.cache/ov:rw \
+  -v ~/docker/isaac-sim/cache/pip:/root/.cache/pip:rw \
+  -v ~/docker/isaac-sim/cache/glcache:/root/.cache/nvidia/GLCache:rw \
+  -v ~/docker/isaac-sim/cache/computecache:/root/.nv/ComputeCache:rw \
+  -v ~/docker/isaac-sim/logs:/root/.nvidia-omniverse/logs:rw \
+  -v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
+  -v ~/docker/isaac-sim/documents:/root/Documents:rw \
+  -v "$PWD":/workspace/dronenav -w /workspace/dronenav \
+  nvcr.io/nvidia/isaac-lab:2.3.2
+```
+
+Inside the container (the cache mounts make later starts fast; the first start compiles
+shaders for several minutes):
+
+```bash
+ls /workspace                                   # Isaac Lab's folder: isaaclab or IsaacLab
+export PY="/workspace/isaaclab/isaaclab.sh -p"  # adjust to what ls showed
+$PY -m pip freeze | grep -E '^(torch|numpy)==' > /tmp/keep.txt
+$PY -m pip install -e '.[torch,dev]' -c /tmp/keep.txt   # keep Isaac's torch and numpy<2
+$PY -c "import isaaclab, envs.sims.isaac_quad as q; print('isaac ok', q.isaac_available())"
+```
+
+`pip` warns that `isaaclab_rl` wants `rsl-rl-lib==3.1.2`: expected and harmless (we do not
+use that wrapper).
+
+**pip (no Docker).** Needs glibc 2.35+ (`ldd --version`) and a Python 3.11 env:
+
+```bash
+conda create -n dronenav-isaac python=3.11 -y && conda activate dronenav-isaac
+pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
+pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+git clone --branch v2.3.2 --depth 1 https://github.com/isaac-sim/IsaacLab.git ~/IsaacLab
+(cd ~/IsaacLab && ./isaaclab.sh --install none)    # Isaac Lab core and assets, no RL wrappers
+pip install -e '.[torch,dev]' -c <(pip freeze | grep -E '^(torch|numpy)==')
+export PY=python
+```
+
+## First hour on the new server
+
+Run in order; stop and post the output in the project if a step fails.
+
+1. **Who else is on it.** `nvidia-smi`. Note which GPUs are free; use only a free one
+   (launch.py checks this too).
+2. **Machine report.** `bash training/server_report.sh | tee server_report.txt` and paste it
+   in the project. Check against the host requirements above: GPU model has RT cores and
+   16 GB+, driver 580.65.06 or newer, Ubuntu 22.04/24.04, Docker usable without sudo,
+   `nvidia-ctk` present, nvcr.io reachable. A data-centre GPU without RT cores (A100, H100)
+   means Isaac Sim will not run: stop and tell Zain (the decided fallback is the batched
+   PyTorch sim, which runs on any CUDA GPU).
+3. **Image.** `docker pull nvcr.io/nvidia/isaac-lab:2.3.2`, start it as above, install the
+   repo into Isaac's Python, record the image digest.
+4. **Isaac starts headless.** `$PY /workspace/isaaclab/scripts/tutorials/00_sim/log_time.py --headless`
+   (the stock smoke test; it exits after a few seconds).
+5. **Repo tests in Isaac's Python.** `$PY -m pytest -rs envs/sims eval/tests/test_sim_parity.py`.
+   The contract tests now include `isaac` (CPU physics pipeline) and
+   `test_isaac_lab_matches_the_mock` runs on the GPU. Nothing in that list may say SKIPPED for
+   an Isaac reason.
+6. **Parity report.** `$PY -m eval.sim_parity --a torch --b isaac --device cuda --out runs/parity_isaac.json`.
+   Must end `parity: PASS` (about a minute). Keep the JSON; paste the printed table in the
+   project. `--a torch --b torch-fine` prints the reference gaps the limits come from.
+7. **Mock on the GPU, for comparison.**
+   `$PY -m training.launch --config training/configs/structure_hold_ppo.yaml --sim torch --smoke --device cuda`
+8. **Isaac training smoke run, 1 GPU, a few iterations.**
+   `$PY -m training.launch --config training/configs/structure_hold_ppo.yaml --sim isaac --smoke --device cuda`.
+   Must finish `launch: ok`; `runs/*-smoke/stdout.log` shows `env_steps_per_s` for both
+   simulators. While it runs, `nvidia-smi` should show the process on the GPU launch picked.
+9. **Tell Zain**: parity numbers, smoke steps/s on both backends, and the image digest for
+   the decisions row below. A real Isaac run (not smoke) follows the usual rules: logged in
+   `experiments/LOG.md` by launch.py, compared against the PD and tuned-PX4 baselines, and
+   anything over 1 hour or more than 1 GPU needs Zain's go-ahead.
+
+## Parity: what is checked and the tolerances
+
+`eval/sim_parity.py` (test: `eval/tests/test_sim_parity.py`) feeds both backends identical
+inputs and compares true state.
+
+- **Open loop:** ten one-second scenarios, one per env: hover, free fall, climb, roll and
+  pitch torque pulses, yaw spin, external force, a tilted / moving / spinning start
+  (gyroscopic term, reset frames), saturated commands (clipping, motor lag) and an
+  aggressive all-axis sweep. Worst difference over the second, per scenario.
+- **Closed loop:** Structure Hold with the cascaded PD on the corrupted estimate, same seed,
+  wind and estimate noise on both, 256 envs x 10 s. The env's crash rules are switched off
+  for this run so no env resets (a reset draws new random numbers; one crash a step apart
+  in the two backends would change every later draw for every env). Whether an env would
+  have crashed is judged afterwards with the standard rules. Reported: per env, the worst
+  position difference (median and p95 over envs that would not have crashed); the share of
+  envs that would crash in one backend only; the hold-error p95 of each.
+
+The tolerances come from one rule: Isaac must agree with the mock at least as well as the
+mock agrees with itself at an 8x finer physics step (the discretisation error every mock
+number already carries), with about a 2x margin. Measured mock-vs-8x-finer gaps, CPU:
+
+Open loop, worst difference over 1 s (mock vs mock at 8x finer step; the limit is twice it,
+with floors of 1 mm, 1 mm/s, 1 mrad, 0.01 rad/s):
+
+| Scenario | Position | Velocity | Attitude | Body rate |
+| --- | --- | --- | --- | --- |
+| hover | 0 | 0 | 0 | 0 |
+| free_fall | 41 mm | 20 mm/s | 0 | 0 |
+| climb | 12 mm | 6.2 mm/s | 0 | 0 |
+| roll_pulse, pitch_pulse | 2.1 mm | 1.2 mm/s | 2.1 mrad | 0.012 rad/s |
+| yaw_spin | 0 | 0 | 7.0 mrad | 0.0035 rad/s |
+| external_force | 1.9 mm | 0 | 0 | 0 |
+| tilted_spinning_start | 9.9 mm | 16 mm/s | 6.1 mrad | 0.0038 rad/s |
+| saturated | 29 mm | 46 mm/s | 26 mrad | 0.23 rad/s |
+| aggressive | 40 mm | 38 mm/s | 23 mrad | 0.074 rad/s |
+
+Closed loop, 256 envs x 10 s, seeds 0 and 1: worst position gap median 7 to 10 mm and p95
+43 mm, no crash mismatch, hold p95 within 0.2 %. Limits: median 20 mm, p95 100 mm, crash
+mismatch 2 % of envs, hold p95 within 1 %. Isaac at the same 5 ms physics step and the same
+semi-implicit integration should sit well inside these; the Isaac backend's own code over
+the PhysX stand-in is within 1e-5 of the mock.
+
+The check has teeth: in CI it fails a backend whose mass is 5 % off, whose roll inertia is
+10 % off, whose motor lag is doubled, or that swaps the roll and pitch torque axes
+(`test_parity_catches_a_wrong_backend`), and the Isaac backend's own code passes it at 1e-4
+over a PhysX stand-in that keeps state the way PhysX does (`envs/sims/tests/fake_physx.py`).
+
+## If parity fails
+
+Read the per-scenario table first; the scenario that fails points at the cause.
+
+| Fails | Look at |
+| --- | --- |
+| `free_fall` | gravity (must be 9.80665, not Isaac's 9.81) or the physics dt (`substeps`) |
+| `hover`, `climb` | mass not taken (the backend reads it back; check the log), thrust direction |
+| `roll_pulse`, `pitch_pulse`, `yaw_spin` | inertia or centre-of-mass frame not taken; torque applied in the world frame instead of the body |
+| `external_force` | the world force must be rotated into the body frame (`body_wrench`) |
+| `tilted_spinning_start` | reset frames (body rates must be written to PhysX as world rates); gyroscopic forces flag |
+| `aggressive` | angular damping not 0, angular velocity cap, sleep / stabilisation thresholds |
+| `saturated` | clipping or motor lag; this is our code and passes in CI, so suspect a version change |
+| open loop passes, closed loop fails | the two runs did not see the same randomness: both must run on the same device (`--device cuda`); or many envs sit at a crash boundary (rerun with `--num-envs 1024`) |
+| everything off by a small steady drift | PhysX put bodies to sleep or the TGS solver applies external forces differently: try `PhysxCfg(enable_external_forces_every_iteration=True)` |
+
+Rules: fix the cause, do not loosen a tolerance to pass; changing a tolerance is a
+docs/decisions.md row. If Isaac Lab cannot pass parity and run the PPO smoke training
+within the 5 working days, the decided fallback applies (keep training on the batched
+PyTorch sim on the GPU) and Zain is told.
+
+## What is verified and what is not
+
+Verified here (CI, no GPU): the backend's glue (frames, clipping, motor lag, resets, env
+origins) step for step against the mock over a PhysX stand-in; the contract tests on that
+glue; the lazy import (the repo never imports Isaac Lab unless asked); the parity check and
+its tolerances on the mock (`python -m eval.sim_parity --a torch --b torch-fine` passes);
+`launch.py --sim` (override, refusals, LOG line); the PPO smoke run through
+`launch --sim torch`.
+
+Not verified until the server: anything that touches Isaac Lab itself. The calls the
+backend makes were read from the v2.3.2 sources (`InteractiveScene`, `RigidObject`,
+`permanent_wrench_composer`, `root_physx_view.set_masses / set_inertias / set_coms`,
+`SimulationContext` teardown as in Isaac Lab's own `build_simulation_context`), but have not
+run. Isaac Sim was not installed in the cloud container: it needs Python 3.11 and an RTX GPU
+and is tens of GB, so it is not practical for CPU-only checks; the Isaac tests skip cleanly
+there with the reason printed (`pytest -rs`).
+
+## Proposed decisions row (pinned versions)
+
+Appended to docs/decisions.md as **Proposed**; it becomes Decided, with the image digest
+added, once steps 1 to 8 of the first-hour checklist pass:
+
+| Decision | Status | Date | Why / what would change it |
+| --- | --- | --- | --- |
+| Isaac Lab pinned at 2.3.2 on Isaac Sim 5.1.0, run from `nvcr.io/nvidia/isaac-lab:2.3.2` (digest recorded on first pull); our rsl_rl pin and PPO recipe unchanged; the Isaac backend is one PhysX rigid body per env with the mock's mass, inertia, motor lag and clipping (`envs/sims/isaac_quad.py`), accepted only if it passes `eval/sim_parity.py` | Proposed | 2026-10-22 | Newest stable Isaac Lab line; 3.0 is beta / early access with a new physics backend. Move to 3.x only after its GA and only in its own PR that passes parity again |
