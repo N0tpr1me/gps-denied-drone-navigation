@@ -33,8 +33,14 @@ Observation (``num_obs`` = 20), everything the onboard module can know:
 Action (``num_actions`` = 4), each in [-1, 1]: body rate setpoints (roll, pitch, yaw) as a
 fraction of ``max_rate_rad_s``, and thrust mapped linearly onto ``[0, max_thrust]``.
 
-Randomness: one NumPy generator (per-episode draws: hold point, start pose, wind params)
-and one torch generator (estimate corruption), both from the constructor's ``seed``.
+Randomness: one NumPy generator (per-episode draws: hold point, start pose, wind params),
+one torch generator (estimate corruption) and a second NumPy generator for the airframe
+(``cfg.airframe_rand`` and ``cfg.wall_yaw_torque``, both off by default), all from the
+constructor's ``seed``. The airframe draws having their own generator means a stressed
+airframe flies exactly the episodes the nominal one does.
+
+``term_reason`` holds, per env, why its last episode ended (``TERM_REASONS``), so a scorer can
+tell crashes apart after the env has already reset.
 """
 
 from __future__ import annotations
@@ -65,6 +71,8 @@ OBS = {
 NUM_OBS = 20
 NUM_ACTIONS = 4
 
+TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeout")
+
 # The wall: a point on it and the normal pointing from the drone toward it (structure x).
 WALL_POINT = (0.0, 0.0, 0.0)
 WALL_NORMAL_TOWARD = (1.0, 0.0, 0.0)
@@ -92,6 +100,7 @@ class StructureHoldEnv:
         self.dt = cfg.dt
         self.seed = int(seed)
         self.rng = np.random.default_rng(seed)
+        self.airframe_rng = np.random.default_rng([int(seed), 0xA1F])
 
         n, dev, dt = self.num_envs, self.device, self.dtype
         self.sim = make_sim(sim, cfg.quad, n, cfg.dt, device=device)
@@ -119,6 +128,14 @@ class StructureHoldEnv:
         self.estimate_age = torch.zeros(n, dtype=dt, device=dev)
         self.wind_force = torch.zeros(n, 3, dtype=dt, device=dev)
         self.wind = None  # DisturbanceParams on tensors, set by the first reset
+        # Per-episode airframe (cfg.airframe_rand): thrust per unit action relative to the
+        # nominal airframe (mass scale x hover-thrust error), and the drawn scales for logs.
+        self.thrust_gain = torch.ones(n, dtype=dt, device=dev)
+        self.mass_scale = torch.ones(n, dtype=dt, device=dev)
+        self.inertia_scale = torch.ones(n, dtype=dt, device=dev)
+        self.yaw_torque_peak = torch.zeros(n, dtype=dt, device=dev)  # signed, N m
+        self.yaw_torque = torch.zeros(n, dtype=dt, device=dev)  # applied this step, N m
+        self.term_reason = torch.zeros(n, dtype=torch.long, device=dev)
         self.counts = {"contact": 0, "ground": 0, "tilt": 0, "box": 0, "nonfinite": 0,
                        "timeout": 0}
         self.reset()
@@ -172,6 +189,7 @@ class StructureHoldEnv:
         if n == 0:
             return
         cfg, rng = self.cfg, self.rng
+        self._draw_airframe(env_ids)
 
         dist = rng.uniform(*cfg.hold_distance, size=n)
         height = rng.uniform(*cfg.hold_height, size=n)
@@ -218,6 +236,46 @@ class StructureHoldEnv:
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
 
+    def _draw_airframe(self, env_ids: torch.Tensor) -> None:
+        """Per-episode airframe and near-wall yaw moment, from their own generator. Nothing
+        is drawn (and the sim keeps ``cfg.quad``) while both are off."""
+        cfg, rng, n = self.cfg, self.airframe_rng, int(env_ids.numel())
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        ar = cfg.airframe_rand
+        if ar.active:
+            q = cfg.quad
+            mass = rng.uniform(*ar.mass_scale, size=n)
+            inertia = rng.uniform(*ar.inertia_scale, size=n)
+            tw = rng.uniform(*ar.thrust_to_weight_scale, size=n)
+            tau = (np.full(n, q.motor_tau) if ar.motor_tau_s is None
+                   else rng.uniform(*ar.motor_tau_s, size=n))
+            hover_err = rng.uniform(*ar.hover_thrust_error, size=n)
+            self.sim.set_airframe(
+                env_ids, mass=q.mass * mass,
+                inertia=np.asarray(q.inertia)[None, :] * inertia[:, None],
+                max_thrust=q.max_thrust * mass * tw, motor_tau=tau,
+            )
+            self.thrust_gain[env_ids] = t(mass * (1.0 + hover_err))
+            self.mass_scale[env_ids] = t(mass)
+            self.inertia_scale[env_ids] = t(inertia)
+        wy = cfg.wall_yaw_torque
+        if wy.active:
+            peak = rng.uniform(*wy.peak_nm, size=n)
+            sign = np.where(rng.random(n) < 0.5, -1.0, 1.0)
+            self.yaw_torque_peak[env_ids] = t(peak * sign)
+
+    def _wall_yaw_torque(self, pos: torch.Tensor) -> torch.Tensor | None:
+        wy = self.cfg.wall_yaw_torque
+        if not wy.active:
+            return None
+        assert self.wind is not None
+        q = (self.wind.mean_wind.norm(dim=-1) / wy.ref_wind_mps) ** 2
+        self.yaw_torque = (self.yaw_torque_peak
+                           * torch.exp(-self.clearance(pos).clamp(min=0.0) / wy.decay_m) * q)
+        tau = torch.zeros(self.num_envs, 3, dtype=self.dtype, device=self.device)
+        tau[:, 2] = self.yaw_torque
+        return tau
+
     # ------------------------------------------------------------ stepping
 
     def get_observations(self) -> tuple[torch.Tensor, dict]:
@@ -236,12 +294,16 @@ class StructureHoldEnv:
         # Action -> lagged rate setpoint -> rate loop -> simulator, with this step's wind.
         rate_cmd = actions[:, :3] * cfg.max_rate_rad_s
         self.rate_sp += self.rate_lag_alpha[:, None] * (rate_cmd - self.rate_sp)
-        thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust
+        # Thrust as the module sends it: through the hover point, so x thrust_gain on an
+        # airframe other than the nominal one (1 unless cfg.airframe_rand is on).
+        thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust * self.thrust_gain
         torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
         )
-        state = self.sim.step(thrust, torque, self.wind_force)
+        tau_ext = self._wall_yaw_torque(self.sim.state.pos)
+        state = (self.sim.step(thrust, torque, self.wind_force) if tau_ext is None
+                 else self.sim.step(thrust, torque, self.wind_force, tau_ext))
         self.episode_step += 1
         self.episode_time += cfg.dt
 
@@ -267,9 +329,12 @@ class StructureHoldEnv:
         timeout = (self.episode_step >= self.max_episode_length) & ~crash
         self.done_buf = crash | timeout
         self.time_out_buf = timeout
+        reason = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         for name, mask in (("contact", contact), ("ground", ground), ("tilt", tilt),
                            ("box", box), ("nonfinite", nonfinite), ("timeout", timeout)):
             self.counts[name] += int(mask.sum())
+            reason = torch.where(mask & (reason == 0), TERM_REASONS.index(name), reason)
+        self.term_reason = reason
 
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward

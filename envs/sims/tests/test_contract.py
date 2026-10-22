@@ -177,3 +177,54 @@ def test_torch_sim_is_deterministic_and_fast_enough():
     per_step = (time.perf_counter() - t0) / 20
     # Real time at 100 Hz is 10 ms per step; allow a slow CI box 10x headroom.
     assert per_step < 0.1, f"{per_step * 1e3:.1f} ms per step for 2048 envs"
+
+
+# ---------------------------------------------------------------- per-env airframe
+# ``set_airframe`` and the external body torque are part of the seam (domain randomisation,
+# the near-wall yaw moment). The Isaac backend joins this list once it maps them.
+AIRFRAME_BACKENDS = ["torch"]
+
+
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
+def test_set_airframe_per_env_mass_and_inertia(backend):
+    """A heavier env falls under the same thrust and an env with more inertia spins up
+    slower; envs not listed keep QuadParams, and calling with no values restores it."""
+    sim = sim_for(backend, motor_tau=0.0)
+    sim.reset()
+    p = sim.params
+    sim.set_airframe([1], mass=2 * p.mass, inertia=[2 * x for x in p.inertia])
+    torque = torch.zeros(N, 3)
+    torque[:, 0] = 0.01
+    for _ in range(10):
+        s = sim.step(torch.full((N,), p.hover_thrust), torque, torch.zeros(N, 3))
+    assert abs(float(s.vel[0, 2])) < 1e-4  # nominal hovers
+    assert float(s.vel[1, 2]) == pytest.approx(-0.5 * GRAVITY * 10 * DT, rel=1e-3)
+    assert float(s.ang_vel[1, 0]) == pytest.approx(0.5 * float(s.ang_vel[0, 0]), rel=1e-3)
+    sim.set_airframe()
+    assert float(sim.inv_mass[1]) == pytest.approx(1 / p.mass)
+
+
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
+def test_set_airframe_limits_and_motor_lag(backend):
+    sim = sim_for(backend)
+    sim.reset()
+    sim.set_airframe([2], max_thrust=10.0, motor_tau=0.0)
+    assert float(sim.max_thrust[2]) == 10.0 and float(sim.lag[2]) == 1.0
+    s = sim.step(torch.full((N,), 100.0), torch.zeros(N, 3), torch.zeros(N, 3))
+    assert float(sim.thrust[2]) == pytest.approx(10.0)  # clipped and no lag
+    assert float(sim.thrust[0]) < sim.params.max_thrust  # lagged toward 16 N
+    assert torch.isfinite(s.pos).all()
+    with pytest.raises(ValueError):
+        sim.set_airframe([0], mass=-1.0)
+
+
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
+def test_external_body_torque_is_neither_clipped_nor_lagged(backend):
+    sim = sim_for(backend)
+    sim.reset()
+    tau = torch.zeros(N, 3)
+    tau[:, 2] = 1.0  # 20x the yaw authority
+    s = sim.step(torch.full((N,), sim.params.hover_thrust), torch.zeros(N, 3),
+                 torch.zeros(N, 3), tau)
+    expected = 1.0 / sim.params.inertia[2] * DT
+    assert float(s.ang_vel[0, 2]) == pytest.approx(expected, rel=1e-3)

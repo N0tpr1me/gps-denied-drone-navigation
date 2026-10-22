@@ -268,3 +268,66 @@ def test_rate_setpoint_lags_the_command_with_the_episode_time_constant():
     assert env.rate_sp[0, 2] == pytest.approx(env.cfg.max_rate_rad_s)  # no lag
     with pytest.raises(ValueError):
         StructureHoldConfig(rate_lag_s=(0.3, 0.1))
+
+
+# ---------------------------------------------------------------- airframe stress knobs
+
+
+def test_airframe_randomisation_changes_only_the_airframe():
+    """Same seed with and without airframe draws: same hold points, wind and estimate."""
+    base = StructureHoldConfig()
+    rand = StructureHoldConfig.from_dict({
+        "airframe_rand": {"mass_scale": [0.7, 1.5], "inertia_scale": [0.5, 2.0],
+                          "hover_thrust_error": [-0.1, 0.1], "motor_tau_s": [0.02, 0.08]},
+        "wall_yaw_torque": {"peak_nm": [0.0, 0.02]},
+    })
+    a = StructureHoldEnv(base, num_envs=16, seed=4)
+    b = StructureHoldEnv(rand, num_envs=16, seed=4)
+    assert torch.equal(a.hold_point, b.hold_point)
+    assert torch.equal(a.wind.mean_wind, b.wind.mean_wind)
+    assert torch.equal(a.estimator.delay_steps, b.estimator.delay_steps)
+    assert torch.equal(a.thrust_gain, torch.ones(16))
+    assert not torch.equal(b.thrust_gain, torch.ones(16))
+    assert float(b.mass_scale.min()) >= 0.7 and float(b.mass_scale.max()) <= 1.5
+    assert torch.allclose(b.sim.inv_mass * b.mass_scale * b.cfg.quad.mass, torch.ones(16))
+    assert (b.yaw_torque_peak.abs() <= 0.02).all() and (b.yaw_torque_peak != 0).any()
+
+
+def test_heavier_airframe_hovers_on_the_nominal_hover_action():
+    """The module scales thrust through the hover point, so with no hover-thrust error the
+    nominal hover action holds a heavier airframe level."""
+    env = StructureHoldEnv(StructureHoldConfig.from_dict({
+        "disturbance": {"mean_speed": 0.0, "num_gusts": 0, "turb_sigma": 0.0},
+        "estimate": {"jump_rate_hz": 0.0, "dropout_rate_hz": 0.0},
+        "start_offset_std_m": 0.0, "start_yaw_std_rad": 0.0,
+        "airframe_rand": {"mass_scale": 1.5}}), num_envs=3, seed=0)
+    assert env.cfg.airframe_rand.active
+    z0 = env.state.pos[:, 2].clone()
+    for _ in range(100):
+        env.step(hover_action(env))
+    assert (env.state.pos[:, 2] - z0).abs().max() < 0.01
+
+
+def test_wall_yaw_torque_spins_the_drone_near_the_wall():
+    cfg = StructureHoldConfig.from_dict({
+        "disturbance": {"mean_speed": 10.0, "num_gusts": 0, "turb_sigma": 0.0},
+        "estimate": {"jump_rate_hz": 0.0, "dropout_rate_hz": 0.0},
+        "wall_yaw_torque": {"peak_nm": 0.05}, "hold_distance": 1.0})
+    env = StructureHoldEnv(cfg, num_envs=4, seed=2)
+    env.step(hover_action(env))
+    expected = env.yaw_torque_peak * torch.exp(-env.clearance())
+    assert torch.allclose(env.yaw_torque, expected, rtol=0.05)
+    assert float(env.state.ang_vel[:, 2].abs().min()) > 0  # nothing else yaws it
+
+
+def test_term_reason_names_the_crash():
+    from envs.structure_hold import TERM_REASONS
+
+    env = StructureHoldEnv(still_air(), num_envs=2, seed=0)
+    a = torch.zeros(2, NUM_ACTIONS)
+    a[:, 3] = -1.0  # no thrust: falls to the ground
+    for _ in range(200):
+        _, _, done, _ = env.step(a)
+        if bool(done.all()):
+            break
+    assert [TERM_REASONS[int(r)] for r in env.term_reason] == ["ground", "ground"]
