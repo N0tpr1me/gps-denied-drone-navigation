@@ -52,6 +52,9 @@ void StructureHold::updateParams()
 	rule.enabled = _param_fb_en.get() != 0;
 	rule.forced = _param_fb_en.get() == 2;
 	rule.threshold_s = _param_fb_t.get();
+	rule.brake_vel = _param_fb_k.get();
+	rule.tilt = _param_fb_tilt.get();
+	rule.yaw = _param_yaw_p.get();  // one heading gain for the guard and the fallback
 	_policy.setRule(rule);
 
 	YawGuard guard{};

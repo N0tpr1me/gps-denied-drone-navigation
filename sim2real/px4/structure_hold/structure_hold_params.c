@@ -232,3 +232,30 @@ PARAM_DEFINE_FLOAT(SH_YAW_P, 3.0f);
  * @group Structure Hold
  */
 PARAM_DEFINE_FLOAT(SH_RATE_MAX, 6.0f);
+
+/**
+ * Brake-and-hover fallback: braking gain
+ *
+ * Acceleration setpoint per m/s of dead-reckoned velocity (K_BRAKE in docs/fallback.md).
+ *
+ * @unit 1/s
+ * @min 0.2
+ * @max 5.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_FB_K, 2.5f);
+
+/**
+ * Brake-and-hover fallback: attitude gain
+ *
+ * Body rate per radian of tilt error of the fallback's attitude loop (K_TILT in
+ * docs/fallback.md); scale with the airframe's rate loop.
+ *
+ * @unit 1/s
+ * @min 1.0
+ * @max 12.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_FB_TILT, 8.0f);

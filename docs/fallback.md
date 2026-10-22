@@ -88,7 +88,8 @@ them are steps the bare policy would have spent drifting anyway.
 
 Implemented unchanged in `sim2real/px4/structure_hold/PolicyController.hpp` (`fallbackAction`,
 checked against `acceleration_to_action` to 3e-7 in `tests/test_policy.cpp`). Parameters:
-`SH_FB_EN` (1 on, 0 off, 2 forced for tests), `SH_FB_T` (0.5 s), fix source `SH_FIX_SRC`,
+`SH_FB_EN` (1 on, 0 off, 2 forced for tests), `SH_FB_T` (0.5 s), `SH_FB_K` (K_BRAKE),
+`SH_FB_TILT` (K_TILT), `SH_YAW_P` (K_YAW, shared with the yaw guard), fix source `SH_FIX_SRC`,
 stale flag gap `SH_FIX_GAP`. `SH_WD_EST_TO` is now 5 s (docs/decisions.md). The stale time is
 `now - last fix`, so at engage it is the true fix age rather than zero; a hold engaged inside
 a dropout therefore goes to the fallback immediately instead of 0.5 s later.

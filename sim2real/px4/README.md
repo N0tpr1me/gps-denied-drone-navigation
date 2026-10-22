@@ -50,7 +50,7 @@ What it does today:
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, stale
   time, action flown, loop time), logged by default.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
-  rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T`, fix
+  rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the test hook
   `SH_TEST_FAULT`, placeholder gains `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 

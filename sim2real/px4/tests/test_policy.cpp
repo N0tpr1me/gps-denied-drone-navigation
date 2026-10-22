@@ -103,10 +103,14 @@ int main()
 		CHECK(same(obs[policy::OBS_AGE], 1.f));
 	}
 
-	// 3. The fallback action matches acceleration_to_action.
+	// 3. The fallback action matches acceleration_to_action, with the gains Python used.
 	{
 		float worst = 0.f;
 		FallbackRule rule{};
+		rule.brake_vel = testvec::FALLBACK_BRAKE_VEL;
+		rule.max_acc = testvec::FALLBACK_MAX_ACC;
+		rule.tilt = testvec::FALLBACK_TILT;
+		rule.yaw = testvec::FALLBACK_YAW;
 
 		for (int k = 0; k < testvec::N; k++) {
 			float action[4];

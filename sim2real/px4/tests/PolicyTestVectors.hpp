@@ -11,6 +11,11 @@ static constexpr int NUM_OBS = 20;
 // The mock's structure x (east) is a NED heading of +90 deg.
 static constexpr float STRUCTURE_YAW_NED = 1.5707963267948966f;
 static constexpr float FALLBACK_THRESHOLD_S = 0.5f;
+// The Python FallbackRule the FALLBACK_ACTION table was made with.
+static constexpr float FALLBACK_BRAKE_VEL = 2.5f;
+static constexpr float FALLBACK_MAX_ACC = 6.0f;
+static constexpr float FALLBACK_TILT = 8.0f;
+static constexpr float FALLBACK_YAW = 3.0f;
 
 static constexpr float HOLD_NED[N * 3] = {
 	0.0f, -2.2739234f, -2.0f, 0.0f, -1.5395734f, -2.0f, 0.0f, -1.0819471f,
