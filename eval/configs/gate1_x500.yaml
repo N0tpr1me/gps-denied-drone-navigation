@@ -12,7 +12,7 @@ gpus: 1
 params:
   controllers:
     - name: v5
-      policy: runs/20261022-210442_structure_hold_ppo_v5_s0_167e13f/policy.onnx  # v5 candidate: run 3, iteration 999
+      policy: training/policies/structure_hold_v5.onnx  # run 20261022-210442, iteration 999
     - name: v3
       policy: training/policies/structure_hold_v3.onnx
   gate_controller: v5
