@@ -9,6 +9,8 @@ expected_hours: 0.5
 gpus: 1
 params:
   num_envs: 1024
+  # Continue the stale-reward run 20261022-021354 for 1500 more (two runs under the hour limit).
+  resume: runs/20261022-021354_structure_hold_ppo_stale_s0_06ebec6/tb/model_1499.pt
   iterations: 1500  # policy v2 needed 3000: run twice with `resume` (see structure_hold_ppo_h15_resume.yaml)
   num_steps_per_env: 48
   history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay (policy v2; v1 used 3)
