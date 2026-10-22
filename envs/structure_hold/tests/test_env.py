@@ -14,6 +14,7 @@ from envs.structure_hold import (  # noqa: E402
     StructureHoldEnv,  # noqa: E402
 )
 from envs.structure_hold.baseline import CascadedPd  # noqa: E402
+from envs.structure_hold.config import RewardWeights  # noqa: E402
 
 
 def still_air(**kw) -> StructureHoldConfig:
@@ -208,7 +209,7 @@ def test_moving_fast_on_a_stale_estimate_costs_extra_reward():
         disturbance=still_air().disturbance,
         estimate=EstimateCorruptionConfig(dropout_rate_hz=0.0, jump_rate_hz=0.0,
                                           delay_min_s=0.0, delay_max_s=0.0),
-        start_offset_std_m=0.0, start_yaw_std_rad=0.0,
+        start_offset_std_m=0.0, start_yaw_std_rad=0.0, reward=RewardWeights(stale_vel=0.3),
     )
     from envs.sims import QuadState
 

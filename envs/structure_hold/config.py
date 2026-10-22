@@ -33,8 +33,9 @@ class RewardWeights:
     toward_wall: float = 0.5  # extra, times the error toward the wall clipped at 1 m
     vel: float = 0.05  # times true speed clipped at 5 m/s
     # Extra speed penalty while the estimate is stale (a dropout): the policy cannot know
-    # where it is, so moving fast on a frozen estimate is how it leaves the 3 m box.
-    stale_vel: float = 0.3  # times true speed clipped at 5 m/s, only while stale
+    # where it is, so moving fast on a frozen estimate is how it leaves the 3 m box. Off by
+    # default: two runs with 0.3 did not reduce crashes (docs/decisions.md, 2026-10-22).
+    stale_vel: float = 0.0  # times true speed clipped at 5 m/s, only while stale
     ang_vel: float = 0.01  # times body rate norm clipped at 10 rad/s
     action: float = 0.02  # times squared normalised rate command
     action_rate: float = 0.05  # times squared change in normalised action between steps
