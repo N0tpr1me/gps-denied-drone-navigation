@@ -6,7 +6,8 @@
 # one and its thrust curve is 1.6x steeper at hover, and a 15 % hover-thrust estimate error
 # moves v3 0.7 m off its hold point. One airframe per episode around the x500 below.
 #   python -m training.launch --config training/configs/structure_hold_ppo_v5.yaml --smoke --device cpu
-# Continued with structure_hold_ppo_v5_resume.yaml if the first run is still improving.
+# 1000 iterations per run (1500 would pass the 1 h rule on 4 CPU cores); continued with
+# structure_hold_ppo_v5_resume.yaml from the selected checkpoint if the first run is still improving.
 name: structure_hold_ppo_v5
 entrypoint: training.train_ppo
 seed: 0
@@ -14,7 +15,7 @@ expected_hours: 0.8
 gpus: 1
 params:
   num_envs: 1024
-  iterations: 1500
+  iterations: 1000  # ~22k env-steps/s on 4 CPU cores: ~40 min, under the 1 h rule
   num_steps_per_env: 48
   history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay
   sim: torch
