@@ -23,6 +23,12 @@ python -m training.launch --config eval/configs/gate1_stress.yaml --device cpu  
 
 To judge another policy, add it under `params.controllers` and set `gate_controller`.
 
-Planned: `baselines/px4_tuned_v1.params` (the frozen tuned-PX4 baseline), the MAVSDK
-scenario runner and `report.py`. Every later result is compared against the tuned-PX4
-baseline.
+- `baselines/px4_tuned_v1.params`: the frozen tuned-PX4 baseline (docs/baseline.md). Every
+  later result is compared against it.
+- `baselines/run_baseline.py`: fly a parameter set over the `wall1m_*` scenarios and seeds in
+  Gazebo SITL (GPS-free, corrupted estimate), tabulate p95, worst toward the wall, crash and
+  failsafe, and compare two sets.
+- `baselines/autotune.py` (+ `autotune_flight.py`, in the image): PX4's attitude autotune,
+  GPS-free.
+
+Planned: `report.py`.

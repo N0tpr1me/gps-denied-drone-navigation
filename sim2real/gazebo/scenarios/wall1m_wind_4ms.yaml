@@ -1,0 +1,16 @@
+# The T8 baseline scenario: as wind_4ms, 1 m from the wall, 60 s hover, gusts moved into the hover.
+# 4 m/s mean wind blowing into the wall, with two gusts and light turbulence.
+name: wall1m_wind_4ms
+seed: 1
+spawn: {x: -1.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 1 m from the wall (x = 0), nose toward it
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0   # mean wind toward +x, i.e. into the wall
+disturbance:
+  mean_speed: 4.0
+  num_gusts: 2
+  gust_start: [40.0, 65.0]   # both inside the 60 s hover (it starts ~25 s sim time)
+  gust_duration: [1.0, 2.0]
+  gust_speed: [1.0, 3.0]
+  turb_sigma: 0.5
+  turb_tau: 1.0
+hover: {altitude: 2.5, hover_s: 60.0}

@@ -77,11 +77,13 @@ class Vehicle:
         self.tel = Telemetry()
         self.joystick = joystick
         self._last_joystick = 0.0
+        self._last_heartbeat = 0.0
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
         end = time.monotonic() + seconds
         while True:
+            self._send_heartbeat()
             self._send_joystick()
             remaining = end - time.monotonic()
             if remaining <= 0:
@@ -89,6 +91,13 @@ class Vehicle:
             msg = self.m.recv_match(blocking=True, timeout=min(remaining, 0.05))
             if msg is not None:
                 self._handle(msg)
+
+    def _send_heartbeat(self) -> None:
+        """GCS heartbeat at 1 Hz: without one PX4 fails the "No connection to the GCS" check."""
+        if time.monotonic() - self._last_heartbeat < 1.0:
+            return
+        self._last_heartbeat = time.monotonic()
+        self.m.mav.heartbeat_send(mavlink.MAV_TYPE_GCS, mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
 
     def _send_joystick(self) -> None:
         """Centred sticks at 20 Hz: PX4 needs a manual-control source for Position mode."""

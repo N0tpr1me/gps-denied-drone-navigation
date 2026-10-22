@@ -24,6 +24,7 @@ the vision stream.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import subprocess
 import sys
@@ -84,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("scenario", help="wall scenario name (sim2real/gazebo/scenarios) or path")
     ap.add_argument("--profile", default="vio_default", help="estimate profile name or path")
     ap.add_argument("--seed", type=int, help="override the profile's seed")
+    ap.add_argument("--scenario-seed", type=int, help="override the scenario's (wind) seed")
     ap.add_argument("--params", type=Path, default=DEFAULT_PARAMS, help="PX4 .params file")
     ap.add_argument("--image", default=DEFAULT_IMAGE)
     ap.add_argument("--hover-s", type=float, help="override the scenario's hover time")
@@ -92,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     sc = load_scenario(args.scenario)
+    if args.scenario_seed is not None:
+        sc = dataclasses.replace(sc, seed=args.scenario_seed)
     prof = load_profile(args.profile)
     if args.seed is not None:
         prof = EstimateProfile(prof.name, args.seed, prof.divisor, prof.estimate)
