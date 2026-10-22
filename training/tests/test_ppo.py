@@ -194,6 +194,19 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     assert "PD" in summary["vs_baseline"]
     assert head["pd_crash_rate"] == 0.0  # the yardstick holds a 1 s episode
 
+    # Resume from that run: training continues after its last iteration.
+    rcfg = yaml.safe_load(PPO_CONFIG.read_text())
+    rcfg["params"].update(rcfg.pop("smoke"))
+    rcfg["params"].update({**SMALL, "resume": str(tmp_path / "train" / "policy.pt")})
+    rsummary = run_entry("training.train_ppo", rcfg, tmp_path / "resume")
+    rmeta = json.loads((tmp_path / "resume" / "policy.json").read_text())
+    assert rmeta["start_iteration"] == head["selected_iteration"] + 1
+    assert rsummary["headline"]["selected_iteration"] in (rmeta["start_iteration"],
+                                                          rmeta["start_iteration"] + 1)
+    rlines = (tmp_path / "resume" / "metrics.jsonl").read_text().splitlines()
+    rrows = [json.loads(x) for x in rlines]
+    assert rrows[0]["step"] == rmeta["start_iteration"]
+
     ecfg = yaml.safe_load(EVAL_CONFIG.read_text())
     ecfg["params"].update(ecfg.pop("smoke"))
     ecfg["params"].update({"policy": str(tmp_path / "train" / "policy.onnx"), "num_envs": 4,

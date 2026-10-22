@@ -8,7 +8,9 @@ Inputs (the config's ``params``): ``num_envs``, ``iterations``, ``num_steps_per_
 ``init_std``), ``ppo`` (rsl_rl's PPO keyword arguments), ``save_interval``, ``curriculum``
 (``dropout_max_s``: the dropout cap training starts at, growing linearly to the env's
 ``estimate.dropout_max_s`` over the first ``fraction`` of the iterations; ``null`` is off),
-and ``eval``
+``resume`` (a ``policy.pt`` or ``tb/model_<it>.pt`` from an earlier run: actor, critic,
+optimiser and iteration counter are restored and training continues for ``iterations`` more,
+so two runs under the hour limit make one longer run), and ``eval``
 (``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
 the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
 harder estimate corruption than the standard condition the result is reported on;
@@ -71,6 +73,7 @@ DEFAULTS: dict[str, Any] = {
         "desired_kl": 0.01,
     },
     "curriculum": {"dropout_max_s": None, "fraction": 0.6},
+    "resume": None,
     "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
              "select_every": 250, "select_envs": 128},
 }
@@ -172,11 +175,12 @@ def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: Str
     iterations on a selection seed; load the best (lowest crash rate, then p95) into the
     runner and return its iteration."""
     e = p["eval"]
-    last = int(p["iterations"]) - 1
+    first = int(p.get("_start_iteration", 0))
+    last = first + int(p["iterations"]) - 1
     every = int(e.get("select_every", 0) or 0)
     candidates = {last: None}  # the policy now in the runner
     if every > 0:
-        for it in range(0, last, every):
+        for it in range(first, last, every):
             path = run_dir / "tb" / f"model_{it}.pt"
             if path.exists() and it != last:
                 candidates[it] = path
@@ -211,6 +215,13 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
           f"{vec.num_privileged_obs} privileged), actor {n_params:,} params, device {device}",
           flush=True)
 
+    if p.get("resume"):
+        runner.load(str(Path(p["resume"])), map_location=device)
+        runner.current_learning_iteration += 1  # the loaded iteration is done; go on after it
+        print(f"ppo: resumed {p['resume']} at iteration {runner.current_learning_iteration}",
+              flush=True)
+    p["_start_iteration"] = int(runner.current_learning_iteration)
+
     t0 = time.perf_counter()
     runner.learn(int(p["iterations"]), init_at_random_ep_len=bool(p["init_at_random_ep_len"]))
     train_s = time.perf_counter() - t0
@@ -221,6 +232,7 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
     meta = policy_metadata(env_cfg, int(p["history"]), train_cfg, {
         "seed": seed, "iterations": int(p["iterations"]), "num_envs": vec.num_envs,
         "actor_params": n_params, "train_reward_mean": reward,
+        "start_iteration": p["_start_iteration"], "resumed_from": p.get("resume"),
     })
     chosen = select_checkpoint(runner, run_dir, meta, eval_cfg, p, seed, device, writer)
     meta["selected_iteration"] = chosen

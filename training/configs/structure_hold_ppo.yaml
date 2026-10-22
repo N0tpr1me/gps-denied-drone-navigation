@@ -8,9 +8,9 @@ expected_hours: 0.5
 gpus: 1
 params:
   num_envs: 1024
-  iterations: 1500
+  iterations: 1500  # policy v2 needed 3000: run twice with `resume` (see structure_hold_ppo_h15_resume.yaml)
   num_steps_per_env: 48
-  history: 3
+  history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay (policy v2; v1 used 3)
   sim: torch
   env:
     # Train on 5x more frequent estimate jumps and dropouts than the standard condition so
