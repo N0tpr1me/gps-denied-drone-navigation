@@ -301,8 +301,9 @@ class StructureHoldEnv:
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
         )
-        state = self.sim.step(thrust, torque, self.wind_force,
-                              self._wall_yaw_torque(self.sim.state.pos))
+        tau_ext = self._wall_yaw_torque(self.sim.state.pos)
+        state = (self.sim.step(thrust, torque, self.wind_force) if tau_ext is None
+                 else self.sim.step(thrust, torque, self.wind_force, tau_ext))
         self.episode_step += 1
         self.episode_time += cfg.dt
 

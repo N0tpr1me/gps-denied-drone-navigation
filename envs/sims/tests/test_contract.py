@@ -180,9 +180,12 @@ def test_torch_sim_is_deterministic_and_fast_enough():
 
 
 # ---------------------------------------------------------------- per-env airframe
+# ``set_airframe`` and the external body torque are part of the seam (domain randomisation,
+# the near-wall yaw moment). The Isaac backend joins this list once it maps them.
+AIRFRAME_BACKENDS = ["torch"]
 
 
-@pytest.mark.parametrize("backend", BACKENDS_UNDER_TEST)
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
 def test_set_airframe_per_env_mass_and_inertia(backend):
     """A heavier env falls under the same thrust and an env with more inertia spins up
     slower; envs not listed keep QuadParams, and calling with no values restores it."""
@@ -201,7 +204,7 @@ def test_set_airframe_per_env_mass_and_inertia(backend):
     assert float(sim.inv_mass[1]) == pytest.approx(1 / p.mass)
 
 
-@pytest.mark.parametrize("backend", BACKENDS_UNDER_TEST)
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
 def test_set_airframe_limits_and_motor_lag(backend):
     sim = sim_for(backend)
     sim.reset()
@@ -215,7 +218,7 @@ def test_set_airframe_limits_and_motor_lag(backend):
         sim.set_airframe([0], mass=-1.0)
 
 
-@pytest.mark.parametrize("backend", BACKENDS_UNDER_TEST)
+@pytest.mark.parametrize("backend", AIRFRAME_BACKENDS)
 def test_external_body_torque_is_neither_clipped_nor_lagged(backend):
     sim = sim_for(backend)
     sim.reset()
