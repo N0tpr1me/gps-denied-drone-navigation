@@ -5,9 +5,13 @@
 # cycle (2.4 Hz) because its rate loop answers 3 to 4x faster than the placeholder's lagged
 # one and its thrust curve is 1.6x steeper at hover, and a 15 % hover-thrust estimate error
 # moves v3 0.7 m off its hold point. One airframe per episode around the x500 below.
-# Action-change penalty 1.0 (v3: 0.15): the first v5 run (20261022-193416) held the x500
-# within 0.07 m in calm air but drove thrust and roll in a 2.8 Hz cycle, which 0.15 made
-# almost free (0.008 per step against 0.09 for 6 cm of error).
+# The first v5 run (20261022-193416) held the x500 within 0.07 m in calm air but drove thrust
+# and roll in a 2.8 Hz cycle that runs through its own previous-action input (freezing that
+# input stops it) and costs almost nothing: a few cm of error, and the step-to-step
+# action_rate term weights 2 Hz by only ~0.016. Raising action_rate to 1.0 (run
+# 20261022-201654) collapsed the exploration noise (0.02 by the end) and left the cycle.
+# So action_rate stays at v3's 0.15 and the swing itself is charged: thrust 1.0 times
+# |thrust / weight - 1| (the run-1 cycle costs ~0.27 per step) and ang_vel 0.1 (was 0.01).
 #   python -m training.launch --config training/configs/structure_hold_ppo_v5.yaml --smoke --device cpu
 # 1000 iterations per run (1500 would pass the 1 h rule on 4 CPU cores); continued with
 # structure_hold_ppo_v5_resume.yaml from the selected checkpoint if the first run is still improving.
@@ -25,7 +29,8 @@ params:
   env:
     airframe: gz_x500
     reward:
-      action_rate: 1.0  # squared change of the normalised action per step
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
     # Rate-setpoint lag up to 30 ms (the module tick and the next gyro sample), drawn per
     # episode; the x500's own rate loop is in the preset.
     rate_lag_s: [0.0, 0.03]

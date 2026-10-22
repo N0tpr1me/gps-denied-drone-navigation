@@ -40,6 +40,11 @@ class RewardWeights:
     # default: two runs with 0.3 did not reduce crashes (docs/decisions.md, 2026-10-22).
     stale_vel: float = 0.0  # times true speed clipped at 5 m/s, only while stale
     ang_vel: float = 0.01  # times body rate norm clipped at 10 rad/s
+    # Collective thrust away from the weight: |thrust / (m g) - 1| clipped at 1. Off by
+    # default. A 2 to 3 Hz thrust cycle around hover moves the drone only centimetres, so the
+    # position term barely sees it and the step-to-step action_rate term weights 2 Hz by
+    # (2 pi f dt)^2 ~ 0.016; this term charges the swing itself (docs/decisions.md 2026-10-22).
+    thrust: float = 0.0
     action: float = 0.02  # times squared normalised rate command
     # Smoothness: squared change in normalised action between steps. 0.15 (was 0.05) after
     # v2 chattered between the rate limits on PX4 (docs/decisions.md, 2026-10-22).

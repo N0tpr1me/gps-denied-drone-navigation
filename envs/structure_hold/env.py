@@ -329,6 +329,7 @@ class StructureHoldEnv:
             thrust = self.max_thrust_act * cfg.actuation.thrust_fraction(u)
         else:
             thrust = thrust * self.thrust_gain
+        thrust_n, weight_n = thrust, cfg.quad.mass * self.mass_scale * GRAVITY
         torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
@@ -387,6 +388,7 @@ class StructureHoldEnv:
             - w.toward_wall * toward
             - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
+            - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
             - w.tilt * over_tilt

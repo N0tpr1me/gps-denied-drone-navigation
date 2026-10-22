@@ -331,3 +331,23 @@ def test_term_reason_names_the_crash():
         if bool(done.all()):
             break
     assert [TERM_REASONS[int(r)] for r in env.term_reason] == ["ground", "ground"]
+
+
+@pytest.mark.parametrize("airframe", ["placeholder", "gz_x500"])
+def test_thrust_away_from_the_weight_costs_reward(airframe):
+    cfg = StructureHoldConfig.from_dict({
+        "airframe": airframe, "disturbance": {"mean_speed": [0.0, 0.0], "num_gusts": 0,
+                                              "turb_sigma": [0.0, 0.0]},
+        "start_offset_std_m": 0.0, "start_yaw_std_rad": 0.0,
+        "reward": {"thrust": 1.0, "action_rate": 0.0}})
+    env = StructureHoldEnv(cfg, num_envs=2, seed=0)
+    a = hover_action(env)
+    a[1, 3] = 1.0  # full collective in env 1
+    _, reward, *_ = env.step(a)
+    weight = cfg.quad.mass * 9.80665
+    # Env 0 sits at the hover point (cost ~0); env 1's thrust is way past twice the weight
+    # on the placeholder (cost clipped at 1) and 0.9 command on the x500.
+    full = min(1.0, env.max_thrust_act[1].item() * cfg.actuation.thrust_fraction(
+        torch.tensor(cfg.actuation.thrust_cmd_range[1])).item() / weight - 1.0
+    ) if env.thrust_via_module else min(1.0, cfg.quad.max_thrust / weight - 1.0)
+    assert reward[0] - reward[1] == pytest.approx(full, abs=0.05)
