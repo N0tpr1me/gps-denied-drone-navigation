@@ -18,9 +18,25 @@ to what shapes the module's input, per axis and batched on tensors:
   horizon, pulled toward it with time constant ``output_tau_s`` (``EKF2_TAU_POS`` /
   ``EKF2_TAU_VEL``).
 
-Not modelled: attitude and bias states, height and position resets (the gate and the
-covariance growth during a dropout let a returning fix back in instead). Off by default;
-the ``gz_x500_sitl`` airframe turns it on (docs/decisions.md 2026-10-23).
+With ``resets`` on, EKF2 v1.17's vision resets (``ev_pos_control.cpp``, ``ev_vel_control.cpp``,
+``ev_height_control.cpp``, ``ev_control.cpp``; vision is the only horizontal aiding and the
+height reference), which put an estimate jump in front of the module as a step:
+
+- fixes stop for more than ``stop_after_s`` (2 x ``EV_MAX_INTERVAL``): fusion stops, and the
+  first fix after it resets velocity, position and height to the fix;
+- horizontal position fixes rejected for ``hpos_reset_after_s`` (``no_aid_timeout_max``,
+  1 s): horizontal position reset to the fix; the same for velocity;
+- height fixes rejected for ``hgt_reset_after_s`` (``hgt_fusion_timeout_max``, 5 s): height
+  fusion stops and restarts on the next fix with a height reset.
+
+A reset moves the delayed state to the fix and shifts the output predictor by the same
+amount, so the module sees the whole step at once. Horizontal fixes are fused or rejected as
+a pair, as in EKF2.
+
+Not modelled: attitude and bias states, baro (which would keep aiding the height), EKF2's
+limit of five horizontal resets per fusion start (after it, EKF2 stops and restarts the
+fusion, which resets anyway). Off by default; the ``gz_x500_sitl`` airframe turns it on
+(docs/decisions.md 2026-10-23).
 """
 
 from __future__ import annotations
@@ -42,10 +58,14 @@ class FusionConfig:
     accel_noise_mps2: float = 0.35  # EKF2_ACC_NOISE
     imu_noise_mps2: float = 0.05  # white noise on the true acceleration
     output_tau_s: float = 0.25  # EKF2_TAU_POS, EKF2_TAU_VEL
+    resets: bool = False  # EKF2's resets to the fix (module docstring)
+    stop_after_s: float = 0.4  # 2 x EV_MAX_INTERVAL
+    hpos_reset_after_s: float = 1.0  # no_aid_timeout_max
+    hgt_reset_after_s: float = 5.0  # hgt_fusion_timeout_max
 
     def __post_init__(self) -> None:
         for name in ("vision_rate_hz", "pos_noise_m", "vel_noise_mps", "gate_sd",
-                     "output_tau_s"):
+                     "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"fusion {name} must be positive")
         for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2"):
@@ -79,6 +99,12 @@ class TorchFusion:
         self.p_o, self.v_o = z(n, 3), z(n, 3)  # output predictor (now)
         self.hist_p, self.hist_v = z(k, n, 3), z(k, n, 3)  # output states, oldest first
         self.acc = z(k, n, 3)  # IMU samples, oldest first
+        # Resets: time without a fix, since the last fused horizontal position, height and
+        # horizontal velocity, and whether fusion has stopped for want of fixes.
+        self.no_fix_s = z(n)
+        self.since_fuse = z(n, 3)  # [horizontal position, height, horizontal velocity]
+        self.stopped = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.resets = 0  # count, for tests and diagnostics
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
     def reset(self, env_ids: Any, pos: torch.Tensor, vel: torch.Tensor) -> None:
@@ -90,11 +116,18 @@ class TorchFusion:
         self.hist_p[:, ids] = pos
         self.hist_v[:, ids] = vel
         self.acc[:, ids] = 0.0
+        self.no_fix_s[ids] = 0.0
+        self.since_fuse[ids] = 0.0
+        self.stopped[ids] = False
 
-    def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor) -> None:
-        """One scalar-per-axis measurement of position (``h_pos``) or velocity."""
+    def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor) -> torch.Tensor:
+        """One scalar-per-axis measurement of position (``h_pos``) or velocity; returns which
+        axes were fused. With ``resets`` the horizontal pair passes or fails the gate together."""
         S = (self.P11 if h_pos else self.P22) + var
         ok = ok & (y * y < self.cfg.gate_sd ** 2 * S)
+        if self.cfg.resets:
+            both = ok[:, 0] & ok[:, 1]
+            ok = torch.stack([both, both, ok[:, 2]], dim=1)
         if h_pos:
             K1, K2 = self.P11 / S, self.P12 / S
             P11, P12, P22 = (1 - K1) * self.P11, (1 - K1) * self.P12, self.P22 - K2 * self.P12
@@ -106,6 +139,27 @@ class TorchFusion:
         self.P11 = torch.where(ok, P11, self.P11)
         self.P12 = torch.where(ok, P12, self.P12)
         self.P22 = torch.where(ok, P22, self.P22)
+        return ok
+
+    def _reset_to(self, mask: torch.Tensor, fix_pos: torch.Tensor | None,
+                  fix_vel: torch.Tensor | None) -> None:
+        """Reset the masked (N, 3) components of the delayed state to the fix, and shift the
+        output predictor by the same step."""
+        cfg = self.cfg
+        if fix_pos is not None:
+            step = torch.where(mask, fix_pos - self.p_d, torch.zeros_like(self.p_d))
+            self.p_d = self.p_d + step
+            self.p_o, self.hist_p = self.p_o + step, self.hist_p + step
+            self.P11 = torch.where(mask, torch.full_like(self.P11, cfg.pos_noise_m ** 2), self.P11)
+            self.P12 = torch.where(mask, torch.zeros_like(self.P12), self.P12)
+        if fix_vel is not None:
+            step = torch.where(mask, fix_vel - self.v_d, torch.zeros_like(self.v_d))
+            self.v_d = self.v_d + step
+            self.v_o, self.hist_v = self.v_o + step, self.hist_v + step
+            var = torch.full_like(self.P22, cfg.vel_noise_mps ** 2)
+            self.P22 = torch.where(mask, var, self.P22)
+            self.P12 = torch.where(mask, torch.zeros_like(self.P12), self.P12)
+        self.resets += int(mask.any(dim=1).sum())
 
     def step(self, accel: torch.Tensor, fix_pos: torch.Tensor, fix_vel: torch.Tensor,
              fresh: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -123,11 +177,37 @@ class TorchFusion:
         P12 = self.P12 + dt * self.P22 + q * dt ** 3 / 2
         self.P11, self.P12, self.P22 = P11, P12, self.P22 + q * dt * dt
         self.clock += dt
+        if cfg.resets:
+            self.no_fix_s = torch.where(fresh, torch.zeros_like(self.no_fix_s), self.no_fix_s + dt)
+            self.stopped = self.stopped | (self.no_fix_s > cfg.stop_after_s)
+            self.since_fuse = self.since_fuse + dt
         if self.clock >= self.period - 1e-9:
             self.clock -= self.period
             ok = fresh[:, None].expand(self.n, 3)
-            self._fuse(fix_pos - self.p_d, cfg.pos_noise_m ** 2, True, ok)
-            self._fuse(fix_vel - self.v_d, cfg.vel_noise_mps ** 2, False, ok)
+            if cfg.resets:
+                # The first fix after fusion stopped restarts it with a full reset.
+                start = (self.stopped & fresh)[:, None].expand(self.n, 3)
+                self._reset_to(start, fix_pos, fix_vel)
+                self.since_fuse = torch.where(start[:, :1].expand(self.n, 3),
+                                              torch.zeros_like(self.since_fuse), self.since_fuse)
+                self.stopped = self.stopped & ~fresh
+                ok = ok & ~start
+            fused_p = self._fuse(fix_pos - self.p_d, cfg.pos_noise_m ** 2, True, ok)
+            fused_v = self._fuse(fix_vel - self.v_d, cfg.vel_noise_mps ** 2, False, ok)
+            if cfg.resets:
+                fused = torch.stack([fused_p[:, 0], fused_p[:, 2], fused_v[:, 0]], dim=1)
+                self.since_fuse = torch.where(fused, torch.zeros_like(self.since_fuse),
+                                              self.since_fuse)
+                # Rejected for too long while fixes keep coming: reset to the fix.
+                live = fresh & ~self.stopped
+                hpos = live & (self.since_fuse[:, 0] > cfg.hpos_reset_after_s)
+                hgt = live & (self.since_fuse[:, 1] > cfg.hgt_reset_after_s)
+                hvel = live & (self.since_fuse[:, 2] > cfg.hpos_reset_after_s)
+                xy = torch.tensor([True, True, False], device=self.device)
+                self._reset_to(hpos[:, None] & xy | hgt[:, None] & ~xy, fix_pos, None)
+                self._reset_to(hvel[:, None].expand(self.n, 3), None, fix_vel)
+                for col, m in enumerate((hpos, hgt, hvel)):
+                    self.since_fuse[:, col] = torch.where(m, 0.0, self.since_fuse[:, col])
         # Output predictor: propagate with the current IMU sample, then pull the whole
         # buffer toward the delayed-horizon state.
         self.v_o = self.v_o + accel * dt
