@@ -1,22 +1,24 @@
 # The Gazebo-like check (eval/gazebo_check.py, docs/gazebo_check.md): fly policies in the
 # mock the way the Gazebo benchmark flies them, on the gz_x500_sitl airframe (PX4's yaw torque
-# and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion).
-# A policy goes to the Mac for a Gazebo re-fly only if it beats v6 here.
+# and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion
+# with its resets). A policy goes to the Mac for a Gazebo re-fly only if it beats the
+# released policy (v9) here.
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
-# To judge a new policy, add it under controllers (v6 stays as the reference).
+# To judge a new policy, add it under controllers (v9 stays as the reference; v6 is here for
+# the check's fidelity, Gazebo has flown both).
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
-expected_hours: 0.5
+expected_hours: 0.6
 gpus: 1
 params:
   controllers:
     - name: v6
       policy: training/policies/structure_hold_v6.onnx
-    - name: v8
-      policy: training/policies/structure_hold_v8.onnx
-  reference: v6
+    - name: v9
+      policy: training/policies/structure_hold_v9.onnx
+  reference: v9  # the released policy, flown in Gazebo (PR #42); v6 was the reference before
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 64
   window_s: 40.0  # lift and wobble over the last 40 s (the first 20 s hold the engage transient)

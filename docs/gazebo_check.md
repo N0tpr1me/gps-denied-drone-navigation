@@ -5,10 +5,11 @@ than v6 in Gazebo. The mock had none of what made them fail there. This page say
 was, how the mock now models it, and the check a new policy must pass in the mock before it
 goes to the Mac for a Gazebo re-fly (`docs/decisions.md`, 2026-10-23).
 
-    python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~15 min
+    python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~25 min
 
-To judge a new policy, add it under `params.controllers` in that config (keep v6, the
-reference) and run it. The verdict is in the run's `report.md` and `summary.json`.
+To judge a new policy, add it under `params.controllers` in that config (keep v9, the
+reference: the released policy) and run it. The verdict is in the run's `report.md` and
+`summary.json`.
 
 ## What Gazebo showed
 
@@ -48,6 +49,13 @@ them on:
 | fix below the CG | config `vision_offset_down_m` | 0.24 m |
 | EKF2-like fusion | `envs/estimate/ekf.py`, config `fusion` | the bridge's `ekf2_ev.params` |
 | the policy's rate input | `envs/structure_hold/env.py` `_observe` | the filtered gyro, one tick old |
+| EKF2's resets to the fix | `envs/estimate/ekf.py` `FusionConfig.resets` | from 2026-10-23 06:30 |
+
+EKF2 v1.17 does not only gate a fix that jumps: a horizontal fix rejected for more than 1 s,
+a height rejected for more than 5 s, or the first fix after a gap of more than 0.4 s
+(fusion stopped) each reset the estimate onto the fix in one step. The fusion first had only
+the gate, so a jump in the mock was held off for good while in Gazebo it arrived a second
+later as a step. With the resets the check's p95 sits closer to Gazebo's (next section).
 
 The last row is a calibration. The mock has no actuator or transport latency, which SITL
 has; giving the policy the filtered gyro as the rate loop last read it (12 ms old) stands in
@@ -63,9 +71,11 @@ raw fix and the lever arm) the policies crashed or wobbled throughout.
 
 `eval/gazebo_check.py` flies each controller on `gz_x500_sitl` the way the benchmark flies
 in Gazebo: 60 s, 1 m from the wall, the hold point 2.4 m up, the engage at the hold point.
-Four cells: calm air on a clean estimate, and calm, 4 m/s and 8 m/s on `vio_default` with the
-`wall1m_*` scenarios' gusts and turbulence (the mock draws the wind direction; Gazebo blows
-into the wall). Seeds 7001 and 7002, 64 episodes each, so 128 per cell and controller.
+Five cells: calm air on a clean estimate, and calm, 4 m/s and 8 m/s on `vio_default` with the
+`wall1m_*` scenarios' gusts and turbulence, the wind from any direction, plus 8 m/s with the
+mean wind blowing into the wall as Gazebo blows it (`wind8_wall`, from 2026-10-23 07:00;
+see "The 8 m/s drift" below). Seeds 7001 and 7002, 64 episodes each, so 128 per cell and
+controller.
 
 Per episode, over the last 40 s (the first 20 s hold the engage transient):
 
@@ -74,53 +84,101 @@ Per episode, over the last 40 s (the first 20 s hold the engage transient):
   wobbling flights sit at 0.22 to 0.35, the quiet ones at 0.003 to 0.06;
 - **p95** over the whole episode on the true centre of mass (`eval/metrics.py`), and crashes.
 
-A policy **passes** (beats v6) when, pooled over the three rough cells:
+A policy **passes** (beats the reference, the released policy: v6 until v9's Gazebo flights,
+v9 since) when, pooled over the rough cells:
 
-1. its mean p95 is lower than v6's (paired bootstrap 95 % interval of the ratio below 1);
-2. its lift is no higher than v6's;
-3. its wobble rate is no higher than v6's;
-4. its crash rate is at most 1 point above v6's;
+1. its mean p95 is lower than the reference's (paired bootstrap 95 % interval of the ratio
+   below 1);
+2. its lift is no higher than the reference's;
+3. its wobble rate is no higher than the reference's;
+4. its crash rate is at most 1 point above the reference's;
 
-and on the clean cell its p95 is within 0.02 m of v6's. Only a policy that passes goes to
-the Mac. The report prints Gazebo's own numbers for v6 and v8 beside the mock's, so the
-check's fidelity stays in view; when a new policy flies in Gazebo, add its numbers under
-`gazebo` in the config.
+and on the clean cell its p95 is within 0.02 m of the reference's. Only a policy that passes
+goes to the Mac. The report prints Gazebo's own numbers for v6, v8 and v9 beside the mock's,
+so the check's fidelity stays in view; when a new policy flies in Gazebo, add its numbers
+under `gazebo` in the config.
 
 ## How well it predicts Gazebo
 
-Run `20261023-044747_gazebo_check_s7001_1a8b463` (12 min on 4 CPU cores), against what v6
-and v8 did in Gazebo (PR #35, PR #37; Gazebo's lift and wobble re-measured from the traces on
-this check's definitions):
+Run `20261023-063008_gazebo_check_resets` (the four cells before `wind8_wall`, with EKF2's
+resets; 26 min on 4 CPU cores), against what v6, v8 and v9 did in Gazebo (PR #35, PR #37,
+PR #42; Gazebo's lift and wobble re-measured from the traces on this check's definitions).
+The mock's 4 and 8 m/s winds here come from any direction; Gazebo's blow into the wall.
 
 | cell | controller | mock p95 (m) | mock lift (m) | mock wobble | Gazebo p95 / lift / wobble |
 | --- | --- | --- | --- | --- | --- |
 | calm, clean | v6 | 0.08 | +0.02 | 0 % | 0.11 / +0.04 / 0 of 1 |
 | calm, clean | v8 | 0.19 | +0.09 | 20 % | 0.11 / -0.01 / 0 of 1 |
-| calm | v6 | 0.49 | +0.17 | 63 % | 0.62 / +0.21 / 2 of 3 |
-| calm | v8 | 0.68 | +0.49 | 95 % | 0.67 / +0.39 / 3 of 3 |
-| 4 m/s | v6 | 0.50 | +0.17 | 61 % | 0.64 / +0.23 / 2 of 3 |
-| 4 m/s | v8 | 0.68 | +0.48 | 94 % | 0.68 / +0.41 / 3 of 3 |
-| 8 m/s | v6 | 0.60 | +0.19 | 70 % | 0.68 / +0.32 / 2 of 3 |
-| 8 m/s | v8 | 0.69 | +0.44 | 91 % | 0.79 / +0.48 / 3 of 3 |
+| calm, clean | v9 | 0.08 | +0.02 | 0 % | 0.08 / +0.04 / 0 of 1 |
+| calm | v6 | 0.58 | +0.18 | 65 % | 0.62 / +0.21 / 2 of 3 |
+| calm | v8 | 0.71 | +0.49 | 95 % | 0.67 / +0.39 / 3 of 3 |
+| calm | v9 | 0.42 | +0.05 | 0 % | 0.44 / +0.06 / 0 of 3 |
+| 4 m/s | v6 | 0.60 | +0.18 | 59 % | 0.64 / +0.23 / 2 of 3 |
+| 4 m/s | v8 | 0.73 | +0.47 | 93 % | 0.68 / +0.41 / 3 of 3 |
+| 4 m/s | v9 | 0.44 | +0.05 | 0 % | 0.49 / +0.07 / 0 of 3 |
+| 8 m/s | v6 | 0.64 | +0.20 | 69 % | 0.68 / +0.32 / 2 of 3 |
+| 8 m/s | v8 | 0.72 | +0.45 | 94 % | 0.79 / +0.48 / 3 of 3 |
+| 8 m/s | v9 | 0.46 | +0.05 | 0 % | 0.64 / +0.06 / 0 of 3 |
 
-Pooled over the rough cells the mock has v6 at +0.18 m and 65 % wobbling, v8 at +0.47 m and
-93 %, v8's p95 29 % worse than v6's: v8 does not beat v6, which is what Gazebo said (+0.26 m
-and 6 of 9, +0.43 m and 9 of 9, p95 10 % worse). On the old mock (Gate 1) v8 beat v6.
+Pooled over the rough cells:
+
+| controller | mock p95 / lift / wobble | Gazebo p95 / lift / wobble |
+| --- | --- | --- |
+| v6 | 0.61 m / +0.19 m / 64 % | 0.65 m / +0.26 m / 6 of 9 |
+| v8 | 0.72 m / +0.47 m / 94 % | 0.71 m / +0.43 m / 9 of 9 |
+| v9 | 0.44 m / +0.05 m / 0 % | 0.52 m / +0.06 m / 0 of 9 |
+
+The mock ranks the three as Gazebo does (v9, then v6, then v8) and gets v9's lift and the
+absence of any wobble right. Before the resets (run `20261023-044747`, v6 and v8 only) the
+p95s were 0.53 and 0.68 and v8's penalty over v6 29 %; with them 0.61 and 0.72 and 19 %,
+against Gazebo's 10 %.
 
 Where it is off:
 
-- The mock exaggerates v8's p95 penalty (29 % against 10 %) and under-states v6's lift at
-  8 m/s (+0.19 m against +0.32 m). It ranks them right; the margins are approximate.
+- v9's 8 m/s: 0.46 m against 0.64. One of v9's three 8 m/s Gazebo flights drifted 1 m off
+  the hold point; with the wind from any direction the mock rarely shows that. With the wind
+  into the wall it does (next section), hence the `wind8_wall` cell.
 - The mock's truth is the centre of mass; Gazebo's is the model frame 0.18 to 0.24 m below
-  it, which swings in a wobble: probably one reason Gazebo's p95 runs 0.03 to 0.15 m above
-  the mock's.
-- The mock draws the wind direction; Gazebo blows into the wall. v6 crashed in 4.7 % of the
-  8 m/s episodes (none in Gazebo's three); the check judges crashes only against v6.
+  it, which swings in a wobble: one reason Gazebo's p95 runs a few centimetres above the
+  mock's.
+- Crashes: v6 crashed in 4.2 % of the mock's rough episodes, v9 in 1.3 %; none of the 27
+  Gazebo flights did. The check judges crashes only against the reference.
 - v8 wobbled in 20 % of the clean episodes; its one clean Gazebo flight did not. One flight
   cannot tell those apart.
 
 Each new Gazebo flight is a test of the check: put its numbers under `gazebo` in the config
 and see whether the mock still ranks the policies the way Gazebo does.
+
+## The 8 m/s drift (v9)
+
+In one of v9's three 8 m/s Gazebo flights (`wall1m_wind_8ms`, seed 2) the drone slid away
+from the wall and along it, from about 18 s into the hover to 1.0 m off the hold point at
+44 s, at a few centimetres per second, then came back within 6 s after a 2 s dropout. The
+estimate followed the truth all along (position within 0.05 m, velocity within 0.01 m/s)
+and the module's position error showed the whole offset: the policy saw it and did not
+correct it. Nothing tripped, nothing saturated, the lean held steady at about 2.5 degrees
+against the wind.
+
+The mock does the same, on a clean estimate and without turbulence or gusts, as soon as the mean
+wind blows into the wall (60 s, 8 episodes per row, `gz_x500_sitl`; a probe outside the
+check, the turbulence of the 8 m/s scenario does not change it: 1.06 m and 0.45 m):
+
+| policy | wind | largest offset (m) | mean offset, last 10 s (m) |
+| --- | --- | --- | --- |
+| v9 | 8 m/s into the wall | 1.08 | 0.58 |
+| v9 | 8 m/s along the wall, either way | 0.08 to 0.14 | 0.02 to 0.11 |
+| v9 | 8 m/s away from the wall | 0.06 | 0.02 |
+| v9 | 4, 6, 10, 12 m/s into the wall | 0.85, 1.10, 1.03, 0.84 | 0.25, 0.75, 0.39, 0.23 |
+| v6 | 8, 10, 12 m/s into the wall | 0.15, 0.18, 0.25 | 0.03, 0.10, 0.15 |
+
+The mock's lean at 8 m/s is 2.3 degrees, Gazebo's 2.2 to 3.7, so the wind force matches. v9's
+training could not see this: 20 s episodes, the drift takes 20 to 40 s to grow, and the wind
+blows into the wall in only a fraction of episodes. Gazebo's other two 8 m/s flights and its
+4 m/s flights did not drift within 60 s; the mock's drift is stronger than Gazebo's.
+
+Every policy so far also holds its heading about 11 degrees (0.2 rad) off the wall normal,
+in Gazebo and in the mock alike: a trait of the policy, not a gap in the mock. The heading
+penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
 
 ## Policies judged
 
@@ -128,4 +186,4 @@ and see whether the mock still ranks the policies the way Gazebo does.
 | --- | --- | --- | --- | --- |
 | v6 | reference | 0.53 m / +0.18 m / 65 % | reference | 0.65 m / +0.26 m / 6 of 9 |
 | v8 | `20261023-044747` | 0.68 m / +0.47 m / 93 % | does not beat v6 | 0.71 m / +0.43 m / 9 of 9 |
-| v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | re-fly pending |
+| v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | 0.52 m / +0.06 m / 0 of 9; 8 m/s drift in 1 of 3 (PR #42) |

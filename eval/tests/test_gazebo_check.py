@@ -58,6 +58,7 @@ def test_smoke_run_writes_report(tmp_path):
     assert out.returncode == 0, out.stdout + out.stderr
     (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
     report = json.loads((run_dir / "report.json").read_text())
-    assert [c["name"] for c in report["cells"]] == ["calm_clean", "calm", "wind4", "wind8"]
-    assert "beats" in report["verdicts"]["v8"]
+    assert [c["name"] for c in report["cells"]] == ["calm_clean", "calm", "wind4", "wind8",
+                                                    "wind8_wall"]
+    assert report["reference"] == "v9" and "beats" in report["verdicts"]["v6"]
     assert "| cell | controller |" in (run_dir / "report.md").read_text()

@@ -23,7 +23,8 @@ every step.
 | `vel` | `(N, 3)` | m/s, world ENU |
 | `wall_point`, `wall_normal` | `(3,)` or `(N, 3)` | a point on the surface, and the normal pointing into the free air (minus the structure frame's x) |
 
-What it models: mean wind, gust steps at scheduled times, turbulence (seeded, exact
+What it models: mean wind (from any direction, or a range of headings with
+`mean_heading_deg`, 0 blowing along +x: into the wall in the structure hold env), gust steps at scheduled times, turbulence (seeded, exact
 standard deviation, Gauss-Markov correlation time), shelter near one flat surface, and
 linear plus quadratic drag on the air velocity relative to the drone. The force includes
 drag from the drone's own motion, so the simulator must not add translational drag of its

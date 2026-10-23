@@ -244,3 +244,27 @@ vertical offset), but on the corrupted-estimate benchmark it sat 0.42 m above it
 0.79 m against v6's 0.62 / 0.64 / 0.68. The module stays on v6. This is the second time a
 mock gain did not carry over, so a mock score is no longer enough to release: the mock first
 has to reproduce the rough-estimate failure (`docs/decisions.md`, 2026-10-23).
+
+### On the x500: v9, run `20261023-060333`
+
+v9 is v6 continued for 1000 iterations on `gz_x500_sitl`, the mock that reproduces Gazebo
+(`docs/gazebo_check.md`); it beat v6 there and in Gazebo (PR #42: p95 0.44 / 0.49 / 0.65 m
+against tuned PX4's 0.57). On this test set, scored on the same episodes as v6 above, it
+fails:
+
+| Cell | p95: v9 / v6 / PD (m) | Crash: v9 / v6 / PD | v9 verdict |
+| --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.56 / 0.47 / 0.48 | 17.5 / 1.5 / 9.4 % | fail |
+| 0 m/s, 2 m | 0.64 / 0.48 / 0.52 | 12.8 / 0.8 / 2.4 % | fail |
+| 4 m/s, 1 m | 0.56 / 0.50 / 0.49 | 15.4 / 1.6 / 8.7 % | fail |
+| 4 m/s, 2 m | 0.63 / 0.49 / 0.54 | 12.2 / 0.8 / 2.4 % | fail |
+| 8 m/s, 1 m (headline) | 0.56 / 0.52 / 0.51 | 15.9 / 2.1 / 8.9 % | fail |
+| 8 m/s, 2 m | 0.70 / 0.57 / 0.60 | 12.7 / 1.6 / 2.1 % | fail |
+
+Pooled: p95 0.61 / 0.50 / 0.52 m, crashes 14.4 / 1.4 / 5.7 %. Three quarters of the crashes
+are wall contacts, and they follow the raw estimate jumps: this test set's x500 has no EKF, so a 2 m jump reaches the policy as a 2 m
+step, where v9 trained (and Gazebo flies) behind EKF2, which gates a jump and later resets
+onto it. The test set is still the one Gate 1 is judged on, so v9 does not pass Gate 1; on
+the PX4 stack, where the estimate comes through EKF2, it is the better policy. The next
+policy trains with EKF2's resets in the loop (`envs/estimate/ekf.py`), so it sees jumps as
+steps again.
