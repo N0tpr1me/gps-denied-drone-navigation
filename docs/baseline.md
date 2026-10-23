@@ -751,3 +751,98 @@ the structure (a rangefinder with PX4 Collision Prevention, or the camera's dept
 wall), logged in `docs/real-flight-gap.md`. The verdict stands: v10 stays, v11 comes back
 with the ring and the yaw error fixed, and seed 3's post-hold sequence is compared only on
 a matched timeline.
+
+## Structure Hold v12 vs v10 vs tuned PX4 (matched fault timeline)
+
+The first comparison on a fault schedule shared by every controller. Flown 2026-10-23 on
+the Mac (Docker arm64, image rebuilt for each policy), wall1m_*, seeds 1–3, tuned_v1 params
+under both policies and the stock controller:
+
+- **A, v12**, batch `20261023-154026_px4_baseline_structure_hold_v12_d701b87`, image with
+  `NAME structure_hold_v12` (checked in the built `px4` binary), `SH_RST_HOLD` default 0:
+  `python -m eval.baselines.run_baseline --runner hold --label structure_hold_v12 --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 -- --profile vio_at_engage`
+- **B, v10**, batch `20261023-160114_px4_baseline_structure_hold_v10_fe4667c`: the same
+  command with `--label structure_hold_v10`, on an image rebuilt with the v10 headers from
+  `main` (`NAME structure_hold_v10` in the binary). `fe4667c` is the scoring fix below before
+  it was rebased onto `df68ebc` (`a5d7714`); the flown code is the same.
+- **C, tuned PX4**, batch `20261023-162007_px4_baseline_tuned_v1_at_hover_a5d7714`:
+  `python -m eval.baselines.run_baseline --label tuned_v1_at_hover --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 -- --profile vio_at_hover`.
+  `vio_at_engage` cannot serve the stock runner: its fault clock starts at the first
+  Structure Hold engage, which stock PX4 never makes, so the flight would see no jump or
+  dropout at all. `vio_at_hover` (`df68ebc`) starts the same schedule at 25 s when the
+  vehicle first reaches the hover altitude minus 0.3 m (2.20 m here), which is at the start
+  of the scored hover window, a few seconds earlier in the flight than the policies' engage.
+
+All 27 flights: the bridge log prints the anchor line ("fault clock anchored at 25.0 s";
+for C, "height 2.20 m reached at t=29.7–30.1 s"), `estimate_verify.json` ok (fault anchor
+`engage` for A and B, `altitude` for C) and `wind_verify.json` ok.
+
+**Scoring fix (`a5d7714`).** The first tabulation of batch A scored all nine flights as
+crashes with no contact and 0.69 m or more of clearance: `row_from_summary` looked for the
+scored window only in `metrics.window_s`, where the stock runner's summary keeps it, while
+`hold_summary.json` keeps it in `hold.window_s`, so every hold-runner flight had no window
+and failed the full-hold test added in `2959ebf`. Batch A was re-tabulated from its run
+folders with the fix (the old files are kept as `*.misscored.*`); B and C were scored
+with it.
+
+Mean over seeds, worst in brackets:
+
+| scenario | p95 m, tuned / v10 / **v12** | worst toward wall m, tuned / v10 / **v12** | rms m, tuned / v10 / **v12** | crashes | post-hold fail |
+|---|---|---|---|---|---|
+| calm 0 m/s | 0.522 (0.913) / 0.329 (0.396) / **0.345 (0.406)** | 0.229 (0.417) / 0.075 (0.184) / **0.149 (0.272)** | 0.221 / 0.173 / **0.167** | 0 / 0 / 0 of 3 | 0 / 0 / 0 of 3 |
+| 4 m/s | 0.523 (0.914) / 0.327 (0.410) / **0.347 (0.423)** | 0.220 (0.405) / 0.069 (0.172) / **0.152 (0.283)** | 0.221 / 0.176 / **0.167** | 0 / 0 / 0 of 3 | 0 / 0 / 0 of 3 |
+| 8 m/s | 0.524 (0.918) / 0.345 (0.475) / **0.353 (0.442)** | 0.218 (0.387) / 0.080 (0.166) / **0.177 (0.312)** | 0.221 / 0.185 / **0.164** | 0 / 0 / 0 of 3 | 0 / 0 / 0 of 3 |
+
+Against tuned PX4, mean p95: v12 −34 / −34 / −33 %, v10 −37 / −38 / −34 %. v12 against v10:
+p95 +5 / +6 / +2 %, rms −3 / −5 / −11 %, worst toward wall +98 / +122 / +121 %.
+
+Per seed (p95 / rms / worst toward wall / min clearance, m; no flight had a contact):
+
+| cell | tuned PX4 | v10 | **v12** |
+|---|---|---|---|
+| calm, seed 1 | 0.913 / 0.364 / 0.262 / 0.881 | 0.396 / 0.217 / 0.042 / 0.966 | **0.406 / 0.182 / 0.272 / 0.736** |
+| calm, seed 2 | 0.301 / 0.140 / 0.008 / 0.974 | 0.307 / 0.152 / 0.000 / 0.999 | **0.334 / 0.179 / 0.000 / 1.025** |
+| calm, seed 3 | 0.353 / 0.159 / 0.417 / 0.571 | 0.282 / 0.149 / 0.184 / 0.805 | **0.294 / 0.141 / 0.174 / 0.819** |
+| 4 m/s, seed 1 | 0.914 / 0.366 / 0.247 / 0.851 | 0.410 / 0.221 / 0.034 / 0.972 | **0.423 / 0.189 / 0.283 / 0.726** |
+| 4 m/s, seed 2 | 0.302 / 0.139 / 0.008 / 0.973 | 0.313 / 0.156 / 0.000 / 1.003 | **0.328 / 0.171 / 0.000 / 1.009** |
+| 4 m/s, seed 3 | 0.353 / 0.158 / 0.405 / 0.583 | 0.257 / 0.152 / 0.172 / 0.822 | **0.289 / 0.140 / 0.175 / 0.824** |
+| 8 m/s, seed 1 | 0.918 / 0.365 / 0.259 / 0.885 | 0.475 / 0.242 / 0.074 / 0.931 | **0.442 / 0.196 / 0.312 / 0.691** |
+| 8 m/s, seed 2 | 0.305 / 0.139 / 0.007 / 0.973 | 0.319 / 0.160 / 0.000 / 1.002 | **0.323 / 0.162 / 0.010 / 0.996** |
+| 8 m/s, seed 3 | 0.350 / 0.159 / 0.387 / 0.602 | 0.242 / 0.153 / 0.166 / 0.838 | **0.293 / 0.134 / 0.208 / 0.801** |
+
+Offsets and ring, from the ulogs over the scored window (A and B). Offset up is the mean z
+minus the hold point's z; the hold point is captured on the EKF estimate, so the estimate's
+offset is the controller's own and the truth's adds the estimate's bias for the seed. Ring
+is the 1.2–2.2 Hz rms of the measured roll rate (`vehicle_angular_velocity`, the band of
+`eval/gazebo_check.band_rms`):
+
+| | v10 | v12 |
+|---|---|---|
+| offset up on the estimate, mean (range) | +0.040 m (+0.030 to +0.050) | −0.024 m (−0.037 to +0.001) |
+| offset up on the truth, mean (range) | +0.066 m (−0.033 to +0.180) | +0.001 m (−0.111 to +0.134) |
+| roll-rate 1.2–2.2 Hz rms, mean (range) | 0.035 rad/s (0.018 to 0.061) | 0.030 rad/s (0.012 to 0.054), lower in 7 of 9 |
+| roll-rate std, mean | 0.077 rad/s | 0.050 rad/s, lower in 9 of 9 |
+| roll-rate setpoint 1.2–2.2 Hz rms, mean | 0.032 rad/s | 0.029 rad/s |
+
+v12 sits below the hold point and v10 above it, as the Gazebo-like check said (lift −0.03 /
++0.04 m), and v12 rings less, the thing it was trained for. After the hold, every flight
+of every controller ran the rest of the sequence: `post_hold_fail` 0 of 9 for both
+policies, seed 3 included (on this timeline seed 3's big jump lands after the sequence's
+re-engage, not between the disengage and the re-engage as on `vio_default`). Wind barely
+moves any controller's numbers on these seeds; the estimate's faults set them.
+
+Two "failsafe in hover" flags in the tables are boundary artefacts, not failsafes
+(`failsafe_fraction` 0 in both): v10 8 m/s seed 1 has the commanded disengage to Position at
+89.08 s, exactly the window's end; tuned 8 m/s seed 3 (and its calm and 4 m/s twins) has the
+commanded Land 1.1 s before the window's end, just outside the 1.0 s allowance.
+
+Tuned PX4's mean is set by seed 1 (0.91 m p95 in every wind); on seed 2 it holds tighter
+than either policy (0.30 against 0.31–0.33 m), and on seed 3 it comes closest to the wall
+(0.57 m clearance).
+
+**Verdict proposal: v12 is not better than v10 on the hold p95.** v10's p95 is lower in 8 of
+9 cells (v12 wins only 8 m/s seed 1) and 2–6 % lower on the mean; three seeds cannot tell
+a difference that size from noise, but they do not show v12 ahead. v12 is better on rms,
+on the ring and on the vertical offset, and worse on worst toward the wall (seed 1: 0.27–
+0.31 m against 0.03–0.07 m). Both beat tuned PX4 by a third on p95 with no crash. The
+module stays on v10; the local SITL image was left on v10 to match `main`.
