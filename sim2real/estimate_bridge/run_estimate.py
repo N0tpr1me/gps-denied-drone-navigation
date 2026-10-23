@@ -36,7 +36,7 @@ import yaml
 
 from eval.metrics import Surface, compute_metrics
 from eval.ulog import read_ulog
-from sim2real.estimate_bridge.config import EstimateProfile, load_profile
+from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.params import read_params, to_environment
 from sim2real.estimate_bridge.ulog_checks import analyse, hover_window, load_topics
 from sim2real.estimate_bridge.verify_trace import verify as verify_estimate
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         sc = dataclasses.replace(sc, seed=args.scenario_seed)
     prof = load_profile(args.profile)
     if args.seed is not None:
-        prof = EstimateProfile(prof.name, args.seed, prof.divisor, prof.estimate)
+        prof = prof.with_seed(args.seed)
     px4_params = read_params(args.params)
     hover_s = args.hover_s if args.hover_s is not None else sc.hover.hover_s
     commit = git_commit()

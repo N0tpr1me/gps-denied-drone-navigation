@@ -55,6 +55,27 @@ PARAM_DEFINE_FLOAT(SH_WD_POS_ERR, 2.0f);
 PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
 
 /**
+ * Watchdog: entry hold-off after an estimator reset
+ *
+ * Structure Hold refuses to engage (commander keeps the current mode, or the module hands
+ * straight back if it was already switched in) for this long after EKF2 reset its
+ * horizontal position (vehicle_local_position.xy_reset_counter), because a hold point
+ * captured while the estimate settles after a reset is not where the vehicle is. Not
+ * latched: the mode becomes available again when the time has passed. A reset during a
+ * hold never trips the watchdog; the policy is trained on them. Off by default (0):
+ * stock PX4 captures the same settling estimate, so in the mock replay of the v11 seed 3
+ * sequence a 10 s hold-off moved the crashes into the stock phase without preventing
+ * them (docs/baseline.md, v11 section). An operator choice, not a fix.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_RST_HOLD, 0.0f);
+
+/**
  * Test hook: force a watchdog trip
  *
  * Set to 1 to trip the watchdog on the next tick (hands back to stock PX4). Clears

@@ -45,7 +45,7 @@ from envs.frames import ned_to_enu
 from eval.metrics import Surface, compute_metrics
 from eval.ulog import load_topics as load_trace_topics
 from eval.ulog import trace_from_topics
-from sim2real.estimate_bridge.config import EstimateProfile, load_profile
+from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.params import read_params, to_environment
 from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS
 from sim2real.estimate_bridge.ulog_checks import analyse
@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         sc = dataclasses.replace(sc, seed=args.scenario_seed)
     prof = load_profile(args.profile)
     if args.seed is not None:
-        prof = EstimateProfile(prof.name, args.seed, prof.divisor, prof.estimate)
+        prof = prof.with_seed(args.seed)
     px4_params = read_params(args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

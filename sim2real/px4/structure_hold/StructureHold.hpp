@@ -80,7 +80,7 @@ private:
 	// Flight
 	void engage(const vehicle_local_position_s &lpos);
 	void disengage(const char *why);
-	void handBack(structure_hold::Trip trip, bool xy_valid);
+	void handBack(structure_hold::Trip trip, bool xy_valid, bool latch = true);
 	void requestHandbackMode();
 	void handbackStep(const hrt_abstime now);
 	void controlStep(const hrt_abstime now);
@@ -144,6 +144,7 @@ private:
 	bool _odometry_seen{false};
 	uint32_t _last_loop_time_us{0};
 	uint8_t _trip_count{0};
+	structure_hold::Trip _last_trip{structure_hold::Trip::None};  // latched or not; cleared on disarm
 	uint8_t _handback_step{0};
 	bool _handback_xy_valid{true};
 	hrt_abstime _handback_request_us{0};
@@ -160,6 +161,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_EST_TO>) _param_wd_est_to,
 		(ParamFloat<px4::params::SH_WD_POS_ERR>) _param_wd_pos_err,
 		(ParamFloat<px4::params::SH_WD_TILT>) _param_wd_tilt,
+		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
 		(ParamFloat<px4::params::SH_P_POS>) _param_p_pos,
 		(ParamFloat<px4::params::SH_P_VEL>) _param_p_vel,
