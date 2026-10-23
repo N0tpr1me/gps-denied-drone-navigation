@@ -248,6 +248,8 @@ python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 \
 python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v10>/batch.json
 ```
 
+Result on 8 seeds (Gate 2): `docs/baseline.md`, "Gate 2 evidence: v10 vs tuned PX4 on 8 seeds".
+
 ## Frames
 
 PX4 boundary: NED world, FRD body, quaternion body → world (`docs/conventions.md`).
