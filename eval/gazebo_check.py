@@ -512,9 +512,9 @@ def markdown(report: dict[str, Any]) -> str:
         for name in names:
             d = c["controllers"][name]
             g = (gz.get(name) or {}).get(c["name"])
+            toward = f"{g['toward_m']:.2f}" if g and "toward_m" in g else "-"
             gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {g.get('lift_m', float('nan')):+.2f} / "
-                    f"{g.get('wobble', '-')} / {g.get('toward_m', float('nan')):.2f}"
-                    if g else "-")
+                    f"{g.get('wobble', '-')} / {toward}" if g else "-")
             lines.append(f"| {c['label']} | {name} | {d['crash_rate']:.1%} | "
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
                          f"{d['wobble_rate']:.0%} | {d['toward_wall_m_mean']:.3f} | {gtxt} |")
