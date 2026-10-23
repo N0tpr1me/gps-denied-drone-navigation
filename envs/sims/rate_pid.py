@@ -12,6 +12,19 @@ one unit) on the way out. As in PX4:
   the control allocator's saturation flags);
 - the integral term is clipped to ``±int_lim``.
 
+Two PX4 filters are optional (off by default, so every config written before them flies as
+it did):
+
+- ``gyro_cutoff_hz`` (``IMU_GYRO_CUTOFF``, 40 Hz in PX4 v1.17): the controller works on a
+  low-passed rate, exposed as ``RatePid.gyro`` because PX4's ``vehicle_angular_velocity``
+  is also what the onboard module observes. PX4's filter is second order; at the env's
+  83 to 100 Hz step that order cannot be represented (the cutoff sits at Nyquist), so this is
+  a first-order filter with about the same few milliseconds of delay at low frequency.
+- ``yaw_torque_cutoff_hz`` (``MC_YAW_TQ_CUTOFF``, 2 Hz in PX4 v1.17): a first-order filter on
+  the yaw torque setpoint after the PID (``MulticopterRateControl.cpp``, an ``AlphaFilter``).
+  It is why a yaw-rate command on the Gazebo x500 answers with gain 0.27 and 130 degrees of
+  lag at 1.6 Hz (docs/decisions.md 2026-10-23).
+
 Gains default to PX4 v1.14+ multicopter defaults. Batched: every state is ``(N, 3)``.
 """
 
@@ -33,6 +46,8 @@ class RatePidGains:
     ff: tuple[float, float, float] = (0.0, 0.0, 0.0)
     int_lim: tuple[float, float, float] = (0.30, 0.30, 0.30)
     d_cutoff_hz: float = 30.0  # IMU_DGYRO_CUTOFF; 0 disables the filter
+    gyro_cutoff_hz: float = 0.0  # IMU_GYRO_CUTOFF (PX4 40); 0: the controller sees true rates
+    yaw_torque_cutoff_hz: float = 0.0  # MC_YAW_TQ_CUTOFF (PX4 2); 0 disables the filter
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> RatePidGains:
@@ -71,6 +86,14 @@ class RatePid:
             self.alpha = 1.0 - math.exp(-2.0 * math.pi * gains.d_cutoff_hz * self.dt)
         else:
             self.alpha = 1.0
+
+        def alpha_filter(cutoff_hz: float) -> float:  # PX4 AlphaFilter: dt / (dt + 1 / (2 pi f))
+            return self.dt / (self.dt + 1.0 / (2.0 * math.pi * cutoff_hz)) if cutoff_hz > 0 else 1.0
+
+        self.gyro_alpha = alpha_filter(gains.gyro_cutoff_hz)
+        self.yaw_alpha = alpha_filter(gains.yaw_torque_cutoff_hz)
+        self.gyro = torch.zeros(num_envs, 3, dtype=dtype, device=dev)  # the rate PX4 measures
+        self.yaw_out = torch.zeros(num_envs, dtype=dtype, device=dev)  # filtered yaw torque
         self.integral = torch.zeros(num_envs, 3, dtype=dtype, device=dev)
         self.rate_filt = torch.zeros(num_envs, 3, dtype=dtype, device=dev)
         self.rate_prev = torch.zeros(num_envs, 3, dtype=dtype, device=dev)
@@ -80,16 +103,24 @@ class RatePid:
         ids = slice(None) if env_ids is None else env_ids
         self.integral[ids] = 0.0
         self.out_prev[ids] = 0.0
+        self.yaw_out[ids] = 0.0
         if rate is None:
             self.rate_filt[ids] = 0.0
             self.rate_prev[ids] = 0.0
+            self.gyro[ids] = 0.0
         else:
             r = torch.as_tensor(rate, dtype=self.rate_filt.dtype, device=self.rate_filt.device)
             self.rate_filt[ids] = r
             self.rate_prev[ids] = r
+            self.gyro[ids] = r
 
     def __call__(self, rate_sp: torch.Tensor, rate: torch.Tensor) -> torch.Tensor:
-        """Body torque (N, 3) in N m for a rate setpoint and measured rate (rad/s, body)."""
+        """Body torque (N, 3) in N m for a rate setpoint and the true body rate (rad/s)."""
+        if self.gyro_alpha < 1.0:
+            self.gyro = self.gyro + self.gyro_alpha * (rate - self.gyro)
+            rate = self.gyro
+        else:
+            self.gyro = rate
         err = rate_sp - rate
         self.rate_filt = self.rate_filt + self.alpha * (rate - self.rate_filt)
         d_rate = (self.rate_filt - self.rate_prev) / self.dt
@@ -101,5 +132,9 @@ class RatePid:
         self.integral = torch.maximum(torch.minimum(self.integral + step, self.int_lim),
                                       -self.int_lim)
         out = self.kp * err + self.integral - self.kd * d_rate + self.kff * rate_sp
-        self.out_prev = out.clamp(-1.0, 1.0)
+        out = out.clamp(-1.0, 1.0)
+        if self.yaw_alpha < 1.0:
+            self.yaw_out = self.yaw_out + self.yaw_alpha * (out[:, 2] - self.yaw_out)
+            out = torch.cat([out[:, :2], self.yaw_out[:, None]], dim=1)
+        self.out_prev = out
         return self.out_prev * self.max_torque

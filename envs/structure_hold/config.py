@@ -9,6 +9,7 @@ import numpy as np
 
 from envs.disturbance import DisturbanceConfig
 from envs.estimate import EstimateCorruptionConfig
+from envs.estimate.ekf import FusionConfig
 from envs.sims import QuadParams, RatePidGains
 from envs.structure_hold.airframes import airframe_config
 from eval.metrics import CONTACT_RADIUS_M
@@ -262,8 +263,17 @@ class StructureHoldConfig:
     point sits ``hold_distance`` metres from it, so the structure frame's x axis is world +x.
 
     ``airframe`` names a vehicle in ``envs/structure_hold/airframes.py``; ``from_dict``
-    merges its numbers (``quad``, ``rate_pid``, ``actuation``, ``rate_lag_s``) under the ones
-    the mapping states itself.
+    merges its numbers (``quad``, ``rate_pid``, ``actuation``, ``rate_lag_s``, and for
+    ``gz_x500_sitl`` also ``dt``, ``vision_offset_down_m`` and ``fusion``) under the ones the
+    mapping states itself.
+
+    The position fix and what the policy reads from it: ``estimate`` corrupts the fix;
+    ``vision_offset_down_m`` makes the fix track a point that far below the centre of mass
+    along the body z axis (zero offset while level, so the hold point is unchanged), as the
+    Gazebo bridge sends the x500's model origin, 0.24 m below its IMU, with no lever-arm
+    correction in EKF2; ``fusion`` (``envs/estimate/ekf.py``), when enabled, fuses the fix
+    with the IMU the way EKF2 does and the policy reads the fused estimate. Both off by
+    default.
     """
 
     airframe: str = "placeholder"
@@ -294,8 +304,12 @@ class StructureHoldConfig:
     airframe_rand: AirframeRandomization = field(default_factory=AirframeRandomization)
     wall_yaw_torque: WallYawTorque = field(default_factory=WallYawTorque)
     sensor_noise: SensorNoise = field(default_factory=SensorNoise)
+    vision_offset_down_m: float = 0.0
+    fusion: FusionConfig = field(default_factory=FusionConfig)
 
     def __post_init__(self) -> None:
+        if self.vision_offset_down_m < 0:
+            raise ValueError("vision_offset_down_m must be >= 0")
         if self.dt <= 0 or self.episode_length_s < self.dt:
             raise ValueError("dt must be positive and episode_length_s at least one step")
         for name in ("hold_distance", "hold_height"):
@@ -331,6 +345,7 @@ class StructureHoldConfig:
             "airframe_rand": AirframeRandomization.from_dict,
             "wall_yaw_torque": WallYawTorque.from_dict,
             "sensor_noise": SensorNoise.from_dict,
+            "fusion": FusionConfig.from_dict,
         }
         for key, build in nested.items():
             if key in d:

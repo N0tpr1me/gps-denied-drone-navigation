@@ -11,7 +11,7 @@ torch = pytest.importorskip("torch")
 
 from envs.disturbance import DisturbanceConfig  # noqa: E402
 from envs.estimate import EstimateCorruptionConfig  # noqa: E402
-from envs.sims.torch_quad import GRAVITY  # noqa: E402
+from envs.sims.torch_quad import GRAVITY, quat_rotate  # noqa: E402
 from envs.structure_hold import NUM_ACTIONS, StructureHoldConfig, StructureHoldEnv  # noqa: E402
 from envs.structure_hold.airframes import airframe_config, gz_x500, px4_allocation  # noqa: E402
 from envs.structure_hold.config import Actuation, AirframeRandomization  # noqa: E402
@@ -145,3 +145,48 @@ def test_airframe_randomisation_on_the_x500_moves_the_module_mapping():
     assert (env.sim.state.pos[:, 2] - z0).abs().max() < 0.01
     assert env.max_thrust_act[0].item() == pytest.approx(cfg.quad.max_thrust * 1.2 * 0.9,
                                                          rel=1e-6)
+
+
+def test_gz_x500_sitl_adds_the_px4_and_bridge_pieces_and_round_trips():
+    cfg = StructureHoldConfig.from_dict({"airframe": "gz_x500_sitl"})
+    x500 = StructureHoldConfig.from_dict({"airframe": "gz_x500"})
+    assert cfg.quad == x500.quad and cfg.actuation == x500.actuation
+    assert cfg.rate_pid.p == x500.rate_pid.p
+    assert cfg.rate_pid.yaw_torque_cutoff_hz == 2.0  # MC_YAW_TQ_CUTOFF
+    assert cfg.rate_pid.gyro_cutoff_hz == 40.0  # IMU_GYRO_CUTOFF
+    assert cfg.dt == 0.012  # the module's 83 Hz tick
+    assert cfg.vision_offset_down_m == 0.24 and cfg.fusion.enabled
+    assert StructureHoldConfig.from_dict(asdict(cfg)) == cfg
+    # Every other airframe keeps the new pieces off, so earlier results stay reproducible.
+    for name in ("placeholder", "gz_x500"):
+        c = StructureHoldConfig.from_dict({"airframe": name})
+        assert c.vision_offset_down_m == 0.0 and not c.fusion.enabled
+        assert c.rate_pid.yaw_torque_cutoff_hz == 0.0 and c.rate_pid.gyro_cutoff_hz == 0.0
+
+
+def test_vision_offset_moves_the_fix_only_when_the_vehicle_tilts():
+    env = StructureHoldEnv(calm("gz_x500", vision_offset_down_m=0.24), num_envs=2, seed=0)
+    env.reset()
+    env.step(hover_action(env))
+    assert torch.allclose(env.estimate_pos, env.sim.state.pos, atol=1e-6)  # level: no offset
+    a = hover_action(env)
+    a[0, 0] = 0.5  # roll env 0
+    for _ in range(15):
+        env.step(a)
+    s = env.sim.state
+    r = torch.tensor([0.0, 0.0, -0.24]).expand(2, 3)
+    expect = s.pos + quat_rotate(s.quat, r) - r
+    assert torch.allclose(env.estimate_pos, expect, atol=1e-5)
+    # Rolling right swings the point below the CG left: the fix sees a sideways move.
+    assert (env.estimate_pos - s.pos)[0].norm() > 0.02
+    assert (env.estimate_pos - s.pos)[1].norm() < 1e-4
+
+
+def test_gz_x500_sitl_hovers_and_its_estimate_follows_the_truth():
+    env = StructureHoldEnv(calm("gz_x500_sitl"), num_envs=3, seed=0)
+    env.reset()
+    z0 = env.sim.state.pos[:, 2].clone()
+    for _ in range(int(2.0 / env.cfg.dt)):
+        env.step(hover_action(env))
+    assert (env.sim.state.pos[:, 2] - z0).abs().max() < 0.02
+    assert (env.estimate_pos - env.sim.state.pos).norm(dim=1).max() < 0.02

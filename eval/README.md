@@ -27,6 +27,20 @@ python -m training.launch --config eval/configs/gate1_x500.yaml --device cpu    
 
 To judge another policy, add it under `params.controllers` and set `gate_controller`.
 
+- `gazebo_check.py` + `configs/gazebo_check.yaml`: the Gazebo-like check (`docs/gazebo_check.md`),
+  run before any policy goes to the Mac for a Gazebo re-fly. It flies the policies on the
+  `gz_x500_sitl` airframe (PX4's yaw torque and gyro filters, the 83 Hz module tick, the
+  bridge's 0.24 m lever arm, EKF2-like fusion) through the benchmark's conditions: 60 s, 1 m
+  from the wall, hold point 2.4 m up, calm on a clean estimate and calm / 4 / 8 m/s on
+  `vio_default`. It scores the lift above the hold point and the 1.6 Hz roll wobble that
+  lifted v6 and v8 in Gazebo, as well as p95 and crashes, and a policy passes only if it
+  beats v6 on all of them. Gazebo's numbers for the policies flown there are printed beside
+  the mock's.
+
+```
+python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~15 min
+```
+
 - `baselines/px4_tuned_v1.params`: the frozen tuned-PX4 baseline (docs/baseline.md). Every
   later result is compared against it.
 - `baselines/run_baseline.py`: fly a parameter set over the `wall1m_*` scenarios and seeds in
