@@ -14,7 +14,7 @@ params:
     - name: v11
       policy: training/policies/structure_hold_v11.onnx
     - name: v12
-      policy: runs/20261023-140240_structure_hold_ppo_v12_s0_113b9c9/policy.onnx
+      policy: training/policies/structure_hold_v12.onnx  # run 20261023-140240, byte-identical
   # The released policy, flown in Gazebo (PR #44). Before it: v6, then v9 (PR #42).
   reference: v10
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
