@@ -12,7 +12,7 @@ params:
     - name: v6
       policy: training/policies/structure_hold_v6.onnx
     - name: v9
-      policy: runs/20261023-050244_structure_hold_ppo_v9_s0_d046dc1/policy.onnx  # candidate, iteration 2500
+      policy: training/policies/structure_hold_v9.onnx  # run 20261023-050244, iteration 2500
   reference: v6
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 64
