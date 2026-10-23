@@ -56,6 +56,7 @@ import torch
 
 from envs.disturbance import sample_params
 from envs.disturbance import torch_adapter as wind
+from envs.estimate.ekf import TorchFusion
 from envs.estimate.torch_adapter import TorchEstimateCorruptor
 from envs.sims import QuadState, RatePid, make_sim
 from envs.sims.torch_quad import GRAVITY, quat_from_yaw, quat_rotate, quat_rotate_inverse
@@ -116,6 +117,11 @@ class StructureHoldEnv:
                                                              strict=True)))
         self.rate_pid = RatePid(cfg.rate_pid, per_unit, n, cfg.dt, dev, dt, sat_limit=sat)
         self.estimator = TorchEstimateCorruptor(cfg.estimate, n, cfg.dt, seed, dev, dt)
+        # EKF2-like fusion of the corrupted fix with the IMU (cfg.fusion, off by default).
+        self.fusion = (TorchFusion(cfg.fusion, n, cfg.dt, seed, dev, dt) if cfg.fusion.enabled
+                       else None)
+        self.vision_offset = torch.tensor([0.0, 0.0, -cfg.vision_offset_down_m], dtype=dt,
+                                          device=dev)
         self.wall_normal = torch.tensor(WALL_NORMAL_TOWARD, dtype=dt, device=dev)
         self.wall_point = torch.tensor(WALL_POINT, dtype=dt, device=dev)
         self.cos_max_tilt = math.cos(math.radians(cfg.max_tilt_deg))
@@ -237,6 +243,8 @@ class StructureHoldEnv:
         self.hold_point[env_ids] = t(hold)
         self.rate_pid.reset(env_ids)
         self.estimator.reset(self.sim.state.pos, self.sim.state.vel, env_ids)
+        if self.fusion is not None:
+            self.fusion.reset(env_ids, self.sim.state.pos[env_ids], self.sim.state.vel[env_ids])
 
         # Wind: wall_normal here is the disturbance model's convention (into free air).
         new = wind.to_torch(
@@ -360,6 +368,7 @@ class StructureHoldEnv:
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
         )
         tau_ext = self._wall_yaw_torque(self.sim.state.pos)
+        vel_before = self.sim.state.vel.clone()
         state = (self.sim.step(thrust, torque, self.wind_force) if tau_ext is None
                  else self.sim.step(thrust, torque, self.wind_force, tau_ext))
         self.episode_step += 1
@@ -369,8 +378,18 @@ class StructureHoldEnv:
         finite = state.finite()
         safe_pos = torch.where(finite[:, None], state.pos, self.hold_point)
         safe_vel = torch.where(finite[:, None], state.vel, torch.zeros_like(state.vel))
+        if self.cfg.vision_offset_down_m > 0:
+            # The fix tracks a point below the centre of mass (body -z), less its level offset.
+            r = self.vision_offset.expand(self.num_envs, 3)
+            safe_pos = safe_pos + quat_rotate(state.quat, r) - r
+            safe_vel = safe_vel + quat_rotate(state.quat, torch.cross(state.ang_vel, r, dim=-1))
         est = self.estimator.step(safe_pos, safe_vel)
         self.estimate_pos, self.estimate_vel = est.pos, est.vel
+        if self.fusion is not None:
+            accel = torch.where(finite[:, None], (state.vel - vel_before) / cfg.dt,
+                                torch.zeros_like(vel_before))
+            self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
+                                                                    ~est.stale)
         self.estimate_stale, self.estimate_age = est.stale, est.age
 
         # Termination on the TRUE state.
@@ -450,7 +469,15 @@ class StructureHoldEnv:
         o[:, OBS["vel"]] = self.estimate_vel
         o[:, OBS["gravity_body"]] = quat_rotate_inverse(state.quat, down)
         o[:, OBS["heading"]] = quat_rotate(state.quat, fwd)[:, :2]
-        o[:, OBS["ang_vel"]] = state.ang_vel / cfg.max_rate_rad_s
+        rates = state.ang_vel
+        pid = self.rate_pid
+        if pid.gyro_alpha < 1.0:
+            # PX4's filtered gyro as the rate loop last read it, one tick old: the delay
+            # stands in for SITL's actuator and transport latency, which the mock otherwise
+            # lacks. With it the mock's lift and wobble match Gazebo's (v8 +0.46 m against
+            # +0.43 m); with the current sample they come out 40 % low (docs/gazebo_check.md).
+            rates = pid.gyro
+        o[:, OBS["ang_vel"]] = rates / cfg.max_rate_rad_s
         o[:, OBS["last_action"]] = self.last_action
         o[:, OBS["stale"]] = self.estimate_stale.to(self.dtype)[:, None]
         o[:, OBS["age"]] = self.estimate_age.clamp(max=1.0)[:, None]

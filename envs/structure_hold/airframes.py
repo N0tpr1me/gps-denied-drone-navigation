@@ -45,6 +45,22 @@ What ``gz_x500()`` derives from them:
 Not modelled: the rotors' drag (gz rotorDragCoefficient, about 0.25 N per m/s at hover,
 against the wall plugin's own drag force) and the dependence of the torque limits on the
 collective thrust.
+
+``gz_x500_sitl``: ``gz_x500`` as the Gazebo benchmark flies it through PX4 v1.17 and the
+module (docs/decisions.md 2026-10-23; the per-tick traces of v6 and v8 in Gazebo showed each
+piece):
+
+- ``MC_YAW_TQ_CUTOFF`` 2 Hz on the yaw torque and ``IMU_GYRO_CUTOFF`` 40 Hz on the gyro the
+  rate loop and the module read (``envs/sims/rate_pid.py``): with them a yaw-rate command
+  answers with gain 0.27 and 130 degrees of lag at 1.6 Hz, as in Gazebo, where the env
+  without them gave 0.32 and 80 degrees;
+- ``dt`` 0.012 s: the module runs on gyro callbacks once 10 ms have passed, and the Gazebo
+  gyro comes at 250 Hz, so it ticks every 12 ms (83 Hz);
+- ``vision_offset_down_m`` 0.24: the bridge sends the pose of the x500 model frame, 0.24 m
+  below ``base_link`` (``x500_base/model.sdf``), and EKF2 has no lever-arm correction
+  (``EKF2_EV_POS_*`` 0); a fit to the traces put the tracked point 0.18 m below the IMU;
+- ``fusion`` on with the bridge's EKF2 settings (``sim2real/estimate_bridge/ekf2_ev.params``):
+  the module reads EKF2's estimate, not the fix.
 """
 
 from __future__ import annotations
@@ -158,9 +174,22 @@ def gz_x500() -> dict[str, Any]:
     }
 
 
+def gz_x500_sitl() -> dict[str, Any]:
+    """``gz_x500`` plus PX4's filters, the module's Gazebo tick, the bridge's lever arm and
+    EKF2 (module docstring)."""
+    cfg = gz_x500()
+    cfg["rate_pid"] = {**cfg["rate_pid"], "gyro_cutoff_hz": 40.0, "yaw_torque_cutoff_hz": 2.0}
+    cfg["dt"] = 0.012
+    cfg["vision_offset_down_m"] = 0.24
+    cfg["fusion"] = {"enabled": True, "vision_rate_hz": 50.0, "ev_delay_s": 0.1,
+                     "pos_noise_m": 0.1, "vel_noise_mps": 0.1, "gate_sd": 5.0}
+    return cfg
+
+
 AIRFRAMES = {
     "placeholder": lambda: {},
     "gz_x500": gz_x500,
+    "gz_x500_sitl": gz_x500_sitl,
 }
 
 

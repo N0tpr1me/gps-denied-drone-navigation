@@ -26,7 +26,9 @@ state = sim.step(thrust, torque_body, force_ext_world)
   time at 100 Hz (`test_contract.py` checks a loose bound).
 - `rate_pid.py`: a body-rate PID in the shape of PX4's `RateControl` (normalised torque,
   D on the filtered measurement, integrator freeze on saturation, PX4 default gains), so the
-  policy closes the same inner loop the onboard module will.
+  policy closes the same inner loop the onboard module will. Two PX4 filters are options, off
+  by default: `gyro_cutoff_hz` (`IMU_GYRO_CUTOFF`) on the measured rate and
+  `yaw_torque_cutoff_hz` (`MC_YAW_TQ_CUTOFF`) on the yaw output.
 - `isaac_quad.py`: the Isaac Lab backend (Isaac Lab 2.3.2 / Isaac Sim 5.1.0), same calls,
   same `QuadState`. One PhysX rigid body per env with the mock's mass and inertia (per env
   through `set_airframe`); clipping, motor lag and the external moment use the mock's code. Isaac Lab is imported only when the backend is built;
