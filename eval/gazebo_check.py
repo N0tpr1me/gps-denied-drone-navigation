@@ -41,6 +41,14 @@ the hold, in every such cell not marked ``scored: false``. Crashes in the stock 
 after a re-engage at the wall are printed, not scored: they come with the sequence (stock
 PX4 and every controller that holds the estimate walk into the wall there alike).
 
+Cells with ``events`` replay a Gazebo flight's estimate faults: scripted jumps and dropouts
+(``apply_event``) at the same moment in every env, with the random ones off. They stay out of
+the pooled and clean sets and are scored on their own: mean worst toward the wall (the
+largest true displacement along the wall normal, ``eval.metrics``) at most
+``toward_wall_slack_m`` above the reference's, crashes no more than ``max_crash_increase``
+above. Gazebo seed 1's 1.8 m jump along the wall drew v12 0.27 to 0.31 m toward the wall and
+v10 0.03 to 0.07 m (PR #52); the pooled p95 had passed v12 because it chases jumps less.
+
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.
 """
@@ -69,6 +77,7 @@ DEFAULT_RULES = {
     "max_crash_increase": 0.01,
     "clean_p95_slack_m": 0.02,
     "ring_slack": 0.05,  # median 1.2-2.2 Hz roll rms at most 5 % above the reference's
+    "toward_wall_slack_m": 0.05,  # replay cells: mean worst toward the wall
 }
 
 
@@ -81,10 +90,30 @@ def band_rms(x: np.ndarray, dt: float, lo: float = 1.2, hi: float = 2.2) -> np.n
     return np.sqrt(frac) * x.std(0)
 
 
+def apply_event(env: StructureHoldEnv, event: dict[str, Any]) -> None:
+    """Start one scripted estimate fault in every env, as ``envs.estimate`` draws them: a
+    ``jump`` (ENU vector, m) that then decays with ``jump_decay_s``, or a dead-reckoned
+    dropout of ``dropout_s`` seconds with acceleration bias ``accel_bias`` (m/s^2)."""
+    est = env.estimator
+    if "jump" in event:
+        est.jump_offset[:] += torch.as_tensor(event["jump"], dtype=est.jump_offset.dtype,
+                                              device=est.jump_offset.device)
+    if "dropout_s" in event:
+        est.dropout_left[:] = max(1, int(round(float(event["dropout_s"]) / est.dt)))
+        est.dropout_bias[:] = torch.as_tensor(event.get("accel_bias", [0.0, 0.0, 0.0]),
+                                              dtype=est.dropout_bias.dtype,
+                                              device=est.dropout_bias.device)
+
+
 def fly(env: StructureHoldEnv, controller: Any, window_s: float,
-        wobble_threshold: float) -> list[dict[str, Any]]:
-    """Fly each env's first episode; one row per env."""
+        wobble_threshold: float, events: list[dict[str, Any]] | None = None
+        ) -> list[dict[str, Any]]:
+    """Fly each env's first episode; one row per env. ``events`` start scripted estimate
+    faults (``apply_event``) at their ``t_s``, the same moment in every env."""
     cfg, n, steps, dt = env.cfg, env.num_envs, env.max_episode_length, env.dt
+    at: dict[int, list[dict[str, Any]]] = {}
+    for e in events or []:
+        at.setdefault(int(round(float(e["t_s"]) / dt)), []).append(e)
     hold = env.hold_point.cpu().numpy().copy()
     pos = np.empty((steps + 1, n, 3), dtype=np.float32)
     est_z = np.empty((steps, n), dtype=np.float32)
@@ -95,6 +124,8 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     reason = np.full(n, TIMEOUT, dtype=np.int64)
     obs, _ = env.get_observations()
     for k in range(steps):
+        for e in at.get(k, []):
+            apply_event(env, e)
         a = controller(obs)
         act[k] = a.detach().cpu().numpy()
         obs, _, done, _ = env.step(a)
@@ -134,6 +165,7 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
                           thrust_cmd=0.5 * (act[:length, i, 3] + 1.0))
             m = compute_metrics(trace, surface, contact_radius_m=cfg.contact_radius_m)
             row["p95_m"] = m["p95_m"]
+            row["toward_wall_m"] = m["worst_toward_surface_m"]
         rows.append(row)
     return rows
 
@@ -280,10 +312,13 @@ def _col(rows: list[dict[str, Any]], key: str) -> np.ndarray:
 
 def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
     full = [r for r in rows if "lift_m" in r]
+    toward = _col(rows, "toward_wall_m")
     return {
         "episodes": len(rows),
         "crash_rate": float(np.mean(_col(rows, "crash"))),
         "p95_m_mean": float(np.nanmean(_col(rows, "p95_m"))),
+        "toward_wall_m_mean": (float(np.nanmean(toward)) if np.isfinite(toward).any()
+                               else float("nan")),
         "lift_m_mean": float(np.mean(_col(full, "lift_m"))) if full else float("nan"),
         "wobble_rate": float(np.mean(_col(full, "wobble"))) if full else float("nan"),
         "wobble_rms_median": float(np.median(_col(full, "wobble_rms"))) if full else float("nan"),
@@ -324,7 +359,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
 
     report: dict[str, Any] = {"seeds": seeds, "num_envs": num_envs, "window_s": window_s,
                               "wobble_threshold": thr, "rules": rules, "reference": ref,
-                              "controllers": specs, "gazebo": gazebo, "cells": [],
+                              "controllers": specs, "gazebo": gazebo,
+                              "gazebo_baseline": p.get("gazebo_baseline"), "cells": [],
                               "reengage": []}
     t_start = time.perf_counter()
     scale = float(p.get("reengage_scale", 1.0))  # the smoke run shrinks the sequence
@@ -340,26 +376,29 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             for name in names:
                 env = StructureHoldEnv(env_cfg, num_envs, seed=seed, device=device)
                 t0 = time.perf_counter()
-                r = fly(env, factories[name](env), window_s, thr)
+                r = fly(env, factories[name](env), window_s, thr, cell.get("events"))
                 for row in r:
                     writer.metric(seed, cell=cell["name"], controller=name, **row)
                 rows[name].extend(r)
                 d = describe(r)
                 print(f"gazebo_check: {cell['name']} seed {seed} {name}: crash "
                       f"{d['crash_rate']:.1%}, p95 {d['p95_m_mean']:.3f} m, lift "
-                      f"{d['lift_m_mean']:+.3f} m, wobble {d['wobble_rate']:.0%} "
+                      f"{d['lift_m_mean']:+.3f} m, wobble {d['wobble_rate']:.0%}, toward the "
+                      f"wall {d['toward_wall_m_mean']:.3f} m "
                       f"({time.perf_counter() - t0:.0f} s)", flush=True)
         flat[cell["name"]] = rows
         report["cells"].append({
             "name": cell["name"], "label": cell.get("label", cell["name"]),
             "rough": bool(cell.get("rough", True)), "env": cell.get("env") or {},
+            "replay": bool(cell.get("events")), "scored": bool(cell.get("scored", True)),
             "controllers": {name: describe(rows[name]) for name in names},
             "vs_reference": {name: paired_p95_ratio(rows[name], rows[ref], rng, n_boot)
                              for name in names if name != ref},
         })
 
-    rough = [c["name"] for c in report["cells"] if c["rough"]]
-    clean = [c["name"] for c in report["cells"] if not c["rough"]]
+    rough = [c["name"] for c in report["cells"] if c["rough"] and not c["replay"]]
+    clean = [c["name"] for c in report["cells"] if not c["rough"] and not c["replay"]]
+    replay = [c for c in report["cells"] if c["replay"] and c["scored"]]
     pooled = {name: describe([r for c in rough for r in flat[c][name]]) for name in names}
     report["pooled_rough"] = pooled
     verdicts = {}
@@ -388,6 +427,14 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             d = {x["name"]: x for x in report["cells"]}[c]["controllers"]
             checks[f"{c}_p95_ok"] = (d[name]["p95_m_mean"]
                                      <= d[ref]["p95_m_mean"] + rules["clean_p95_slack_m"])
+        for c in replay:
+            d = c["controllers"]
+            checks[f"{c['name']}_toward_wall_ok"] = (
+                d[name]["toward_wall_m_mean"]
+                <= d[ref]["toward_wall_m_mean"] + rules["toward_wall_slack_m"])
+            checks[f"{c['name']}_crash_ok"] = (d[name]["crash_rate"]
+                                               <= d[ref]["crash_rate"]
+                                               + rules["max_crash_increase"])
         verdicts[name] = {"p95_ratio": cmp, "checks": checks, "beats": all(checks.values())}
     report["verdicts"] = verdicts
     report["elapsed_s"] = time.perf_counter() - t_start
@@ -458,21 +505,25 @@ def markdown(report: dict[str, Any]) -> str:
     lines = [f"Episodes per cell and controller: {report['num_envs'] * len(report['seeds'])}; "
              f"lift and wobble over the last {report['window_s']:.0f} s; wobble = roll action "
              f"1.2-2.2 Hz rms > {report['wobble_threshold']}.", "",
-             "| cell | controller | crash | p95 (m) | lift (m) | wobble "
-             "| Gazebo p95 / lift / wobble |",
-             "| --- | --- | --- | --- | --- | --- | --- |"]
+             "| cell | controller | crash | p95 (m) | lift (m) | wobble | toward the wall (m) "
+             "| Gazebo p95 / lift / wobble / toward the wall |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for c in report["cells"]:
         for name in names:
             d = c["controllers"][name]
             g = (gz.get(name) or {}).get(c["name"])
             gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {g.get('lift_m', float('nan')):+.2f} / "
-                    f"{g.get('wobble', '-')}" if g else "-")
+                    f"{g.get('wobble', '-')} / {g.get('toward_m', float('nan')):.2f}"
+                    if g else "-")
             lines.append(f"| {c['label']} | {name} | {d['crash_rate']:.1%} | "
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
-                         f"{d['wobble_rate']:.0%} | {gtxt} |")
-    lines += ["", "Rough-estimate cells pooled:", "",
-              "| controller | crash | p95 (m) | lift (m) | wobble | ring (median rms) | verdict |",
-              "| --- | --- | --- | --- | --- | --- | --- |"]
+                         f"{d['wobble_rate']:.0%} | {d['toward_wall_m_mean']:.3f} | {gtxt} |")
+    if report.get("gazebo_baseline"):
+        lines += ["", f"Gazebo, stock PX4: {report['gazebo_baseline']}"]
+    lines += ["", "Rough-estimate cells pooled (replay cells apart):", "",
+              "| controller | crash | p95 (m) | lift (m) | wobble | ring (median rms) "
+              "| toward the wall (m) | verdict |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name in names:
         d = report["pooled_rough"][name]
         v = report["verdicts"].get(name)
@@ -483,7 +534,7 @@ def markdown(report: dict[str, Any]) -> str:
             f"{', '.join(k for k, ok in v['checks'].items() if not ok) or 'none'})")
         lines.append(f"| {name} | {d['crash_rate']:.1%} | {d['p95_m_mean']:.3f} | "
                      f"{d['lift_m_mean']:+.3f} | {d['wobble_rate']:.0%} | "
-                     f"{d['wobble_rms_median']:.4f} | {vtxt} |")
+                     f"{d['wobble_rms_median']:.4f} | {d['toward_wall_m_mean']:.3f} | {vtxt} |")
     if report.get("reengage"):
         lines += ["", "Hold, stock Position mode, re-engage (crash = any after the switch; "
                   "re-engage failure = a crash after a re-engage whose hold point was a sane "

@@ -90,6 +90,39 @@ def test_reengage_captures_the_estimate_and_follows_resets():
     assert d["wall_captures"] == len(caps) and d["reengage_fail"] == 0
 
 
+def test_scripted_events_start_the_faults_they_name():
+    from envs.structure_hold.baseline import CascadedPd
+
+    env = _reengage_env({"jump_decay_s": 5.0}, n=4)
+    pd = CascadedPd(env)
+    obs, _ = env.get_observations()
+    for _ in range(10):
+        obs, *_ = env.step(pd(obs))
+    gazebo_check.apply_event(env, {"t_s": 0.0, "jump": [0.0, 1.8, 0.0]})
+    obs, *_ = env.step(pd(obs))
+    off = env.estimator.jump_offset.cpu().numpy()
+    assert np.allclose(off[:, 1], 1.8, atol=0.01) and np.allclose(off[:, [0, 2]], 0.0)
+    gazebo_check.apply_event(env, {"t_s": 0.0, "dropout_s": 0.5, "accel_bias": [0.3, 0, 0]})
+    left = int(env.estimator.dropout_left[0])
+    assert round(0.5 / env.estimator.dt) - 1 <= left <= round(0.5 / env.estimator.dt)
+    obs, *_ = env.step(pd(obs))
+    assert int(env.estimator.dropout_left[0]) == left - 1
+
+
+def test_a_jump_away_from_the_wall_draws_a_controller_toward_it():
+    # The estimate says the drone moved 0.4 m off the wall; holding it moves the drone the
+    # other way, and the row's worst toward the wall shows it.
+    from envs.structure_hold.baseline import CascadedPd
+
+    env = _reengage_env({"jump_decay_s": 5.0}, n=4)
+    rows = gazebo_check.fly(env, CascadedPd(env), 2.0, 0.1,
+                            [{"t_s": 2.0, "jump": [-0.4, 0.0, 0.0]}])
+    assert all(r["toward_wall_m"] > 0.2 and not r["crash"] for r in rows)
+    env = _reengage_env({}, n=4)
+    rows = gazebo_check.fly(env, CascadedPd(env), 2.0, 0.1)
+    assert all(r["toward_wall_m"] < 0.05 for r in rows)
+
+
 def test_smoke_run_writes_report(tmp_path):
     out = subprocess.run(
         [sys.executable, "-m", "training.launch", "--config", "eval/configs/gazebo_check.yaml",
@@ -99,10 +132,11 @@ def test_smoke_run_writes_report(tmp_path):
     (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
     report = json.loads((run_dir / "report.json").read_text())
     assert [c["name"] for c in report["cells"]] == ["calm_clean", "calm", "wind4", "wind8",
-                                                    "wind8_wall"]
+                                                    "wind8_wall", "seed1_jump"]
     assert [c["name"] for c in report["reengage"]] == ["reengage", "reengage_jump"]
-    assert report["reference"] == "v10" and "beats" in report["verdicts"]["v11"]
-    checks = report["verdicts"]["v11"]["checks"]
+    assert report["reference"] == "v10" and "beats" in report["verdicts"]["v12"]
+    checks = report["verdicts"]["v12"]["checks"]
     assert "ring_not_higher" in checks and "reengage_no_reengage_fail" in checks
+    assert "seed1_jump_toward_wall_ok" in checks and "seed1_jump_p95_ok" not in checks
     assert not any(k.startswith("reengage_jump") for k in checks)  # not scored
     assert "| cell | controller |" in (run_dir / "report.md").read_text()
