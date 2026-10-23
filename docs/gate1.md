@@ -106,6 +106,12 @@ another airframe flies through the module's thrust mapping for its own mass and 
 (`eval.gate1.ModuleThrustScale`), exactly as the module would fly it. Same seeds, cells and
 rules; the PD is the same cascaded PD on the x500.
 
+`eval/configs/gate1_x500_ekf_v10.yaml` is the same set judged through the EKF2-like fusion
+(`gz_x500_sitl`'s, with EKF2's resets): the policy and the PD read the fused estimate, as the
+module reads EKF2, instead of the raw fix 50 to 150 ms late. Nothing else changes (airframe
+`gz_x500`, 10 ms tick, no PX4 filters, no lever arm). Whether Gate 1 is judged this way is
+Zain's call (`docs/decisions.md`, Proposed); both results are below.
+
 ## Current numbers
 
 ### v3 (the placeholder release), nominal: run `20261022-154625`
@@ -295,3 +301,28 @@ EKF-like fusion, with the fix 150 to 200 ms late (later than the 100 ms EKF2 ass
 still beats v9 (run `20261023-084937`). Every policy trained on the PX4-like stack fails
 this test set, because the module never sees a raw fix: whether Gate 1 should judge the x500
 through EKF2 is an open question (`docs/decisions.md`).
+
+### On the x500, both ways: v10 raw and through the EKF2-like fusion, runs `20261023-081233` and `20261023-100656`
+
+The same held-out episodes (3 seeds x 1024 per cell), once on the raw fix as the test set is
+written and once through the EKF2-like fusion. The PD flies both. "Change" is v10's p95
+against the PD's on the same episodes; the headline cell needs -30 %.
+
+| Cell | Raw: p95 v10 / PD (m) | Raw: crash v10 / PD | Raw verdict | Fused: p95 v10 / PD (m) | Fused: change | Fused: crash v10 / PD | Fused verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.68 / 0.48 | 40.2 / 9.4 % | fail | 0.30 / 0.32 | -7 % | 0.0 / 2.8 % | pass |
+| 0 m/s, 2 m | 0.87 / 0.52 | 35.6 / 2.4 % | fail | 0.30 / 0.34 | -13 % | 0.0 / 0.0 % | pass |
+| 4 m/s, 1 m | 0.67 / 0.49 | 39.2 / 8.7 % | fail | 0.30 / 0.32 | -8 % | 0.0 / 3.0 % | pass |
+| 4 m/s, 2 m | 0.86 / 0.54 | 33.6 / 2.4 % | fail | 0.30 / 0.36 | -16 % | 0.0 / 0.0 % | pass |
+| 8 m/s, 1 m (headline) | 0.66 / 0.51 | 37.8 / 8.9 % | fail | 0.31 / 0.37 | -15 % | 0.0 / 2.9 % | fail (headline missed) |
+| 8 m/s, 2 m | 0.90 / 0.60 | 34.8 / 2.1 % | fail | 0.34 / 0.44 | -25 % | 0.0 / 0.0 % | pass |
+| **Pooled** | **0.77 / 0.52** | **36.9 / 5.7 %** | **FAIL, 0 of 6** | **0.31 / 0.36** | | **0.0 / 1.4 %** | **FAIL, 5 of 6** |
+
+Through the fusion, v10 holds tighter than the PD in every cell (every interval below 0)
+and does not crash once in 18,432 episodes. It fails Gate 1 on one rule only: at 8 m/s and
+1 m it is 15 % below the PD (interval -17 to -12 %), not 30 %. The PD gains from the fusion
+as much as v10 does: its pooled p95 drops from 0.52 to 0.36 m and its crashes from 5.7 to
+1.4 %. So judging through EKF2 removes the delay failure, but the PD gets the same help and
+the headline stays out of reach: v10 needs about 15 more points there. In Gazebo, where the yardstick is tuned PX4 rather than this
+PD, v10 is 31 % below at 8 m/s (`docs/baseline.md`). The fused run took 29 min on 4 idle
+cores.
