@@ -1,0 +1,86 @@
+# Policy v11 candidate: v10 (run 20261023-065702, iteration 3500) continued to settle
+# faster. Judged through the EKF2-like fusion, v10 beats the PD in every Gate 1 x500 cell
+# but the headline (8 m/s, 1 m: 15 % below the PD, 30 % needed; docs/gate1.md). On seeds
+# outside the held-out block the gap is the start: from the 0.2 m start scatter v10 takes
+# about 3 s to get within 0.1 m (the PD 1.5 s to its wind offset), which sets the p95 of a
+# 20 s episode; engaged at the hold point v10 is already 37 % below the PD.
+# Two stages, each under an hour:
+# - A (run 20261023-105849, commit 3bdb1cc): v10 with a steeper position penalty near the
+#   hold point (pos 2.0 over 0.5 m, was 1.5 over 1 m). Steady hold 16 % tighter, but the
+#   start transient no faster: 23 % below the PD on the headline cell (seed 8001).
+# - B (this file; run 20261023-114507, commit f28680c, released as v11): A continued with
+#   estimate jumps and dropouts at 0.04 Hz instead of 0.1. A start offset looks to the
+#   policy exactly like an estimate jump that decays over 5 s, so a policy trained on five
+#   times the test rate of jumps may answer any sudden offset slowly. 0.04 Hz is still twice
+#   the rate of vio_default and of every test set. 26 % below the PD on the headline cell
+#   (seed 8001); the start transient no faster. Gazebo-like check: beats v10 (p95 ratio 0.82).
+# Judged by eval/configs/gazebo_check.yaml (must beat v10) and then the Gate 1 x500 sets.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v11.yaml --smoke --device cpu
+name: structure_hold_ppo_v11
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261023-105849_structure_hold_ppo_v11_s0_3bdb1cc/policy.pt  # stage A, iteration 4500
+  iterations: 1000  # ~28k env-steps/s on 4 CPU cores: ~30 min plus selection, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the Gazebo benchmark's hover; the drift needs 20 to 40 s to grow
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+      pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
+      pos_scale_m: 0.5
+    # Extra rate-setpoint lag up to 30 ms, drawn per episode, as for v6 (the tick itself is
+    # now in the preset).
+    rate_lag_s: [0.0, 0.03]
+    estimate:
+      jump_rate_hz: 0.04  # v10 and stage A: 0.1, five times vio_default's 0.02
+      dropout_rate_hz: 0.04
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
