@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -18,11 +20,13 @@ BUSY = EstimateCorruptionConfig(
 )
 
 
-def test_numpy_and_torch_agree_to_1e6_on_shared_draws():
+@pytest.mark.parametrize("fault_start_s", [0.0, 2.0])
+def test_numpy_and_torch_agree_to_1e6_on_shared_draws(fault_start_s):
     n, steps = 16, 1500
     pos, vel = ramp(steps, n)
-    ref = EstimateCorruptor(BUSY, n, DT, seed=11)
-    tch = TorchEstimateCorruptor(BUSY, n, DT, seed=0, dtype=torch.float64)
+    cfg = dataclasses.replace(BUSY, fault_start_s=fault_start_s)
+    ref = EstimateCorruptor(cfg, n, DT, seed=11)
+    tch = TorchEstimateCorruptor(cfg, n, DT, seed=0, dtype=torch.float64)
     delays = ref.draw_delay_steps()
     ref.reset(pos[0], vel[0], delay_steps=delays)
     tch.reset(torch.from_numpy(pos[0]), torch.from_numpy(vel[0]), delay_steps=delays)

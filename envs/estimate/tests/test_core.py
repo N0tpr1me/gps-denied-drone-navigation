@@ -211,3 +211,32 @@ def test_dead_reckoned_dropout_tracks_true_motion_and_drifts_with_the_bias():
 def test_bad_dropout_mode_raises():
     with pytest.raises(ValueError, match="dropout_mode"):
         EstimateCorruptor(only(dropout_mode="freeze"), 2, DT, seed=0)
+
+
+def test_fault_start_holds_faults_back_and_keeps_the_later_draws():
+    # Jumps and dropouts at rates that fire often; everything else as the defaults.
+    busy = EstimateCorruptionConfig(jump_rate_hz=1.0, dropout_rate_hz=1.0)
+    late = EstimateCorruptionConfig(jump_rate_hz=1.0, dropout_rate_hz=1.0, fault_start_s=2.0)
+    n, steps, start = 256, 800, 200  # 8 s at 0.01 s; faults from step 200 (2 s) on
+    pos, vel = ramp(steps, n)
+    a = run(EstimateCorruptor(busy, n, DT, seed=4), pos, vel)
+    b = run(EstimateCorruptor(late, n, DT, seed=4), pos, vel)
+    assert a["jumped"][:start].any() and a["dropout_started"][:start].any()
+    assert not b["jumped"][:start].any() and not b["dropout_started"][:start].any()
+    assert not b["stale"][:start].any()
+    # The same draws: every jump from the start on is the same event, step for step.
+    np.testing.assert_array_equal(b["jumped"][start:], a["jumped"][start:])
+    assert b["jumped"][start:].sum() > 50 and b["dropout_started"][start:].sum() > 50
+    # Envs whose first fault came after the start see exactly the same estimate.
+    clean_early = ~(a["jumped"][:start].any(0) | a["dropout_started"][:start].any(0))
+    np.testing.assert_array_equal(b["pos"][:, clean_early], a["pos"][:, clean_early])
+
+    # A reset restarts the delay for the envs it resets, and only for them.
+    model = EstimateCorruptor(late, n, DT, seed=4)
+    model.reset(pos[0], vel[0])
+    for k in range(400):
+        model.step(pos[k], vel[k])
+    model.reset(pos[400], vel[400], env_ids=np.arange(n // 2))
+    jumped = np.stack([model.step(pos[k], vel[k]).jumped for k in range(400, 600)])
+    assert not jumped[:, : n // 2].any() and jumped[:, n // 2:].any()
+

@@ -17,6 +17,12 @@ report, in this order:
    vision input stops); ``"hold"`` freezes the last fresh value (the earlier model, kept so
    old numbers stay reproducible).
 
+Jumps and dropouts can start only ``fault_start_s`` after an env's reset (default 0: from
+the first step). Every step still draws its random numbers, so a delay changes nothing but
+the events it suppresses: faults from ``fault_start_s`` on are the same, step for step, as
+without it. The SITL bridge starts its corruptor before PX4 arms, and a fault during
+arming or takeoff breaks PX4's own takeoff before any hold (docs/baseline.md).
+
 Randomness comes only from the generator seeded in the constructor, or from a
 ``StepNoise`` passed to ``step`` (how the NumPy/PyTorch parity tests share draws). The
 update itself (``_step``) is written against the operations NumPy and PyTorch share, so
@@ -59,6 +65,8 @@ class EstimateCorruptionConfig:
     # per-dropout constant acceleration bias, std per axis below) or "hold" (frozen).
     dropout_mode: str = "dead_reckon"
     dropout_accel_bias_mps2: float = 0.3
+    # Jumps and dropouts start only this long after reset (module docstring); 0 = at once.
+    fault_start_s: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EstimateCorruptionConfig:
@@ -181,6 +189,8 @@ class EstimateCorruptor:
         self.dropout_bias = self._zeros((n, 3))  # acceleration bias of the current dropout
         self.dropout_left = self._zeros((n,), integer=True)
         self.age = self._zeros((n,))
+        self.fault_start_steps = round(cfg.fault_start_s / dt)
+        self.steps_since_reset = self._zeros((n,), integer=True)
         self._started = self._zeros((n,), integer=True) > 0  # all False until reset
 
     # Backend hooks: the only methods the PyTorch adapter overrides.
@@ -251,6 +261,7 @@ class EstimateCorruptor:
         self.dropout_bias = xp.where(m3, 0.0, self.dropout_bias)
         self.dropout_left = xp.where(mask, 0, self.dropout_left)
         self.age = xp.where(mask, 0.0, self.age)
+        self.steps_since_reset = xp.where(mask, 0, self.steps_since_reset)
         self._started = self._started | mask
 
     def step(self, pos: Any, vel: Any, noise: StepNoise | None = None) -> EstimateSample:
@@ -264,6 +275,8 @@ class EstimateCorruptor:
     def _step(self, pos: Any, vel: Any, nz: StepNoise) -> EstimateSample:
         xp, cfg = self.xp, self.cfg
         length = self.max_delay_steps + 1
+        faults_on = self.steps_since_reset >= self.fault_start_steps
+        self.steps_since_reset = self.steps_since_reset + 1
 
         # 1. Delay: write now, read delay_steps back.
         self.head = (self.head + 1) % length
@@ -279,7 +292,7 @@ class EstimateCorruptor:
         self.bias = xp.clip(self.bias + self.bias_step_std * nz.bias, -b, b)
 
         # 3. Jumps: decay the old offset, then add any new step.
-        jumped = nz.jump_event < self.p_jump
+        jumped = (nz.jump_event < self.p_jump) & faults_on
         norm = xp.sqrt((nz.jump_dir * nz.jump_dir).sum(-1))[:, None]
         direction = nz.jump_dir / xp.where(norm > 1e-12, norm, 1.0)
         size = cfg.jump_min_m + (cfg.jump_max_m - cfg.jump_min_m) * nz.jump_size
@@ -295,7 +308,7 @@ class EstimateCorruptor:
         lo, hi = self.dropout_steps_min, self.dropout_steps_max
         span = hi - lo + 1
         length_steps = lo + self._to_int(xp.clip(xp.floor(nz.dropout_len * span), 0, span - 1))
-        started = (self.dropout_left == 0) & (nz.dropout_event < self.p_dropout)
+        started = (self.dropout_left == 0) & (nz.dropout_event < self.p_dropout) & faults_on
         self.dropout_left = xp.where(started, length_steps, self.dropout_left)
         stale = self.dropout_left > 0
         if cfg.dropout_mode == "dead_reckon":

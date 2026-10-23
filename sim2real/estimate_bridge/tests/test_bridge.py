@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import numpy as np
@@ -140,7 +141,7 @@ def test_verify_catches_a_wrong_seed_and_a_published_dropout(tmp_path):
     assert not rep["ok"] and rep["published_while_stale"] == 1
 
 
-@pytest.mark.parametrize("name", ["clean", "vio_default"])
+@pytest.mark.parametrize("name", ["clean", "vio_default", "vio_after_takeoff"])
 def test_shipped_profiles_load(name):
     p = load_profile(name)
     assert p.name == name and (PROFILE_DIR / f"{name}.yaml").exists()
@@ -150,6 +151,12 @@ def test_shipped_profiles_load(name):
 
 def test_vio_default_profile_is_the_training_default():
     assert load_profile("vio_default").estimate == EstimateCorruptionConfig()
+
+
+def test_vio_after_takeoff_is_vio_default_with_faults_held_back():
+    late = load_profile("vio_after_takeoff")
+    assert late.estimate == dataclasses.replace(EstimateCorruptionConfig(), fault_start_s=24.0)
+    assert late.seed == load_profile("vio_default").seed
 
 
 def test_profile_rejects_unknown_keys():

@@ -1,0 +1,10 @@
+# vio_default with its jumps and dropouts held back for the first 24 s of the bridge's
+# clock, so no fault lands while PX4 arms and takes off (seed 7 of the Gate 2 batch broke
+# both controllers that way before any hold; docs/baseline.md). The draws are vio_default's,
+# so every fault from 24 s on is the same, step for step. In the PR #42 and #44 flights the
+# hold window opened 24.7 to 25.5 s after the bridge's first sample, so the faults inside
+# the hold are vio_default's too; only the faults before it are gone.
+name: vio_after_takeoff
+seed: 1
+estimate:
+  fault_start_s: 24.0
