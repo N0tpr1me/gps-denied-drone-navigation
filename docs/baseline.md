@@ -543,3 +543,102 @@ sample, so the faults inside the hold are unchanged and new seeds stay comparabl
 controllers, for example
 `python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params --seeds 9 10 -- --profile vio_after_takeoff`.
 `log_lines.md` then names the profile in each row.
+
+## Structure Hold v11 vs tuned PX4
+
+Same benchmark, on policy v11 (v10's recipe trained longer; 18 % tighter than v10 on the
+Gazebo-like check), module headers at `3f7f1d9`, image rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v11 --params eval/baselines/px4_tuned_v1.params`
+(wall1m_*, seeds 1–3, `vio_default`, as for v10). Compared against tuned PX4 `20261022-171934`
+and v10 `20261023-092547`. Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v10 / **v11** | worst toward wall m, tuned v1 / v10 / **v11** | rms m, tuned v1 / v10 / **v11** | crashes, tuned / v10 / v11 | failsafes, tuned / v10 / v11 |
+|---|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 0.372 (0.449) / **0.328 (0.359)** | 0.240 (0.420) / 0.087 (0.188) / **0.078 (0.170)** | 0.238 / 0.192 / **0.167** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 4 m/s | 0.570 (0.919) / 0.375 (0.444) / **0.324 (0.351)** | 0.230 (0.406) / 0.075 (0.171) / **0.079 (0.166)** | 0.238 / 0.197 / **0.167** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 0.391 (0.472) / **0.333 (0.366)** | 0.214 (0.386) / 0.084 (0.163) / **0.126 (0.188)** | 0.239 / 0.209 / **0.171** | 0/3 / 1/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+
+Change in mean p95 against tuned PX4: −42 / −43 / −42 %; against v10: −12 / −14 / −15 %. RMS
+against v10: −13 / −16 / −18 %. Worst toward wall against v10: −10 / +6 / +50 %. The crash
+and failsafe columns score the 60 s hold window only. They miss what happened after it (below).
+
+| per seed | p95 m, calm / 4 / 8 m/s | v10 p95 m | worst toward wall m | offset up, module / truth m | roll-rate setpoint peak, std |
+|---|---|---|---|---|---|
+| seed 1 | 0.321 / 0.329 / 0.366 | 0.449 / 0.444 / 0.472 | 0.061 / 0.068 / 0.128 | −0.00 / +0.15, +0.01 / +0.16, +0.02 / +0.17 | 7.9, 7.8, **1.7** Hz; 0.18, 0.18, 0.19 rad/s |
+| seed 2 | 0.359 / 0.351 / 0.346 | 0.337 / 0.354 / 0.353 | 0.004 / 0.004 / 0.062 | −0.01 / −0.06, −0.01 / −0.06, −0.00 / −0.05 | 7.9, 7.8, 7.8 Hz; 0.13, 0.13, 0.13 rad/s |
+| seed 3 | 0.305 / 0.292 / 0.286 | 0.331 / 0.328 / 0.347 | 0.170 / 0.166 / 0.188 | −0.01 / +0.01, −0.01 / +0.01, +0.01 / +0.03 | 7.8, 7.8, **1.8** Hz; 0.13, 0.14, 0.14 rad/s |
+
+| | v10 | v11 |
+|---|---|---|
+| clean calm flight: p95, offset up, horizontal | 0.036 m, +0.03 m, 0.014 m | 0.017 m, −0.02 m, 0.003 m |
+| clean calm flight: along-wall drift (truth) mean, p2p | −0.008 m, 0.03 m | −0.003 m, 0.02 m |
+| clean calm flight: roll / pitch rate setpoint std, peak | 0.19 / 0.14 rad/s, 10.8 Hz | 0.13 / 0.17 rad/s, 7.8 Hz |
+| clean calm flight: thrust | 0.723 ± 0.004 | 0.725 ± 0.002 |
+| batch: offset up (module), mean (range) | +0.04 m (+0.03 to +0.06) | −0.00 m (−0.01 to +0.02) |
+| batch: offset up (truth), mean (range) | +0.09 m (−0.01 to +0.21) | +0.04 m (−0.06 to +0.17) |
+| batch: horizontal offset, mean | 0.03 m | 0.04 m |
+| batch: roll-rate setpoint std, mean | 0.21 rad/s | 0.15 rad/s |
+| batch: measured roll-rate std, mean | 0.08 rad/s | 0.10 rad/s |
+| batch: 1.6 Hz wobble (detector: roll-setpoint peak 1.3–2 Hz) | 0/9 flights | 2/9 flights (8 m/s seeds 1 and 3) |
+| batch: 1.3–2 Hz share of roll-setpoint power, seed 1 / 2 / 3 mean | 8 / 1 / 1 % | 40 / 5 / 13 % |
+| batch: along-wall drift (truth) p2p, mean | 0.33 m | 0.24 m |
+| batch: mean truth offset from the wall, seeds 1 / 2 / 3 | −0.01 / −0.12 / −0.04 m | −0.00 / −0.09 / −0.01 m |
+| after the hold: loss of control at the scripted re-engage | 0 of 9 (0 of 21 over seeds 1–8, seed 7's failed takeoffs aside) | **3 of 3 seed 3 flights, and again on a repeat of 4 m/s seed 3** |
+
+Vision delay: EKF2 fuses each vision sample 154 ms behind real time (157 ms on 8 m/s seed 3)
+in all ten flights, against `EKF2_EV_DELAY` 100 ms, the same as v9 and v10.
+
+**The re-engage failures.** After its 60 s hold, the runner hands back to Position mode for
+5 s, re-engages Structure Hold for about 3 s, then fires the module's test fault to time the
+handback. Every v11 seed 3 flight lost control in that re-engage window, 0.5–2.3 s after
+re-engaging. A repeat of 4 m/s seed 3 (`20261023-132221`) did it again. The IMU shows a yaw spin of
+19–25 rad/s and roll/pitch rates of 6–13 rad/s (the hold itself never exceeds 0.7 rad/s yaw),
+and the truth altitude drops 0.7–2.5 m:
+
+| flight | spin starts | gyro yaw peak | lowest truth altitude | how it ended |
+|---|---|---|---|---|
+| calm seed 3 | 97.2 s, 0.15 s after the test trip handed back | 21.9 rad/s | 1.88 m | stock PX4 recovered |
+| 4 m/s seed 3 | 95.5 s, 0.5 s after re-engage | 24.6 rad/s | 0 m (ground) | watchdog `pos_error` trip at 96.3 s, 0.6 m up; hit the ground at about 5.7 m/s, landed and disarmed |
+| 8 m/s seed 3 | 96.1 s, 2.1 s after re-engage | 19.3 rad/s | 0.43 m | the scripted test trip handed back at 97.0 s |
+| 4 m/s seed 3, repeat | 96.3 s, 2.3 s after re-engage | 22.1 rad/s | 1.67 m | the scripted test trip handed back at 97.0 s |
+
+In the 4 m/s flight the true body rate jumps from 0.2 to 4.5 rad/s yaw in one 20 ms sample,
+then to 11 rad/s, while the policy's last action was benign (0.09, 0.03, 0.20, 0.24). The
+motors cannot produce that yaw acceleration, so a simulator impulse probably starts it. The
+wind force is under 0.6 N all flight. What v11 does next is the problem. Its actions
+saturate and flip sign every tick, with collective thrust at its 0.08 floor for 0.6 s. Tilt
+stays under 22°, so the tilt trip never fires, and the position trip comes only 0.6 m above
+the ground. v10 never spins: gyro yaw stays at 0.45 rad/s or less in the hold and the
+re-engage of all 9 benchmark flights and all 12 seed 4–8 flights that produced a hold. The
+only v10 spin is seed 7's failed stock takeoff. Seed 3 is the seed that pushes the estimate
+0.2 m toward the wall at about +45 s, but why its re-engage window triggers this for v11
+alone is not found. The ground-truth angular velocity also shows 300–380 rad/s spikes in
+these flights. Those are wrap artefacts (2π over one sample as yaw crosses ±180°), not rates,
+so the gyro is used above.
+
+**Reading it.** Inside the 60 s hold, v11 is the best policy in Gazebo so far. Mean p95 is
+0.33 / 0.32 / 0.33 m against tuned PX4's 0.57 m (−42 / −43 / −42 %) and v10's 0.37 / 0.38 /
+0.39 m (−12 / −14 / −15 %). Its worst flight (0.366 m) is below v10's mean. It is lower than
+v10 on every seed 1 and seed 3 flight, and within 0.02 m of it on seed 2. The vertical offset that every
+policy since v6 carried is gone (module −0.00 m mean, v10 +0.04 m). The clean plumbing flight
+holds 0.017 m p95 (v10 0.036 m), and rate setpoints are calmer (std 0.15 against 0.21 rad/s).
+Two things are worse. First, it rings at 1.7–1.8 Hz. The detector flags 2 of 9 flights, and
+the band holds 36–46 % of roll-setpoint power on seed 1. On seed 1 and on 8 m/s seed 2 that
+ringing comes in bursts of about 0.4 rad/s after the 1.4 m vision jump and the 2 s dropouts,
+and dies out in about 5 s. On 8 m/s seed 3 it is a sustained 0.06–0.18 rad/s through the whole hold, with no estimate event behind it
+(v10 0.02–0.03). The measured roll rate is 27 % higher than v10's (std 0.10 against 0.08 rad/s). Second, wind into the wall
+at 8 m/s comes closer: worst toward wall 0.126 m mean against 0.084, though the closest
+clearance (0.82 m) is still better than v10's 0.79 m. The module side was clean inside every
+hold: full 60 s, no watchdog trip, fallback and yaw-guard shares 0, saturated-action share at
+most 0.05 %, stale time up to 2.30 s in the dropout seeds, handback 0.016–0.024 s, GPS-free
+with vision fused, 0 wall contacts. Outside the hold it was not clean: the repeatable loss of
+control at the re-engage on seed 3, with one ground impact, which v10 never shows.
+**Verdict: v10 returns.** v11's p95 is better in every wind, but it is worse on safety. It
+lost control after re-engaging in 4 of 4 seed 3 flights, against 0 for v10, and it shows a
+1.7–1.8 Hz oscillation that v10 does not. The module headers are regenerated from
+`training/policies/structure_hold_v10.onnx` (`PolicyWeights.hpp` is byte-identical to the v10
+header; `PolicyTestVectors.hpp` restored from the v10 commit, since `make_test_vectors` needs
+torch, which the Mac lacks). The module README points at v10 again. v11 stays in
+`training/policies/` for the training thread. It should come back only with a fix for the
+saturated, sign-flipping response to a large body-rate disturbance, and a seed 3 re-engage that
+holds.
