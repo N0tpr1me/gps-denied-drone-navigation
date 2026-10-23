@@ -128,3 +128,25 @@ def test_log_line_names_the_profile_the_runner_flew():
     for args in (["--profile", "vio_after_takeoff"], ["--profile=vio_after_takeoff"]):
         line = log_line(r, {**batch, "run_args": args}, "2026-10-23")
         assert ", vio_after_takeoff estimate," in line and "vio_default" not in line
+
+
+def test_hold_runner_scores_the_hold_and_the_post_hold_sequence_apart():
+    # The hold ran its 60 s; the sequence after it failed (stock PX4 struck the wall).
+    s = summary(hover={"passed": False, "checks": {}, "error": "TimeoutError: re-engaged"})
+    s["flight"] = s.pop("hover")
+    s["metrics"]["window_s"] = [35.0, 93.0]
+    r = row_from_summary(s, ekf([(0.0, "Hold")]), "External 1")
+    assert not r["crash"] and r["post_hold_fail"]
+    assert aggregate([r])["wall1m_wind_8ms"]["post_hold_fails"] == 1
+    assert "post-hold sequence failed" in log_line(r, {"label": "x", "commit": "c",
+                                                        "params": "p"}, "now")
+    # The hold itself ended early: a crash, as on the stock runner.
+    s["metrics"]["window_s"] = [35.0, 70.0]
+    r = row_from_summary(s, ekf([(0.0, "Hold")]), "External 1")
+    assert r["crash"] and not r["post_hold_fail"]
+    # A contact inside the hold is a crash whatever follows.
+    s["metrics"]["window_s"], s["metrics"]["contacts"] = [35.0, 93.0], 2
+    assert row_from_summary(s, ekf([(0.0, "Hold")]), "External 1")["crash"]
+    # The stock runner keeps its rule: an unfinished flight is a crash.
+    u = summary(hover={"passed": False, "error": "TimeoutError: touchdown"})
+    assert row_from_summary(u, ekf(CLEAN))["crash"]
