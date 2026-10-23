@@ -99,9 +99,6 @@ python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_
 informational: the module keeps `CONTROL_INTERVAL` at 10 ms and never derives it from
 `RATE_HZ`.
 
-```
-```
-
 ## Build
 
 ```bash
