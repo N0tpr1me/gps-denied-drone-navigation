@@ -1,0 +1,91 @@
+# Policy v17 candidate: v16 (run 20261023-204133) continued with estimate jumps and dropouts
+# in training at 0.1 Hz, as v10 had them (0.04 since v11).
+# - v15 and v16 hold well (Gate 1's headline on a scratch seed -43 % and -42 % against the
+#   PD, no clean-estimate sag) but chase Gazebo seed 1's jump: it puts the estimate 0.28 m
+#   away from the wall and 1.78 m along it, and they move 0.24 m (v15) and 0.19 m (v16)
+#   toward the wall for the first part. Doubling the toward-the-wall penalty (v16) did not
+#   stop it. Whether a continuation run chases that jump has flipped from run to run since
+#   jumps became rarer in training (v12 0.26 m, v13 0.09, v14 0.06, v15 0.25, v16 0.19);
+#   v10, trained with jumps at 0.1 Hz, does not (0.08). Here jumps and dropouts come at
+#   0.1 Hz again, five times the eval rate.
+# - Everything else is v16's.
+# Judged by the seed 1 replay, Gate 1's headline on a scratch seed, then
+# eval/configs/gazebo_check.yaml.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v17.yaml --smoke --device cpu
+name: structure_hold_ppo_v17
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261023-204133_structure_hold_ppo_v16_s0_7abd75a/policy.pt  # v16
+  resume_std: 0.05  # as for v12 to v16: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 1000  # ~28k env-steps/s on 4 CPU cores: ~30 min plus selection, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the Gazebo benchmark's hover; the drift needs 20 to 40 s to grow
+    reengage_rate_hz: 0.05  # a fresh 0.2 m offset about every 20 s, none in the first 2 s
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+      pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
+      pos_scale_m: 0.5
+      toward_wall: 4.0  # times the error toward the wall clipped at 1 m (v16; v13 to v15: 2.0)
+      height: 0.5  # times 1 - exp(-|height error| / 0.1 m), for the clean-estimate sag (v15)
+      height_scale_m: 0.1
+    # Extra rate-setpoint lag up to 30 ms, drawn per episode, as for v6 (the tick itself is
+    # now in the preset).
+    rate_lag_s: [0.0, 0.06]  # as v12 (v11: [0.0, 0.03])
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.1  # five times vio_default's 0.02, as for v10 (v11 to v16: 0.04)
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0  # a few in the 2 s smoke episodes
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
