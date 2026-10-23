@@ -110,6 +110,11 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     env.estimate_stale[:] = torch.as_tensor(stale)
     env.estimate_age[:] = t(age)
     env.last_action[:] = t(last_action)
+    # On airframes with PX4's gyro filter the env observes the filtered rate the rate loop
+    # last read (rate_pid.gyro). The module reads vehicle_angular_velocity, which is that
+    # filtered rate, so the vectors describe the sample -> observation mapping with the
+    # filter state at the sampled rate.
+    env.rate_pid.gyro[:] = t(ang_vel)
     env._observe()
     obs = env.obs_buf.clone()
 

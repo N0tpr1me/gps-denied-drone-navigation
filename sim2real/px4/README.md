@@ -1,7 +1,7 @@
 # Structure Hold PX4 module
 
 One onboard PX4 flight mode, built into `px4_sitl` first and later into the target
-airframe. Since 2026-10-22 it flies the released policy (v6, `training/policies/`, trained on the Gazebo x500) with the
+airframe. Since 2026-10-22 it flies the released policy (v9, `training/policies/`, trained on the Gazebo x500) with the
 brake-and-hover fallback and a yaw guard available as options; the v0 placeholder cascade
 stays selectable (`SH_CTRL 0`).
 
@@ -21,7 +21,7 @@ What it does today:
   is active.
 - **Policy inference** is a compiled-in MLP (`MlpPolicy.hpp`, no heap, no PX4 headers, no
   third-party library; docs/decisions.md). `tools/export_policy_header.py` turns the
-  released `training/policies/structure_hold_v6.onnx` + `.json` into
+  released `training/policies/structure_hold_v9.onnx` + `.json` into
   `structure_hold/PolicyWeights.hpp`: weights, the history length (15, from
   `policy.json input.history`, never hardcoded), the observation layout, the action scaling,
   the mock airframe the policy was trained on, and the policy's own defaults for the two
@@ -90,8 +90,16 @@ sim2real/px4/
 After a policy release, regenerate both headers and commit them:
 
 ```bash
-python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v6.onnx
-python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v6.onnx
+python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v9.onnx
+python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v9.onnx
+```
+
+`RATE_HZ` in the generated header is the tick the policy trained at (v9: 83 Hz, the
+12 ms tick the module's 10 ms `CONTROL_INTERVAL` gives on Gazebo's 4 ms gyro). It is
+informational: the module keeps `CONTROL_INTERVAL` at 10 ms and never derives it from
+`RATE_HZ`.
+
+```
 ```
 
 ## Build
@@ -238,9 +246,9 @@ batch runner so the rows compare like for like (same wind and estimate draws per
 same PX4 parameter set underneath, same truth scoring over a 60 s window):
 
 ```bash
-python -m eval.baselines.run_baseline --runner hold --label structure_hold_v6 \
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v9 \
     --params eval/baselines/px4_tuned_v1.params
-python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v6>/batch.json
+python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v9>/batch.json
 ```
 
 ## Frames
