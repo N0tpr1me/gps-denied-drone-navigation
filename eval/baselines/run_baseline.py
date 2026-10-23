@@ -24,7 +24,13 @@ Writes ``runs/<time>_px4_baseline_<label>_<commit>/``:
 - ``log_lines.md``: one experiments/LOG.md line per flight, to paste after review
 
 Crash: the vehicle came within ``eval.metrics.CONTACT_RADIUS_M`` of the wall (a contact)
-or the flight never completed (hover test error, no log). Failsafe: PX4 spent any part of
+or the flight never completed (hover test error, no log). With ``--runner hold`` a crash is
+judged on the scored hold alone, as the stock runner's is on its hover: a contact in it, or
+a hold that ended early. What the module's test sequence does after it (disengage to stock
+Position mode, re-engage, watchdog trip, handback; ``sim2real/px4/sitl_test.py``) is its own
+column, ``post_hold_fail``: the hold ran to the end but the sequence did not (Gazebo seed 3
+under ``vio_at_engage``: its estimate jump lands after the hold, and stock PX4 walks into the
+wall, whatever flew the hold; ``docs/gazebo_check.md``). Failsafe: PX4 spent any part of
 the flight in a failsafe (``ekf.json`` ``modes.failsafe_fraction`` > 0); ``failsafe_in_hover``
 when that happened inside the scored hover window.
 """
@@ -68,10 +74,14 @@ def failsafe_in_window(modes: dict[str, Any] | None, window: list[float] | None,
                for m in modes.get("sequence", []))
 
 
+HOLD_S = 60.0  # run_gazebo's --hold-s for the benchmark
+HOLD_SETTLE_S = 2.0  # the engage transient run_gazebo leaves out of the scored window
+
+
 def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
-                     expected_mode: str = "Hold") -> dict[str, Any]:
+                     expected_mode: str = "Hold", hold_s: float = HOLD_S) -> dict[str, Any]:
     """One table row from a run's estimate_summary.json (or hold_summary.json) and
-    ekf.json."""
+    ekf.json. ``expected_mode`` "External 1" is the hold runner: ``hold_s`` is its hold."""
     metrics = summary.get("metrics") or {}
     hover = summary.get("hover") or summary.get("flight") or {}
     # A flight that ran to the end but could not be scored is not a crash, just unscored.
@@ -101,6 +111,13 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
     # Never armed (preflight checks failed): nothing flew, so not a crash either.
     row["flown"] = "never became armable" not in str(hover.get("error", ""))
     row["crash"] = row["flown"] and (row["contacts"] > 0 or not completed)
+    row["post_hold_fail"] = False
+    if expected_mode == "External 1" and row["flown"]:
+        # The scored window is the first engaged stretch; a full one means the hold ended at
+        # the commanded disengage, whatever the sequence did afterwards.
+        full = bool(window) and window[1] - window[0] >= hold_s - HOLD_SETTLE_S - 1.0
+        row["crash"] = row["contacts"] > 0 or not full
+        row["post_hold_fail"] = full and not completed
     for key in METRICS:
         row[key] = float(metrics[key]) if key in metrics else math.nan
     return row
@@ -112,6 +129,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     for name in dict.fromkeys(r["scenario"] for r in rows):
         rs = [r for r in rows if r["scenario"] == name]
         agg: dict[str, Any] = {"n": len(rs), "crashes": sum(r["crash"] for r in rs),
+                               "post_hold_fails": sum(r.get("post_hold_fail", False) for r in rs),
                                "failsafes": sum(r["failsafe"] for r in rs),
                                "failsafes_in_hover": sum(r["failsafe_in_hover"] for r in rs)}
         for key in METRICS:
@@ -132,20 +150,22 @@ def table(batch: dict[str, Any]) -> str:
     lines = [f"Parameter set `{batch['label']}` (`{batch['params']}`), commit {batch['commit']}",
              "",
              "| scenario | seed | p95 m | rms m | worst toward wall m | min clearance m "
-             "| recovery max s | crash | failsafe (in hover) |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| recovery max s | crash | post-hold failed | failsafe (in hover) |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for r in batch["rows"]:
         lines.append(f"| {r['scenario']} | {r['seed']} | {fmt(r['p95_m'])} | {fmt(r['rms_m'])} "
                      f"| {fmt(r['worst_toward_surface_m'])} | {fmt(r['min_clearance_m'])} "
                      f"| {fmt(r['recovery_max_s'], 1)} | {'yes' if r['crash'] else 'no'} "
+                     f"| {'yes' if r.get('post_hold_fail') else 'no'} "
                      f"| {'yes' if r['failsafe'] else 'no'} "
                      f"({'yes' if r['failsafe_in_hover'] else 'no'}) |")
     lines += ["", "| scenario | p95 mean / worst m | worst toward wall mean / worst m "
-              "| crashes | failsafes (in hover) |", "|---|---|---|---|---|"]
+              "| crashes | post-hold failed | failsafes (in hover) |", "|---|---|---|---|---|---|"]
     for name, a in batch["aggregate"].items():
         lines.append(f"| {name} | {fmt(a['p95_m_mean'])} / {fmt(a['p95_m_worst'])} "
                      f"| {fmt(a['worst_toward_surface_m_mean'])} / "
                      f"{fmt(a['worst_toward_surface_m_worst'])} | {a['crashes']}/{a['n']} "
+                     f"| {a.get('post_hold_fails', 0)}/{a['n']} "
                      f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) |")
     return "\n".join(lines) + "\n"
 
@@ -204,19 +224,31 @@ def spread(batch: dict[str, Any], key: str = "p95_m") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _arg(run_args: list[str], name: str) -> str | None:
+    for i, a in enumerate(run_args):
+        if a == name and i + 1 < len(run_args):
+            return run_args[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def profile_of(run_args: list[str]) -> str:
     """The estimate profile the runner flies: its ``--profile`` argument, else its default."""
-    for i, a in enumerate(run_args):
-        if a == "--profile" and i + 1 < len(run_args):
-            return run_args[i + 1]
-        if a.startswith("--profile="):
-            return a.split("=", 1)[1]
-    return "vio_default"
+    return _arg(run_args, "--profile") or "vio_default"
+
+
+def hold_s_of(run_args: list[str]) -> float:
+    """The hold runner's hold: its ``--hold-s`` argument, else run_gazebo's default."""
+    v = _arg(run_args, "--hold-s")
+    return float(v) if v is not None else HOLD_S
 
 
 def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
     status = ("not flown (never armable)" if not r.get("flown", True) else
-              "crash" if r["crash"] else ("ok" if r["ok"] else "flown, check failed"))
+              "crash" if r["crash"] else
+              "hold ok, post-hold sequence failed" if r.get("post_hold_fail") else
+              ("ok" if r["ok"] else "flown, check failed"))
     result = (f"truth vs setpoint: p95 {fmt(r['p95_m'])} m, rms {fmt(r['rms_m'])} m, worst "
               f"toward wall {fmt(r['worst_toward_surface_m'])} m, min clearance "
               f"{fmt(r['min_clearance_m'], 2)} m, {r['contacts']} contacts, failsafe "
@@ -270,12 +302,13 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
             summary = json.loads(summary_path.read_text())
             ekf_path = folder / "ekf.json"
             ekf = json.loads(ekf_path.read_text()) if ekf_path.exists() else None
-            row = row_from_summary(summary, ekf, expected_mode)
+            row = row_from_summary(summary, ekf, expected_mode, hold_s_of(args.run_args))
             batch["rows"].append(row)
             log_lines.append(log_line(row, batch, when))
             print(f"{scenario} seed {seed}: p95 {fmt(row['p95_m'])} m, worst toward wall "
-                  f"{fmt(row['worst_toward_surface_m'])} m, crash {row['crash']}, failsafe "
-                  f"{row['failsafe']}", flush=True)
+                  f"{fmt(row['worst_toward_surface_m'])} m, crash {row['crash']}, post-hold "
+                  f"sequence failed {row['post_hold_fail']}, failsafe {row['failsafe']}",
+                  flush=True)
             batch["aggregate"] = aggregate(batch["rows"])
             (out / "batch.json").write_text(json.dumps(batch, indent=2) + "\n")
     batch["aggregate"] = aggregate(batch["rows"])
