@@ -217,3 +217,6 @@ penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
 | v8 | `20261023-044747` | 0.68 m / +0.47 m / 93 % | does not beat v6 | 0.71 m / +0.43 m / 9 of 9 |
 | v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | 0.52 m / +0.06 m / 0 of 9; 8 m/s drift in 1 of 3 (PR #42) |
 | v10 | `20261023-074020` (five cells, with resets) | 0.35 m / +0.04 m / 0 % (v9 0.47 m / +0.05 m / 0 %) | beats v9 (p95 ratio 0.73) | 0.38 m / +0.05 m / 0 of 9, no drift (PR #44); the reference since |
+| v11 | `20261023-122516` (`gazebo_check_v11.yaml`) | 0.28 m / −0.01 m / 0 % (v10 0.35 m / +0.04 m / 0 %) | beats v10 (p95 ratio 0.82, interval 0.80 to 0.84); one crash in 512 rough episodes (8 m/s into the wall), within the +1 % rule | not flown yet |
+
+v11 is the second forward test. If the check holds as it did for v10 (ratio 0.73 in the mock and in Gazebo), v11 should fly about 0.31 m p95 in Gazebo against v10's 0.38 m, sit at the hold point rather than 0.04 m above it, and show no wobble.

@@ -10,7 +10,10 @@ Inputs (the config's ``params``): ``num_envs``, ``iterations``, ``num_steps_per_
 ``estimate.dropout_max_s`` over the first ``fraction`` of the iterations; ``null`` is off),
 ``resume`` (a ``policy.pt`` or ``tb/model_<it>.pt`` from an earlier run: actor, critic,
 optimiser and iteration counter are restored and training continues for ``iterations`` more,
-so two runs under the hour limit make one longer run), and ``eval``
+so two runs under the hour limit make one longer run), ``resume_std`` (with ``resume``: set
+the actor's exploration std to this value after loading; ``null`` keeps the loaded one. A
+std clamped at the floor of ``actor.std_range`` gets no gradient, so a resumed policy that
+reached the floor otherwise keeps that std for good), and ``eval``
 (``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
 the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
 harder estimate corruption than the standard condition the result is reported on;
@@ -75,6 +78,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "curriculum": {"dropout_max_s": None, "fraction": 0.6},
     "resume": None,
+    "resume_std": None,
     "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
              "select_every": 250, "select_envs": 128},
 }
@@ -224,6 +228,10 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
         runner.current_learning_iteration += 1  # the loaded iteration is done; go on after it
         print(f"ppo: resumed {p['resume']} at iteration {runner.current_learning_iteration}",
               flush=True)
+        if p.get("resume_std") is not None:
+            with torch.no_grad():
+                runner.alg.get_policy().distribution.std_param.fill_(float(p["resume_std"]))
+            print(f"ppo: exploration std reset to {float(p['resume_std'])}", flush=True)
     p["_start_iteration"] = int(runner.current_learning_iteration)
 
     t0 = time.perf_counter()

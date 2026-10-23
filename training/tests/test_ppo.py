@@ -197,7 +197,8 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     # Resume from that run: training continues after its last iteration.
     rcfg = yaml.safe_load(PPO_CONFIG.read_text())
     rcfg["params"].update(rcfg.pop("smoke"))
-    rcfg["params"].update({**SMALL, "resume": str(tmp_path / "train" / "policy.pt")})
+    rcfg["params"].update({**SMALL, "resume": str(tmp_path / "train" / "policy.pt"),
+                           "resume_std": 0.5})
     rsummary = run_entry("training.train_ppo", rcfg, tmp_path / "resume")
     rmeta = json.loads((tmp_path / "resume" / "policy.json").read_text())
     assert rmeta["start_iteration"] == head["selected_iteration"] + 1
@@ -206,6 +207,7 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     rlines = (tmp_path / "resume" / "metrics.jsonl").read_text().splitlines()
     rrows = [json.loads(x) for x in rlines]
     assert rrows[0]["step"] == rmeta["start_iteration"]
+    assert abs(rrows[0]["action_std"] - 0.5) < 0.1  # resume_std replaced the loaded std
 
     ecfg = yaml.safe_load(EVAL_CONFIG.read_text())
     ecfg["params"].update(ecfg.pop("smoke"))
