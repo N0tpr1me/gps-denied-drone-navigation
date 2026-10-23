@@ -269,4 +269,5 @@ fallback and yaw-guard shares 0, stale time up to 2.26 s in the dropout seeds, h
 seed 1). **Verdict: v8 is worse than v6 overall.** It is better only on the clean estimate
 (z offset, chatter). On the benchmark itself it loses on p95, distance toward the wall,
 vertical offset and the 1.6 Hz wobble. Its along-wall drift is about the same. v6 stays the
-better policy in Gazebo.
+better policy in Gazebo. The module therefore stays on v6: its headers were regenerated from
+`structure_hold_v6.onnx` in the same PR, and v8 is kept only as a recorded experiment.
