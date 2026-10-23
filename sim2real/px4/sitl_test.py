@@ -51,8 +51,8 @@ SUB_AUTO_TAKEOFF, SUB_AUTO_LOITER, SUB_AUTO_LAND, SUB_EXTERNAL1 = 2, 3, 6, 11
 # structure_hold_status.state
 STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
 TRIP_TEST_FAULT, TRIP_ESTIMATE_RESET = 1, 6
-# Commander refuses the mode for SH_RST_HOLD (10 s) after an EKF position reset; a
-# re-engage that lands in that window is retried until it is accepted or this runs out.
+# With SH_RST_HOLD > 0 commander refuses the mode for that long after an EKF position
+# reset; a re-engage that lands in the window is retried until accepted or this runs out.
 REENGAGE_RETRY_S = 14.0
 
 

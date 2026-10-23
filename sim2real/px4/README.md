@@ -56,17 +56,21 @@ What it does today:
   hold error, in that priority order. A trip latches until disarm. On a trip the module hands back:
   Position mode (Altitude mode if the horizontal estimate is gone), then Hold, then Land
   if the previous request was refused, holding level at hover thrust in between.
-- **Engage hold-off after an EKF reset** (`SH_RST_HOLD`, 10 s; 0 disables): for that long
-  after EKF2 reset its horizontal position (`vehicle_local_position.xy_reset_counter`
+- **Engage hold-off after an EKF reset** (`SH_RST_HOLD`, seconds; default 0 = off): for
+  that long after EKF2 reset its horizontal position (`vehicle_local_position.xy_reset_counter`
   changed) the mode's arming check reports it unavailable, so commander keeps the current
   mode, and if the switch slipped through anyway (commander polls every 300 ms) the module
   hands straight back with `trip_reason` `estimate_reset` (6), nothing latched. A hold point
   captured while the estimate settles after a reset is not where the vehicle is: v11
   re-engaged 0.1 to 0.4 s after a 1.1 m vision reset, captured a point on the wall face and
-  struck the wall (`docs/baseline.md`, v11 section). A reset during a hold does not trip the
-  watchdog; the policy is trained on them. `structure_hold_status.reset_age_s` says how long
-  ago the last reset was (−1 if none). `sitl_test.py` retries its scripted re-engage once a
-  second for up to 14 s, and records the refusals and the wait in `summary.json`.
+  struck the wall (`docs/baseline.md`, v11 section). It ships off because stock PX4
+  captures the same settling estimate: in the mock replay of that sequence a 10 s hold-off
+  left v10 at 92 % crashes against 91 % without it, most of them moved into the stock
+  phase. It is an operator choice, not a fix; a fix needs a direct distance to the
+  structure (`docs/real-flight-gap.md`). A reset during a hold never trips the watchdog;
+  the policy is trained on them. `structure_hold_status.reset_age_s` says how long ago the
+  last reset was (−1 if none). `sitl_test.py` retries its scripted re-engage once a second
+  for up to 14 s, and records the refusals and the wait in `summary.json`.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`

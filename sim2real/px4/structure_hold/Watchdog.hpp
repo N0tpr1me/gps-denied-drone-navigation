@@ -12,12 +12,15 @@
  * A trip latches until clearLatch() (the module clears it on disarm), so a mode that
  * handed back cannot be re-engaged in the same flight without the pilot noticing.
  *
- * Entry is also refused, without latching, for reset_holdoff_us after the estimator reset
- * its horizontal position (vehicle_local_position.xy_reset_counter changed; noteReset()).
- * A hold point captured while the estimate is still settling after a reset is not where
- * the vehicle is: policy v11 re-engaged 0.1 to 0.4 s after a 1.1 m vision reset, captured
- * a point on the wall face and struck it (docs/baseline.md, v11 section). Once the mode is
- * flying, a reset is the policy's to handle (it is trained on them), so check() ignores it.
+ * Entry can also be refused, without latching, for reset_holdoff_us after the estimator
+ * reset its horizontal position (vehicle_local_position.xy_reset_counter changed;
+ * noteReset()). A hold point captured while the estimate is still settling after a reset
+ * is not where the vehicle is: policy v11 re-engaged 0.1 to 0.4 s after a 1.1 m vision
+ * reset, captured a point on the wall face and struck it (docs/baseline.md, v11 section).
+ * Off by default (reset_holdoff_us 0, PX4 param SH_RST_HOLD): stock PX4 captures the same
+ * settling estimate, so refusing the engage does not prevent that strike, it only chooses
+ * who flies into it. Once the mode is flying, a reset is the policy's to handle (it is
+ * trained on them), so check() ignores it.
  *
  * This header is deliberately free of PX4 dependencies so it compiles and runs in a plain
  * g++ unit test (tests/test_watchdog.cpp) without a PX4 tree.
@@ -44,7 +47,7 @@ struct WatchdogLimits {
 	uint64_t estimate_timeout_us{500000};  // 0.5 s
 	float max_tilt_rad{0.785f};            // 45 deg
 	float max_position_error_m{2.0f};
-	uint64_t reset_holdoff_us{10000000};   // 10 s; 0 disables the entry hold-off
+	uint64_t reset_holdoff_us{0};          // entry hold-off after an estimator reset; 0 = off
 };
 
 struct WatchdogInputs {

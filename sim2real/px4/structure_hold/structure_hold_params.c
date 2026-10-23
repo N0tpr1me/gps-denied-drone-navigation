@@ -62,7 +62,10 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
  * horizontal position (vehicle_local_position.xy_reset_counter), because a hold point
  * captured while the estimate settles after a reset is not where the vehicle is. Not
  * latched: the mode becomes available again when the time has passed. A reset during a
- * hold does not trip the watchdog; the policy is trained on them. 0 disables.
+ * hold never trips the watchdog; the policy is trained on them. Off by default (0):
+ * stock PX4 captures the same settling estimate, so in the mock replay of the v11 seed 3
+ * sequence a 10 s hold-off moved the crashes into the stock phase without preventing
+ * them (docs/baseline.md, v11 section). An operator choice, not a fix.
  *
  * @unit s
  * @min 0.0
@@ -70,7 +73,7 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
  * @decimal 1
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_RST_HOLD, 10.0f);
+PARAM_DEFINE_FLOAT(SH_RST_HOLD, 0.0f);
 
 /**
  * Test hook: force a watchdog trip

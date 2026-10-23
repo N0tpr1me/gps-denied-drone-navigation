@@ -720,8 +720,19 @@ reset at 92.33 s, 1.3 s before the disengage, re-engage at E −0.42, never clos
 sees estimate minus hold point, so a retrain cannot fix it. What is genuinely v11's is the
 1.7 to 1.8 Hz ring and the standing yaw error. The post-strike response has no v10
 comparison because v10 never struck the wall; in the mock a 5 rad/s yaw kick crashes both.
-Two protocol fixes followed: the module refuses to engage for `SH_RST_HOLD` (10 s) after an
-EKF xy reset (PR #50; `sim2real/px4/README.md`), and the bridge profile `vio_at_engage`
-keys the fault schedule to the engage, so every policy meets the same faults at the same
-time after engage and none before takeoff (`sim2real/estimate_bridge/README.md`). The
-verdict stands: v10 stays, v11 comes back with the ring and the yaw error fixed.
+PR #50 followed with two changes. The bridge profile `vio_at_engage` keys the fault
+schedule to the engage, so every policy meets the same faults at the same time after
+engage and none before takeoff (`sim2real/estimate_bridge/README.md`); new comparisons
+use it for both controllers. The module gained an engage hold-off after an EKF xy reset
+(`SH_RST_HOLD`, `sim2real/px4/README.md`), but it ships off (default 0): the training
+thread replayed the seed 3 sequence in the mock (64 episodes; hold, stock Position mode
+with the reset-shifted setpoint, re-engage, 1.4 m jump toward the wall 0.5 to 3 s before
+the switch, contact at 0.40 m) and found v10 crashes 91 %, v11 94 %, a stock-style PD
+62 %, and v10 with a 10 s hold-off still 92 %, most of them in the stock phase: whatever
+captures the settling estimate walks into the wall as the jump decays, and the policies
+answer a sudden offset slowly by training (v10 moves 0.25 m of the 1.1 m in 1.7 s). There
+is no module-only fix with the current inputs; a safe standoff needs a direct distance to
+the structure (a rangefinder with PX4 Collision Prevention, or the camera's depth to the
+wall), logged in `docs/real-flight-gap.md`. The verdict stands: v10 stays, v11 comes back
+with the ring and the yaw error fixed, and seed 3's post-hold sequence is compared only on
+a matched timeline.
