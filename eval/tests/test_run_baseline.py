@@ -150,3 +150,16 @@ def test_hold_runner_scores_the_hold_and_the_post_hold_sequence_apart():
     # The stock runner keeps its rule: an unfinished flight is a crash.
     u = summary(hover={"passed": False, "error": "TimeoutError: touchdown"})
     assert row_from_summary(u, ekf(CLEAN))["crash"]
+
+
+def test_hold_runner_reads_the_window_where_hold_summary_keeps_it():
+    # run_gazebo writes the window under "hold", not in "metrics"; a full hold whose
+    # summary has it only there is not a crash (every v12 flight of 2026-10-23 was scored
+    # a crash before this).
+    s = summary()
+    s["flight"] = s.pop("hover")
+    s["hold"] = {"window_s": s["metrics"].pop("window_s")}
+    s["hold"]["window_s"] = [30.2, 89.0]
+    r = row_from_summary(s, ekf([(0.0, "Hold")]), "External 1")
+    assert r["window_s"] == [30.2, 89.0]
+    assert not r["crash"] and not r["post_hold_fail"]
