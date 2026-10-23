@@ -418,6 +418,68 @@ are calmer. Worst toward wall is better at 8 m/s (0.08 against 0.14 m) but worse
 and at 4 m/s (0.09 and 0.08 against 0.02 m), because v10 holds the point rather than standing
 off the wall.
 
+### Engage guard confirmation (2026-10-23, `957760d`)
+
+The question was whether the engage hold-off (`SH_RST_HOLD` 10 s, PR #50) changes the v10 hold
+numbers. The image was rebuilt at `957760d` (`PolicyWeights.hpp` `NAME` structure_hold_v10,
+`SH_RST_HOLD` default 10.0 in the built module). The benchmark was flown again exactly as
+`20261023-092547`, giving batch `20261023-140712`:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3`
+(`vio_default`).
+
+| p95 m, old `092547` → new `140712` | calm 0 m/s | 4 m/s | 8 m/s |
+|---|---|---|---|
+| seed 1 | 0.449 → no hold | 0.444 → no hold | 0.472 → no hold |
+| seed 2 | 0.337 → no hold | 0.354 → no hold | 0.353 → no hold |
+| seed 3 | 0.331 → 0.324 | 0.328 → 0.313 | 0.347 → 0.312 |
+| seed 3 worst toward wall m | 0.188 → 0.185 | 0.171 → 0.172 | 0.163 → 0.185 |
+
+**Seeds 1 and 2 never engaged (6 of 9 flights). This is the hold-off doing what it was built
+for, but the test script does not allow for it.** `vio_default` fires vision jumps during and just after takeoff. On seed 1,
+EKF2's last xy reset came at 25.5 s (log time) and the engage request at 29.0 s, 3.4 s
+later. On seed 2 the reset came at 21.5 s and the engage at 28.5 s, 6.9 s later. Both
+requests fall inside the 10 s hold-off, so the mode was refused. `sitl_test.py` retries only the
+re-engage. The first engage waits 5 s for the mode and then the flight aborts with
+`TimeoutError: timed out after 5 s waiting for Structure Hold in heartbeat`. `run_baseline`
+scores these flights as crashes, but there was no wall contact: the vehicle never left PX4's stock modes.
+In `092547`, v10 engaged at these same moments (same seed draws) and held normally.
+On `vio_default`, seeds 1 and 2 cannot be compared like for like until the first engage
+waits out the hold-off too. When it does, those holds start later and meet different faults.
+
+**Seed 3 (the like-for-like cells):** p95 0.324 / 0.313 / 0.312 m against 0.331 / 0.328 /
+0.347 m. That is within flight-to-flight noise and slightly lower in every wind. Worst toward wall is unchanged
+in calm air and at 4 m/s, and +0.02 m at 8 m/s. There were 0 wall contacts inside the holds. None of the three
+seed 3 flights pass `ok`, the same as in `092547`. In calm air and at 4 m/s, a PX4
+failsafe (nav_state 5, Return) took the vehicle out of the mode 0.3 s before the
+scripted disengage. At 8 m/s only `position_held` failed (the drift tolerance on the
+estimate). **Re-engage:** ack 0 (accepted). It was refused 3 / 3 / 5 times, with a wait of
+3.9 / 3.9 / 6.0 s, because EKF2 reset xy at 87.6–88.0 s, 10 s before the accepted
+re-engage at 98.1–99.1 s. **`estimate_reset` (6)** never appears in `structure_hold_status`
+in any flight. Every refusal came from the arming check, so commander never let a switch
+through that the module then had to hand back. The trip reasons logged are 0 and 1 (the scripted test fault) only.
+
+**vio_at_engage (one flight, wall1m_wind_8ms seed 3):**
+`... --label structure_hold_v10_at_engage --scenarios wall1m_wind_8ms --seeds 3 -- --profile vio_at_engage`.
+The first attempt (`20261023-141843`) did not anchor: `bridge.log` printed "faults keyed
+to the start" and `verify_trace` reported `fault_anchor start`, `anchor_t` null. The cause was
+that `run_gazebo` and `run_estimate` rebuilt the profile without `fault_anchor` when `--seed` was
+given, and `run_baseline` always passes it. This is fixed in `367b780`
+(`EstimateProfile.with_seed`, with a test). The flight was flown again as `20261023-142203`
+(image unchanged; the fix is host-side). The bridge printed
+`Structure Hold engaged at t=33.54 s, fault clock anchored at 25.0 s (step 1440)`, and
+`verify_trace` reported `ok`, `fault_anchor engage`, `anchor_t 33.544`, `anchor_step 1440`,
+with no jumps or dropouts before the engage. **Hold p95 0.241 m** (rms 0.151, worst toward wall 0.165,
+min clearance 0.84 m, 0 contacts in the window). Do not compare this with the `vio_default` numbers: the fault timeline is different.
+The flight did not complete. A 1.6 m vision jump came at 95.07 s bridge time (log
+≈ 90.0 s), 1.3 s after the scripted disengage. EKF2 reset onto it at log 91.54 s, and stock
+Position mode walked the vehicle toward the wall as the jump decayed. Truth
+clearance fell to 0.33 m, and the x500 struck the wall at about log 96.8 s and fell (truth
+altitude 2.6 → 0.2 m). This is the same mechanism as v11's seed 3 strike, here in PX4's own mode.
+The hold-off refused the re-engage until 10.5 s after the reset. The re-engage was then accepted at
+log 102.06 s on a vehicle already tumbling, and the tilt watchdog (4) handed back after 0.2 s.
+The runner's 14 s retry window ran out and the flight was scored incomplete. The module did
+what it should. The loss is stock Position mode flying on a jumped estimate between the two engages.
+
 ## Gate 2 evidence: v10 vs tuned PX4 on 8 seeds
 
 Seeds 4–8 flown for both controllers on 2026-10-23 at `ad907ce` (same image, module headers
