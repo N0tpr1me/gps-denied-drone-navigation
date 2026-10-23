@@ -2,6 +2,7 @@ from envs.structure_hold.config import (
     Actuation,
     AirframeRandomization,
     RewardWeights,
+    SensorNoise,
     StructureHoldConfig,
     WallYawTorque,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "NUM_OBS",
     "OBS",
     "RewardWeights",
+    "SensorNoise",
     "StructureHoldConfig",
     "StructureHoldEnv",
     "TERM_REASONS",

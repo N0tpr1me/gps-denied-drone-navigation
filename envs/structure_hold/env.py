@@ -104,6 +104,7 @@ class StructureHoldEnv:
         self.seed = int(seed)
         self.rng = np.random.default_rng(seed)
         self.airframe_rng = np.random.default_rng([int(seed), 0xA1F])
+        self.noise_gen = torch.Generator(device=device).manual_seed(int(seed) * 7919 + 0x5E5)
 
         n, dev, dt = self.num_envs, self.device, self.dtype
         self.sim = make_sim(sim, cfg.quad, n, cfg.dt, device=device)
@@ -150,6 +151,10 @@ class StructureHoldEnv:
         self.inertia_scale = torch.ones(n, dtype=dt, device=dev)
         self.yaw_torque_peak = torch.zeros(n, dtype=dt, device=dev)  # signed, N m
         self.yaw_torque = torch.zeros(n, dtype=dt, device=dev)  # applied this step, N m
+        # Per-episode sensor-noise stds (cfg.sensor_noise; zero while it is off) and the
+        # velocity wander state.
+        self.noise_std = torch.zeros(n, 3, dtype=dt, device=dev)  # rates, gravity, vel wander
+        self.vel_wander = torch.zeros(n, 3, dtype=dt, device=dev)
         self.term_reason = torch.zeros(n, dtype=torch.long, device=dev)
         self.counts = {"contact": 0, "ground": 0, "tilt": 0, "box": 0, "nonfinite": 0,
                        "timeout": 0}
@@ -205,6 +210,13 @@ class StructureHoldEnv:
             return
         cfg, rng = self.cfg, self.rng
         self._draw_airframe(env_ids)
+        if cfg.sensor_noise.active:
+            sn = cfg.sensor_noise
+            top = torch.tensor([sn.ang_vel_std_rad_s, sn.gravity_std, sn.vel_wander_std_mps],
+                               dtype=self.dtype, device=self.device)
+            u = torch.rand(n, 3, generator=self.noise_gen, device=self.device, dtype=self.dtype)
+            self.noise_std[env_ids] = u * top
+            self.vel_wander[env_ids] = 0.0
 
         dist = rng.uniform(*cfg.hold_distance, size=n)
         height = rng.uniform(*cfg.hold_height, size=n)
@@ -290,6 +302,19 @@ class StructureHoldEnv:
             peak = rng.uniform(*wy.peak_nm, size=n)
             sign = np.where(rng.random(n) < 0.5, -1.0, 1.0)
             self.yaw_torque_peak[env_ids] = t(peak * sign)
+
+    def _add_sensor_noise(self, o: torch.Tensor) -> None:
+        """Gyro and attitude noise, and slow velocity wander (cfg.sensor_noise)."""
+        def randn(k: int) -> torch.Tensor:
+            return torch.randn(self.num_envs, k, generator=self.noise_gen, device=self.device,
+                               dtype=self.dtype)
+
+        a = math.exp(-self.dt / self.cfg.sensor_noise.vel_wander_tau_s)
+        self.vel_wander = a * self.vel_wander + math.sqrt(1.0 - a * a) * (
+            self.noise_std[:, 2:3] * randn(3))
+        o[:, OBS["vel"]] += self.vel_wander
+        o[:, OBS["ang_vel"]] += self.noise_std[:, 0:1] * randn(3) / self.cfg.max_rate_rad_s
+        o[:, OBS["gravity_body"]] += self.noise_std[:, 1:2] * randn(3)
 
     def _wall_yaw_torque(self, pos: torch.Tensor) -> torch.Tensor | None:
         wy = self.cfg.wall_yaw_torque
@@ -429,4 +454,6 @@ class StructureHoldEnv:
         o[:, OBS["last_action"]] = self.last_action
         o[:, OBS["stale"]] = self.estimate_stale.to(self.dtype)[:, None]
         o[:, OBS["age"]] = self.estimate_age.clamp(max=1.0)[:, None]
+        if cfg.sensor_noise.active:
+            self._add_sensor_noise(o)
         torch.nan_to_num_(o)

@@ -177,3 +177,29 @@ own previous-action input: freezing that input stops it, and the cycle costs alm
 in p95. Raising the action-change penalty to 1.0 (run `20261022-201654`) collapsed the
 exploration noise and left the cycle. Charging the thrust swing and the body rates instead
 (run `20261022-210442`) removed it: thrust within +/-0.2 N of the weight.
+
+### On the x500: v6, run `20261022-231539`
+
+v6 is v5 trained 1000 iterations longer (`training/configs/structure_hold_ppo_v5_resume.yaml`,
+run `20261022-223115`, checkpoint 1500), scored on the same episodes as v5 above.
+
+| Cell | p95: v6 / v5 / PD (m) | Crash: v6 / v5 / PD | v6 verdict |
+| --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.47 / 0.53 / 0.48 | 1.5 / 2.0 / 9.4 % | fail (-1 %) |
+| 0 m/s, 2 m | 0.48 / 0.53 / 0.52 | 0.8 / 0.9 / 2.4 % | pass (-8 %) |
+| 4 m/s, 1 m | 0.50 / 0.52 / 0.49 | 1.6 / 2.1 / 8.7 % | fail (+2 %) |
+| 4 m/s, 2 m | 0.49 / 0.54 / 0.54 | 0.8 / 1.0 / 2.4 % | pass (-8 %) |
+| 8 m/s, 1 m (headline) | 0.52 / 0.56 / 0.51 | 2.1 / 3.1 / 8.9 % | fail (+1 %) |
+| 8 m/s, 2 m | 0.57 / 0.61 / 0.60 | 1.6 / 1.6 / 2.1 % | pass (-6 %) |
+
+Pooled: p95 0.50 / 0.55 / 0.52 m, crashes 1.4 / 1.8 / 5.7 %; thrust roughness 1.1 per second,
+the same as the PD's. v6 is better than v5 in every cell, tighter than the PD at 2 m and level
+with it at 1 m, with a quarter of its crashes. It is the release for the Gazebo re-fly.
+
+In Gazebo, v5 held 0.3 to 0.45 m above its hold point and wobbled at 1.6 Hz in roll
+(rate setpoint std 0.42 rad/s, against 0.04 in the mock), with PX4's hover thrust and the
+estimate both correct. The mock does not show that wobble under more estimate delay (to the
+trained 150 ms), rate-loop lag (to 100 ms), stale gyro and attitude inputs (to 50 ms) or an
+estimate that leads the truth. Noisy rate or velocity inputs lift the hold in the mock (white
+noise 0.15 on either: +0.1 m for v5 and v6), so the wobble probably causes the lift. v6 starts
+lower: it sits 0.01 m high in calm air, where v5 sat 0.09 m high.

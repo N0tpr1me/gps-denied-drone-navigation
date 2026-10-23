@@ -158,6 +158,46 @@ class WallYawTorque:
 
 
 @dataclass(frozen=True)
+class SensorNoise:
+    """Noise on the inputs the mock otherwise reads from the true state, plus slow wander on
+    the velocity estimate, for policies that fly on a real estimator and IMU. Per episode
+    each std is drawn uniformly between 0 and its maximum here:
+
+    - ``ang_vel_std_rad_s``: white noise on the body rates (gyro);
+    - ``gravity_std``: white noise on the gravity direction (attitude estimate);
+    - ``vel_wander_std_mps`` with ``vel_wander_tau_s``: first-order (Ornstein-Uhlenbeck)
+      noise on the velocity input, the slow error of an EKF's velocity, which a 15-step
+      history cannot average out the way it averages white noise.
+
+    v5 sat 0.3 to 0.45 m above its hold point in Gazebo while its rate setpoints jittered
+    ten times more than in the mock; in the mock, noisy rate or velocity inputs lift its hold
+    the same way (docs/decisions.md, 2026-10-22). Off by default; its own generator, so it
+    changes nothing else.
+    """
+
+    ang_vel_std_rad_s: float = 0.0
+    gravity_std: float = 0.0
+    vel_wander_std_mps: float = 0.0
+    vel_wander_tau_s: float = 0.3
+
+    def __post_init__(self) -> None:
+        if min(self.ang_vel_std_rad_s, self.gravity_std, self.vel_wander_std_mps) < 0:
+            raise ValueError("sensor noise stds must be >= 0")
+        if self.vel_wander_tau_s <= 0:
+            raise ValueError("vel_wander_tau_s must be positive")
+
+    @property
+    def active(self) -> bool:
+        return max(self.ang_vel_std_rad_s, self.gravity_std, self.vel_wander_std_mps) > 0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> SensorNoise:
+        d = dict(d or {})
+        _check_keys(cls, d, "sensor noise")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
 class Actuation:
     """How PX4's normalised commands become force and torque on the airframe, between the
     rate loop and the simulator. The defaults are the placeholder's: PX4's unit torque is
@@ -253,6 +293,7 @@ class StructureHoldConfig:
     reward: RewardWeights = field(default_factory=RewardWeights)
     airframe_rand: AirframeRandomization = field(default_factory=AirframeRandomization)
     wall_yaw_torque: WallYawTorque = field(default_factory=WallYawTorque)
+    sensor_noise: SensorNoise = field(default_factory=SensorNoise)
 
     def __post_init__(self) -> None:
         if self.dt <= 0 or self.episode_length_s < self.dt:
@@ -289,6 +330,7 @@ class StructureHoldConfig:
             "reward": RewardWeights.from_dict,
             "airframe_rand": AirframeRandomization.from_dict,
             "wall_yaw_torque": WallYawTorque.from_dict,
+            "sensor_noise": SensorNoise.from_dict,
         }
         for key, build in nested.items():
             if key in d:
