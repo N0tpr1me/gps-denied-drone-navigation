@@ -326,3 +326,34 @@ as much as v10 does: its pooled p95 drops from 0.52 to 0.36 m and its crashes fr
 the headline stays out of reach: v10 needs about 15 more points there. In Gazebo, where the yardstick is tuned PX4 rather than this
 PD, v10 is 31 % below at 8 m/s (`docs/baseline.md`). The fused run took 29 min on 4 idle
 cores.
+
+### On the x500, both ways: v17, runs `20261023-222618` (fused) and `20261023-225211` (raw)
+
+v17 is v13 (v10's line, `training/configs/structure_hold_ppo_v13.yaml`) continued four
+times: a fresh 0.2 m start scatter about every 20 s of training with the policy's history
+refilled (v14, `reengage_rate_hz`; Gate 1 opens every 20 s episode with that transient), a
+reward on the height error alone (v15), the toward-the-wall penalty at 4.0 (v16) and training
+jumps and dropouts at 0.1 Hz (v17, `training/configs/structure_hold_ppo_v17.yaml`, run
+`20261023-211755`, iteration 11500). It is a Gate 1 candidate, not the release: it fails two
+of the Gazebo-like check's re-fly rules (`docs/gazebo_check.md`), so v10 still flies.
+Configs `eval/configs/gate1_x500_ekf_v17.yaml` and `gate1_x500_v17.yaml`; the same
+held-out episodes as v10's.
+
+| Cell | Raw: p95 v17 / PD (m) | Raw: crash v17 / PD | Raw verdict | Fused: p95 v17 / PD (m) | Fused: change | Fused: crash v17 / PD | Fused verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.82 / 0.48 | 58.5 / 9.4 % | fail | 0.22 / 0.32 | -30 % | 0.0 / 2.8 % | pass |
+| 0 m/s, 2 m | 0.96 / 0.52 | 57.3 / 2.4 % | fail | 0.22 / 0.34 | -34 % | 0.0 / 0.0 % | pass |
+| 4 m/s, 1 m | 0.81 / 0.49 | 57.2 / 8.7 % | fail | 0.22 / 0.32 | -31 % | 0.0 / 3.0 % | pass |
+| 4 m/s, 2 m | 0.94 / 0.54 | 56.5 / 2.4 % | fail | 0.23 / 0.36 | -37 % | 0.0 / 0.0 % | pass |
+| 8 m/s, 1 m (headline) | 0.79 / 0.51 | 56.0 / 8.9 % | fail | 0.23 / 0.37 | -36 % | 0.0 / 2.9 % | pass (headline ok) |
+| 8 m/s, 2 m | 0.95 / 0.60 | 56.3 / 2.1 % | fail | 0.25 / 0.44 | -44 % | 0.0 / 0.0 % | pass |
+| **Pooled** | **0.88 / 0.52** | **57.0 / 5.7 %** | **FAIL, 0 of 6** | **0.23 / 0.36** | | **0.0 / 1.4 %** | **PASS, 6 of 6** |
+
+Through the fusion v17 passes Gate 1: every cell's interval is below 0, it does not crash
+once in 18,432 episodes, and the headline is -36 % (interval -38 to -35 %) against the
+-30 % rule (v10 -15 %). What moved the headline was the start: on a scratch seed (8001) v13
+still had 0.22 m of its start offset left 1 s in and v14 0.15 m, against the PD's 0.19 m.
+On the raw fix, 50 to 150 ms late, it fails as v10 did and worse (crash 57 % against
+v10's 37 %): it is trained behind the fusion, which compensates the delay. Which scoring
+counts is Zain's call (the Proposed row in `docs/decisions.md`). The fused run took 26 min
+and the raw one 23 min on 4 idle cores.
