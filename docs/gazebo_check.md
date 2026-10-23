@@ -108,10 +108,26 @@ PX4 and after a re-engage at the wall are printed, not scored: the sequence caus
 every controller. `reengage_jump` adds Gazebo seed
 3's 1.4 m vision jump toward the wall 0.5 to 3 s before the switch; it is printed, not
 scored. From 2026-10-23 the check scores wall contact at the x500's 0.40 m centre distance
-(rotors 0.24 to 0.26 m out, 0.14 m props), not the scorer's 5-inch 0.25 m. Only a policy that passes
-goes to the Mac. The report prints Gazebo's own numbers for v6, v8, v9 and v10 beside the mock's,
-so the check's fidelity stays in view; when a new policy flies in Gazebo, add its numbers
-under `gazebo` in the config.
+(rotors 0.24 to 0.26 m out, 0.14 m props), not the scorer's 5-inch 0.25 m.
+
+**Replay cells** (`events` in the config, from 2026-10-23 18:00, after v12's Gazebo flights)
+replay a Gazebo flight's estimate faults. Scripted jumps and dropouts start at the same
+moment in every episode, and the random ones are off. `seed1_jump` is Gazebo seed 1's 1.8 m
+jump along the wall (see "v12 in Gazebo" below). A replay cell is scored on its own, not in
+the pooled p95:
+- the mean **worst toward the wall** (the largest true displacement along the wall normal)
+  may be at most 0.05 m above the reference's;
+- crashes may be at most 1 point above the reference's.
+
+Every cell now prints the worst toward the wall.
+
+Only a policy that passes goes to the Mac. The report prints Gazebo's own numbers beside the
+mock's, so the check's fidelity stays in view:
+- v10 and v12 on the matched fault timeline (PR #52), with tuned PX4's on a line under the
+  table;
+- v6 to v9 on the older start-keyed one.
+
+When a new policy flies in Gazebo, add its numbers under `gazebo` in the config.
 
 ## How well it predicts Gazebo
 
@@ -267,6 +283,55 @@ its ring for the lag it flies with. Not v11's own: the ~10 degree heading offset
 +10.7, v11 +10.2 degrees in `wind8`) and a full yaw command for the first 50 ms of every
 engage (both).
 
+## v12 in Gazebo: the drift toward the wall on seed 1
+
+v12 flew against v10 and tuned PX4 on the matched fault timeline (`vio_at_engage` for the
+hold runner, `vio_at_hover` for stock PX4; PR #52, `docs/baseline.md`). Its hold p95 was
+looser than v10's in 8 of 9 flights (mean 0.35 against 0.33 m) while it beat v10 on rms, on
+the ring and on the offset up. Seed 1 is where it loses. The bridge's draws for seed 1
+(replayed offline from `sim2real/estimate_bridge`) put a 1.80 m vision jump 35.14 s into the
+hold, (−0.28, +1.78, −0.11) m ENU: nearly all of it along the wall, 0.28 m of it away from
+the wall, decaying with the 5 s time constant. A 0.66 s dead-reckoned dropout follows 4.8 s
+later. The module traces (calm air; the winds look the same):
+
+| after the jump | v10 | v12 |
+| --- | --- | --- |
+| along the wall, true | follows the jumped estimate about 0.4 m | stays within 0.1 m |
+| heading | +6 degrees, back within 4 s | +17 degrees over 4 s, back over the next 9 s |
+| toward the wall, true | at most 0.04 m | 0.27 m 5 s after the jump, back after 13 s |
+
+v12 does not chase the jump along the wall. That keeps its p95 low in the mock. But it yaws
+17 degrees and drifts toward the wall, then leaves 0.15 to 0.2 m of error toward the wall
+standing for about 6 s while 0.3 to 0.5 m of the jump along the wall is still in the
+estimate. v10 chases the jump along the wall and keeps its distance from it.
+
+**The mock reproduces it.** The same jump and dropout replayed on `gz_x500_sitl`, with the
+random jumps and dropouts off, 64 episodes per run:
+
+| replay | v10 | v11 | v12 |
+| --- | --- | --- | --- |
+| jump and dropout, calm / 4 m/s / 8 m/s into the wall | 0.08 / 0.07 / 0.05 m | 0.06 / 0.05 / 0.06 m | 0.26 / 0.26 / 0.25 m |
+| jump only, calm | 0.06 m | | 0.26 m |
+| dropout only, calm | 0.05 m | | 0.05 m |
+| the jump's along-wall part only (1.8 m), calm | 0.03 m | | 0.22 m |
+| Gazebo, seed 1, 0 / 4 / 8 m/s | 0.04 / 0.03 / 0.07 m | not flown | 0.27 / 0.28 / 0.31 m |
+
+The numbers are the mean worst toward the wall. The jump does it, the dropout does not, and
+the along-wall part alone still draws v12 toward the wall. The mock's p95 on the replay is
+the wrong way round, though: v12 0.29 m and v10 0.49 m, against Gazebo's 0.42 and 0.43 m on
+seed 1. The mock's v10 chases the jump further than Gazebo's. So the check scores the drift
+itself.
+
+The new cell `seed1_jump` replays the jump and dropout at 4 m/s. Its rule: the mean worst
+toward the wall may be at most 0.05 m above the reference's, and crashes at most 1 point
+above. The cell stays out of the pooled p95.
+
+On the full check (run `20261023-170223`, 128 episodes per cell), `seed1_jump` gives v12
+0.26 m toward the wall against v10's 0.08 m, so v12 no longer passes. It fails that rule
+only. The random-fault cells would not have caught it: pooled over them, v12 is 0.10 m
+toward the wall and v10 0.11 m. A jump of nearly 2 m mostly along the wall is rare in their
+draws. In Gazebo's three seeds, seed 1 is that jump.
+
 ## Policies judged
 
 | policy | check run | pooled rough p95 / lift / wobble | verdict | Gazebo |
@@ -277,7 +342,8 @@ engage (both).
 | v10 | `20261023-074020` (five cells, with resets) | 0.35 m / +0.04 m / 0 % (v9 0.47 m / +0.05 m / 0 %) | beats v9 (p95 ratio 0.73) | 0.38 m / +0.05 m / 0 of 9, no drift (PR #44); the reference since |
 | v11 | `20261023-122516` (`gazebo_check_v11.yaml`) | 0.28 m / −0.01 m / 0 % (v10 0.35 m / +0.04 m / 0 %) | beats v10 (p95 ratio 0.82, interval 0.80 to 0.84); one crash in 512 rough episodes (8 m/s into the wall), within the +1 % rule | hold 0.33 m / at the hold point / 1.7 Hz ring in 2 of 9; seed 3 lost after the re-engage 4 of 4 (PR #49, see above) |
 | v11 | `20261023-144745` (extended check, `gazebo_check_v12.yaml`) | 0.28 m / −0.01 m / ring 0.0154 (v10 0.34 m / +0.04 m / ring 0.0124) | does not beat v10: fails the ring rule (+24 %); no re-engage failures | as above |
-| v12 | `20261023-144745` (extended check) | 0.27 m / −0.03 m / ring 0.0090; no crash in 512 rough episodes | beats v10 (p95 ratio 0.81, interval 0.78 to 0.83; failed: none); no re-engage failures; calm clean 0.056 m against v10's 0.038 m, inside the 0.02 m slack | not flown yet |
+| v12 | `20261023-144745` (extended check) | 0.27 m / −0.03 m / ring 0.0090; no crash in 512 rough episodes | beats v10 (p95 ratio 0.81, interval 0.78 to 0.83; failed: none); no re-engage failures; calm clean 0.056 m against v10's 0.038 m, inside the 0.02 m slack | matched timeline (PR #52): hold 0.35 / 0.35 / 0.35 m against v10's 0.33 / 0.33 / 0.35 (lower in 1 of 9), less ring, −0.02 m offset; seed 1 drift toward the wall 0.27 to 0.31 m (v10 0.03 to 0.07); v10 stays |
+| v12 | `20261023-170223` (with `seed1_jump`, `gazebo_check.yaml`) | 0.27 m / −0.03 m / ring 0.0090; toward the wall 0.10 m (v10 0.34 m / +0.04 m / 0.0124 / 0.11 m) | does not beat v10: fails `seed1_jump_toward_wall_ok`, 0.26 m against v10's 0.08 m (Gazebo 0.29 and 0.05); every other rule passes | as above |
 
 v11 was the second forward test. If the check holds as it did for v10 (ratio 0.73 in the mock and in Gazebo), v11 should fly about 0.31 m p95 in Gazebo against v10's 0.38 m, sit at the hold point rather than 0.04 m above it, and show no wobble.
 Gazebo held part of it: v11's hold p95 was 0.33 m (the ratio 0.87, not 0.82) and it sat at the hold point, but it rang at 1.7 Hz, which the thresholded wobble rate missed. The ring rule and the re-engage cells came out of that flight.
