@@ -271,3 +271,70 @@ seed 1). **Verdict: v8 is worse than v6 overall.** It is better only on the clea
 vertical offset and the 1.6 Hz wobble. Its along-wall drift is about the same. v6 stays the
 better policy in Gazebo. The module therefore stays on v6: its headers were regenerated from
 `structure_hold_v6.onnx` in the same PR, and v8 is kept only as a recorded experiment.
+
+## Structure Hold v9 vs tuned PX4
+
+Same benchmark again, on policy v9 (the x500 recipe trained on the Gazebo-like mock),
+module headers at `44eda1d`, image rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v9 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v6 / v8 / **v9** | worst toward wall m, tuned v1 / v6 / v8 / **v9** | crashes, tuned / v6 / v8 / v9 | failsafes, tuned / v6 / v8 / v9 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 0.620 (0.859) / 0.671 (0.967) / **0.442 (0.534)** | 0.240 (0.420) / 0.158 (0.221) / 0.255 (0.434) / **0.017 (0.051)** | 0/3 / 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+| 4 m/s | 0.570 (0.919) / 0.641 (0.889) / 0.677 (0.971) / **0.491 (0.517)** | 0.230 (0.406) / 0.188 (0.267) / 0.252 (0.380) / **0.020 (0.059)** | 0/3 / 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 0.679 (0.934) / 0.793 (1.018) / **0.646 (1.007)** | 0.214 (0.386) / 0.303 (0.475) / 0.351 (0.487) / **0.136 (0.241)** | 0/3 / 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+
+v9 had no crash, no PX4 failsafe and no failed check other than the script's position_held
+drift tolerance (6 of 9, as v6 and v8). Change in mean p95 against tuned PX4: −22 / −14 /
++13 %; against v6: −29 / −23 / −5 %; against v8: −34 / −27 / −19 %.
+
+| per seed | p95 m, calm / 4 / 8 m/s | v6 p95 m | worst toward wall m | offset up, module / truth m | roll-rate setpoint peak |
+|---|---|---|---|---|---|
+| seed 1 | 0.534 / 0.517 / 0.591 | 0.859 / 0.889 / 0.934 | 0.051 / 0.059 / 0.156 | +0.05 / +0.21, +0.08 / +0.23, +0.09 / +0.24 | 7.7, 10.8, 10.7 Hz |
+| seed 2 | 0.437 / 0.448 / 1.007 | 0.434 / 0.439 / 0.446 | 0.000 / 0.000 / 0.241 | +0.05 / −0.01, +0.06 / +0.00, +0.02 / −0.03 | 7.6, 7.6, 10.5 Hz |
+| seed 3 | 0.357 / 0.509 / 0.342 | 0.568 / 0.596 / 0.657 | 0.000 / 0.000 / 0.013 | +0.03 / +0.06, +0.06 / +0.08, +0.06 / +0.09 | 7.7, 10.8, 10.7 Hz |
+
+| | v6 | v8 | v9 |
+|---|---|---|---|
+| clean calm flight: p95, offset up, horizontal | 0.114 m, +0.04 m, 0.045 m | 0.109 m, −0.01 m, 0.064 m | 0.081 m, +0.04 m, 0.050 m |
+| clean calm flight: along-wall drift (truth) mean, p2p | −0.024 m, 0.14 m | −0.031 m, 0.16 m | +0.021 m, 0.06 m |
+| clean calm flight: roll / pitch rate setpoint std, peak | 0.49 / 0.57 rad/s, 10.9 Hz | 0.39 / 0.39 rad/s, 10.7 Hz | 0.38 / 0.30 rad/s, 10.8 Hz |
+| clean calm flight: thrust | 0.701 ± 0.030 | 0.710 ± 0.016 | 0.717 ± 0.007 |
+| batch: offset up (module), mean (range) | +0.23 m (+0.10 to +0.39) | +0.42 m (+0.36 to +0.55) | +0.06 m (+0.02 to +0.09) |
+| batch: offset up (module), seeds 1 / 2 / 3 | +0.25 / +0.11 / +0.32 m | +0.40 / +0.42 / +0.45 m | +0.07 / +0.04 / +0.05 m |
+| batch: offset up (truth), mean (range) | +0.27 m (+0.04 to +0.54) | +0.46 m (+0.33 to +0.59) | +0.10 m (−0.03 to +0.24) |
+| batch: horizontal offset, mean | 0.09 m | 0.08 m | 0.15 m (0.11 without 8 m/s seed 2) |
+| batch: roll-rate setpoint std, mean | 0.51 rad/s | 0.64 rad/s | 0.31 rad/s |
+| batch: measured roll-rate std, mean | 0.44 rad/s | 0.69 rad/s | 0.11 rad/s |
+| batch: 1.6 Hz wobble | 6/9 flights (seeds 1, 3) | 9/9 flights | 0/9 flights |
+| batch: along-wall drift (truth) p2p, mean | 0.55 m | 0.50 m | 0.44 m |
+
+Offsets and drift are measured as in the v8 section. The module offset is the hold point
+minus the estimate. The truth offset is the hold point minus the true position, so it
+also carries the estimate's bias (seed 1's +0.2 m is that).
+
+**Reading it.** v9 is the first policy to beat tuned PX4 in Gazebo, and it does so in calm air and at 4 m/s:
+mean p95 0.44 and 0.49 m against 0.57 m (−22 and −14 %). Its worst seed there (0.53 m) is
+far under tuned PX4's (0.91–0.92 m). It barely approaches the wall: worst toward wall 0.02 m mean
+in those two scenarios, against 0.23–0.24 m for tuned PX4 and 0.16–0.19 m for v6. The two
+Gazebo failure modes of v6 and v8 are gone. The 1.6 Hz wobble shows in none of the nine
+flights: setpoints peak at 7.6–7.7 Hz or 10.5–10.8 Hz with half v6's spread, and the
+measured roll rate is a quarter of v6's. The vertical offset is +0.02 to +0.09 m against the
+estimate in every seed, rough-estimate seeds included (v6 +0.10 to +0.39 m). On the clean
+plumbing flight it holds 0.081 m p95 (v6 0.114 m, v8 0.109 m), with the steadiest thrust yet
+(± 0.007) and a third of v8's along-wall drift. The weak spot is 8 m/s seed 2, the
+clean-estimate seed (EKF2 vision innovation 0.04 m rms), at p95 1.007 m. About 20 s into the hold the
+vehicle walked off the hold point slowly, along the wall and away from it (0.03 m/s), and the
+estimate followed it (estimate error p95 0.35 m). The module's error grew to about 1.0 m by
++44 s, then the policy pulled back to the hold point within 8 s, with no fallback and no trip. That one
+flight makes the 8 m/s mean +13 % against tuned PX4 and its worst 1.007 m against v6's
+0.934 m. The other two 8 m/s seeds are the best 8 m/s flights so far (0.59 and 0.34 m), and
+at 8 m/s v9 still comes less close to the wall than tuned PX4 or v6 (0.14 m against 0.21 m tuned
+and 0.30 m v6). The module side was clean: every hold ran its full 60 s with no watchdog trip,
+fallback and yaw-guard shares 0, no saturated action, stale time up to 2.25 s in the dropout
+seeds, handback 0.016–0.02 s, GPS-free with vision fused, 0 wall contacts (closest
+clearance 0.81 m, 8 m/s seed 2). **Verdict: v9 is better than v6 overall.** Its mean p95 is
+lower in every wind (−29 / −23 / −5 %) and it keeps further from the wall in every wind. Its vertical offset
+is about a quarter of v6's, and the wobble shows in 0 of 9 flights against 6. The one open
+item is the slow 8 m/s excursion on seed 2.
