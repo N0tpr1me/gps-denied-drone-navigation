@@ -532,3 +532,14 @@ in robustness to bad seeds (worst flight −47 %, worst toward wall −50 %). On
 the two are level (median −0 %). Seed 7 is a protocol problem, not a controller result:
 faults injected before takeoff break both runs, so the fault schedule should start after
 takeoff before another seed batch is flown.
+
+**Next seed batch: fly the `vio_after_takeoff` profile.** It is `vio_default` with jumps and
+dropouts held back for the first 24 s of the bridge's clock (`fault_start_s` in
+`envs/estimate`), so no fault lands while PX4 arms and takes off. Every random draw is kept,
+so each fault from 24 s on is the same, step for step, as `vio_default` with the same seed.
+In the PR #42 and #44 flights the hold window opened 24.7 to 25.5 s after the bridge's first
+sample, so the faults inside the hold are unchanged and new seeds stay comparable with seeds
+1–8; only the pre-takeoff faults (seed 7's) are gone. Pass it after `--` for both
+controllers, for example
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params --seeds 9 10 -- --profile vio_after_takeoff`.
+`log_lines.md` then names the profile in each row.

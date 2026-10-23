@@ -6,8 +6,9 @@
     divisor: 1              # corruptor runs every divisor-th truth sample (50 Hz / divisor)
     estimate: {...}         # EstimateCorruptionConfig keys; "clean" for no corruption
 
-Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference) and ``vio_default``
-(the ``envs.estimate`` defaults, i.e. what training uses).
+Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference), ``vio_default``
+(the ``envs.estimate`` defaults, i.e. what training uses) and ``vio_after_takeoff``
+(``vio_default`` with no jump or dropout in the first 24 s, while PX4 arms and takes off).
 """
 
 from __future__ import annotations
