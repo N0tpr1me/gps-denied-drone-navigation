@@ -61,7 +61,9 @@ piece):
   below ``base_link`` (``x500_base/model.sdf``), and EKF2 has no lever-arm correction
   (``EKF2_EV_POS_*`` 0); a fit to the traces put the tracked point 0.18 m below the IMU;
 - ``fusion`` on with the bridge's EKF2 settings (``sim2real/estimate_bridge/ekf2_ev.params``):
-  the module reads EKF2's estimate, not the fix.
+  the module reads EKF2's estimate, not the fix; with EKF2's resets, so an estimate jump the
+  gate rejects reaches the module as a step 1 s later, and every dropout over 0.4 s ends in
+  one (``resets``, from 2026-10-23 06:30; earlier runs had them off).
 """
 
 from __future__ import annotations
@@ -183,7 +185,7 @@ def gz_x500_sitl() -> dict[str, Any]:
     cfg["dt"] = 0.012
     cfg["vision_offset_down_m"] = 0.24
     cfg["fusion"] = {"enabled": True, "vision_rate_hz": 50.0, "ev_delay_s": 0.1,
-                     "pos_noise_m": 0.1, "vel_noise_mps": 0.1, "gate_sd": 5.0}
+                     "pos_noise_m": 0.1, "vel_noise_mps": 0.1, "gate_sd": 5.0, "resets": True}
     return cfg
 
 

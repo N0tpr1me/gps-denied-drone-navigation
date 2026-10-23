@@ -89,3 +89,44 @@ def test_a_fix_step_is_followed_smoothly():
     assert x[:k0].abs().max() < 1e-6
     assert 0.0 < x[k0 + 2] < 0.03  # partway after 24 ms
     assert 0.035 < x[-1] < 0.051  # most of the way after 1.8 s
+
+
+def test_resets_turn_a_rejected_jump_into_a_step_after_one_second():
+    cfg = FusionConfig(enabled=True, imu_noise_mps2=0.0, resets=True)
+    jump = torch.tensor([[1.0, 0.0, 0.0]])
+    out = fly(cfg, lambda t: torch.zeros(1, 3), 250,
+              fix_fn=lambda t, p: p + jump if t >= 1.0 else p)
+    x = torch.tensor([float(o[2][0, 0]) for o in out])
+    t = torch.arange(len(x)) * DT
+    assert x[(t > 1.2) & (t < 1.9)].abs().max() < 0.01  # rejected by the gate at first
+    assert x[t > 2.3].min() > 0.95  # then reset onto the fix in one step
+    k = int((x > 0.5).float().argmax())
+    assert x[k] > 0.95 and 1.9 < float(t[k]) < 2.3  # 1 s after the first rejection, plus delay
+
+
+def test_resets_restart_fusion_on_the_fix_after_a_dropout():
+    cfg = FusionConfig(enabled=True, imu_noise_mps2=0.0, resets=True)
+    offset = torch.tensor([[0.0, 0.0, 0.6]])  # the fix comes back 0.6 m off (a VIO re-init)
+    gap = lambda t: torch.tensor([not (1.0 <= t < 1.6)] * 2)  # noqa: E731
+    out = fly(cfg, lambda t: torch.zeros(1, 3), 200, fresh_fn=gap,
+              fix_fn=lambda t, p: p + offset if t >= 1.6 else p)
+    z = torch.tensor([float(o[2][0, 2]) for o in out])
+    t = torch.arange(len(z)) * DT
+    assert z[t < 1.6].abs().max() < 1e-6
+    assert z[(t > 1.7) & (t < 1.8)].min() > 0.55  # stepped onto the fix at once
+    # Without resets the same fix is rejected (0.6 m is beyond 5 sd).
+    out = fly(FusionConfig(enabled=True, imu_noise_mps2=0.0), lambda t: torch.zeros(1, 3), 200,
+              fresh_fn=gap, fix_fn=lambda t, p: p + offset if t >= 1.6 else p)
+    assert abs(float(out[-1][2][0, 2])) < 0.05
+
+
+def test_short_gaps_do_not_reset_and_height_waits_five_seconds():
+    cfg = FusionConfig(enabled=True, imu_noise_mps2=0.0, resets=True)
+    offset = torch.tensor([[0.0, 0.0, 0.6]])
+    gap = lambda t: torch.tensor([not (1.0 <= t < 1.3)] * 2)  # noqa: E731, 0.3 s < 0.4 s
+    out = fly(cfg, lambda t: torch.zeros(1, 3), 650, fresh_fn=gap,
+              fix_fn=lambda t, p: p + offset if t >= 1.3 else p)
+    z = torch.tensor([float(o[2][0, 2]) for o in out])
+    t = torch.arange(len(z)) * DT
+    assert z[t < 6.0].abs().max() < 0.05  # no restart, and the height gate holds for 5 s
+    assert z[t > 6.6].min() > 0.55  # then the height resets onto the fix

@@ -1,22 +1,24 @@
 # The Gazebo-like check (eval/gazebo_check.py, docs/gazebo_check.md): fly policies in the
 # mock the way the Gazebo benchmark flies them, on the gz_x500_sitl airframe (PX4's yaw torque
-# and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion).
-# A policy goes to the Mac for a Gazebo re-fly only if it beats v6 here.
+# and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion
+# with its resets). A policy goes to the Mac for a Gazebo re-fly only if it beats the
+# released policy (v9) here.
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
-# To judge a new policy, add it under controllers (v6 stays as the reference).
+# To judge a new policy, add it under controllers (v9 stays as the reference; v6 is here for
+# the check's fidelity, Gazebo has flown both).
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
-expected_hours: 0.5
+expected_hours: 0.6
 gpus: 1
 params:
   controllers:
     - name: v6
       policy: training/policies/structure_hold_v6.onnx
-    - name: v8
-      policy: training/policies/structure_hold_v8.onnx
-  reference: v6
+    - name: v9
+      policy: training/policies/structure_hold_v9.onnx
+  reference: v9  # the released policy, flown in Gazebo (PR #42); v6 was the reference before
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 64
   window_s: 40.0  # lift and wobble over the last 40 s (the first 20 s hold the engage transient)
@@ -75,19 +77,37 @@ params:
     - name: wind8
       label: "8 m/s, vio_default"
       env: {disturbance: {mean_speed: 8.0, gust_speed: [2.0, 4.0], turb_sigma: 1.0}}
-  # What v6 and v8 did in Gazebo (PR #35, PR #37; per flight from the exported traces, on
-  # this check's definitions: lift and wobble over the last 40 s). Printed beside the mock.
+    # As Gazebo flies it: the mean wind blows into the wall (wall1m_wind_8ms,
+    # wind_heading_deg 0; the gusts keep a random direction there too). v9 drifted up to 1 m
+    # off the hold point in one of its three 8 m/s Gazebo flights; a steady wind into the
+    # wall brings out the same slow drift in the mock (docs/gazebo_check.md).
+    - name: wind8_wall
+      label: "8 m/s into the wall, vio_default"
+      env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
+                          turb_sigma: 1.0}}
+  # What v6, v8 and v9 did in Gazebo (PR #35, PR #37, PR #42; per flight from the exported
+  # traces, on this check's definitions: lift and wobble over the last 40 s). Printed beside
+  # the mock. Gazebo's 4 and 8 m/s winds blow into the wall, so its 8 m/s numbers sit under
+  # both wind8 and wind8_wall.
   gazebo:
     v6:
       calm_clean: {p95_m: 0.11, lift_m: 0.04, wobble: "0/1"}
       calm: {p95_m: 0.62, lift_m: 0.21, wobble: "2/3"}
       wind4: {p95_m: 0.64, lift_m: 0.23, wobble: "2/3"}
       wind8: {p95_m: 0.68, lift_m: 0.32, wobble: "2/3"}
+      wind8_wall: {p95_m: 0.68, lift_m: 0.32, wobble: "2/3"}
     v8:
       calm_clean: {p95_m: 0.11, lift_m: -0.01, wobble: "0/1"}
       calm: {p95_m: 0.67, lift_m: 0.39, wobble: "3/3"}
       wind4: {p95_m: 0.68, lift_m: 0.41, wobble: "3/3"}
       wind8: {p95_m: 0.79, lift_m: 0.48, wobble: "3/3"}
+      wind8_wall: {p95_m: 0.79, lift_m: 0.48, wobble: "3/3"}
+    v9:
+      calm_clean: {p95_m: 0.08, lift_m: 0.04, wobble: "0/1"}
+      calm: {p95_m: 0.44, lift_m: 0.06, wobble: "0/3"}
+      wind4: {p95_m: 0.49, lift_m: 0.07, wobble: "0/3"}
+      wind8: {p95_m: 0.64, lift_m: 0.06, wobble: "0/3"}
+      wind8_wall: {p95_m: 0.64, lift_m: 0.06, wobble: "0/3"}
 smoke:
   num_envs: 4
   bootstrap: 50
