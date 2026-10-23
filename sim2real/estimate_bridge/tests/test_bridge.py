@@ -159,6 +159,15 @@ def test_vio_after_takeoff_is_vio_default_with_faults_held_back():
     assert late.seed == load_profile("vio_default").seed
 
 
+def test_seed_override_keeps_the_fault_anchor():
+    # run_gazebo / run_estimate --seed (always passed by run_baseline) once rebuilt the
+    # profile without fault_anchor, so vio_at_engage flew keyed to the start.
+    p = load_profile("vio_at_engage")
+    q = p.with_seed(3)
+    assert q.seed == 3 and q.fault_anchor == "engage"
+    assert q == dataclasses.replace(p, seed=3)
+
+
 def test_profile_rejects_unknown_keys():
     with pytest.raises(ValueError):
         EstimateProfile.from_dict({"name": "x", "foo": 1})

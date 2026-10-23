@@ -18,7 +18,7 @@ engage and none before it).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,10 @@ class EstimateProfile:
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
                    fault_anchor_s=float(d.get("fault_anchor_s", 25.0)))
+
+    def with_seed(self, seed: int) -> EstimateProfile:
+        """The same profile with another seed (fault anchor and everything else kept)."""
+        return replace(self, seed=seed)
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "seed": self.seed, "divisor": self.divisor,
