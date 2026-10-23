@@ -174,6 +174,36 @@ def compare(a: dict[str, Any], b: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def pool(batches: list[dict[str, Any]], out: Path) -> dict[str, Any]:
+    """Merge the rows of several batches of the same label into one batch (for pooling
+    seeds flown in separate chunks), re-aggregate, write ``out`` and return it."""
+    labels = {b["label"] for b in batches}
+    if len(labels) != 1:
+        raise ValueError(f"pooled batches must share one label, got {sorted(labels)}")
+    rows = [r for b in batches for r in b["rows"]]
+    seen = {(r["scenario"], r["seed"]) for r in rows}
+    if len(seen) != len(rows):
+        raise ValueError("pooled batches repeat a (scenario, seed) pair")
+    seeds = sorted({r["seed"] for r in rows})
+    pooled = {**batches[0], "pooled_from": [b.get("commit") for b in batches],
+              "seeds": seeds, "rows": rows, "aggregate": aggregate(rows)}
+    out.write_text(json.dumps(pooled, indent=2) + "\n")
+    return pooled
+
+
+def spread(batch: dict[str, Any], key: str = "p95_m") -> str:
+    """Markdown: per scenario, every seed's value of ``key`` (the spread behind a mean)."""
+    lines = [f"`{batch['label']}`: {key} per seed (n = {len(batch['seeds'])} seeds)", "",
+             "| scenario | " + " | ".join(f"seed {s}" for s in batch["seeds"]) +
+             " | mean | worst |", "|---|" + "---|" * (len(batch["seeds"]) + 2)]
+    for name, agg in batch["aggregate"].items():
+        by_seed = {r["seed"]: r[key] for r in batch["rows"] if r["scenario"] == name}
+        cells = [fmt(by_seed.get(s, math.nan)) for s in batch["seeds"]]
+        lines.append(f"| {name} | " + " | ".join(cells) +
+                     f" | {fmt(agg[f'{key}_mean'])} | {fmt(agg[f'{key}_worst'])} |")
+    return "\n".join(lines) + "\n"
+
+
 def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
     status = ("not flown (never armable)" if not r.get("flown", True) else
               "crash" if r["crash"] else ("ok" if r["ok"] else "flown, check failed"))
@@ -256,8 +286,19 @@ def main(argv: list[str] | None = None) -> int:
                          "mode (sim2real.px4.run_gazebo)")
     ap.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
                     help="print A vs B from two batch.json files and exit")
+    ap.add_argument("--pool", nargs="+", type=Path, metavar="BATCH",
+                    help="merge these batch.json files (same label, disjoint seeds) into "
+                         "--out, print the per-seed spread and exit")
+    ap.add_argument("--out", type=Path, help="where --pool writes the pooled batch.json")
     ap.add_argument("run_args", nargs="*", help="extra run_estimate arguments, after --")
     args = ap.parse_args(argv)
+    if args.pool:
+        if not args.out:
+            ap.error("--pool needs --out")
+        pooled = pool([json.loads(p.read_text()) for p in args.pool], args.out)
+        print(table(pooled))
+        print(spread(pooled))
+        return 0
     if args.compare:
         a, b = (json.loads(p.read_text()) for p in args.compare)
         print(compare(a, b))
