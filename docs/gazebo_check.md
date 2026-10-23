@@ -92,8 +92,23 @@ then v9, and v10 since its Gazebo flights, PR #44) when, pooled over the rough c
 2. its lift is no higher than the reference's;
 3. its wobble rate is no higher than the reference's;
 4. its crash rate is at most 1 point above the reference's;
+5. its **ring** is no more than 5 % above the reference's: the median, over episodes, of the
+   roll action's 1.2 to 2.2 Hz rms (from 2026-10-23 14:00, after v11's Gazebo flights; see
+   "v11 in Gazebo" below);
 
-and on the clean cell its p95 is within 0.02 m of the reference's. Only a policy that passes
+and on the clean cell its p95 is within 0.02 m of the reference's. Two more cells fly the
+benchmark's post-hold sequence (`fly_reengage`, after `sim2real/px4/sitl_test.py`): hold
+for 20 s, switch to stock Position mode (the PD, holding the estimate where the switch found
+it and moving that setpoint with each EKF2 reset, as PX4's flight tasks do) for 5.4 s, then
+re-engage, which captures the hold point from the estimate as `StructureHold::engage` does,
+and fly 14.6 s more, at 4 m/s. In `reengage` (`vio_default`) a policy must have no
+**re-engage failure** (a crash after a re-engage whose hold point is at least 0.6 m off the
+wall) and crash at most 1 point more than the reference during the hold. Crashes under stock
+PX4 and after a re-engage at the wall are printed, not scored: the sequence causes them, for
+every controller. `reengage_jump` adds Gazebo seed
+3's 1.4 m vision jump toward the wall 0.5 to 3 s before the switch; it is printed, not
+scored. From 2026-10-23 the check scores wall contact at the x500's 0.40 m centre distance
+(rotors 0.24 to 0.26 m out, 0.14 m props), not the scorer's 5-inch 0.25 m. Only a policy that passes
 goes to the Mac. The report prints Gazebo's own numbers for v6, v8, v9 and v10 beside the mock's,
 so the check's fidelity stays in view; when a new policy flies in Gazebo, add its numbers
 under `gazebo` in the config.
@@ -208,6 +223,49 @@ drift flight, held 0.35 m p95 with a horizontal offset of 0.04 m (v9 1.01 m and 
 Every policy so far also holds its heading about 11 degrees (0.2 rad) off the wall normal,
 in Gazebo and in the mock alike: a trait of the policy, not a gap in the mock. The heading
 penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
+
+## v11 in Gazebo: the seed 3 wall strike and the 1.7 Hz ring
+
+v11 held tighter than v10 in every Gazebo hold (PR #49: mean p95 0.33 / 0.32 / 0.33 m
+against 0.37 / 0.38 / 0.39 m), as the check predicted, but lost control after the
+scripted re-engage in all four seed 3 flights, and rang at 1.7 Hz on 2 of 9. v10 stayed
+the module's policy.
+
+**Seed 3 is a prop strike, set up by the sequence, not by the policy.** In each of the four
+ulogs (calm, 4 m/s twice, 8 m/s):
+
+| step | v11, seed 3 (all four) | v10, seed 3, 4 m/s (PR #44) |
+| --- | --- | --- |
+| vision jump, about 1.4 m toward the wall | 91.8 to 92.5 s | 91.3 s |
+| EKF2 horizontal reset onto it (+1.12 to +1.15 m) | 92.8 to 93.6 s | 92.3 s |
+| scripted switch to stock Position mode | from 0.4 s after the reset to 0.04 s before it | 1.3 s after it |
+| hold point the re-engage captured (E, the wall at 0) | +0.03 to +0.10 m | −0.42 m |
+| true centre distance to the wall when the spin starts | 0.35 to 0.40 m (the props reach up to 0.40 m) | none; closest 0.54 m |
+
+PX4's Position mode moves its setpoint with an EKF2 reset, so it holds the jumped estimate,
+and as the jump decays it walks the drone toward the wall (1.16 m off it to 0.55 m in 5.4 s).
+The re-engage then captures its hold point from that estimate, on the wall face, and any
+controller that holds it closes on the wall as the estimate recovers. In the calm flight the
+spin began at 101.6 s, just after the test-fault handback, with stock PX4 in charge. v10
+missed it on timing: its reset landed inside its own hold, which keeps the hold point it
+engaged with, so it backed away before the switch. The policy sees only the estimate minus
+the hold point, so no training can prevent this.
+
+`reengage_jump` reproduces it (seed 7001, 64 episodes): v10 crashes in 91 %, v11 in 94 %, the
+PD flying every phase in 62 %. Holding the re-engage off for 10 s after a reset leaves v10
+at 92 %, the crashes moving into the stock phase. The policies do worse than the PD because
+they answer a sudden offset slowly (v10 moves 0.25 m of a 1.1 m reset step in 1.7 s), which
+is right inside a hold and wrong when a switch captures the estimate. What would prevent
+the strike is a measured distance to the structure (`docs/real-flight-gap.md`, the product
+gaps under the table).
+
+**The ring is v11's own.** The thresholded wobble rate scored both at 0 %, but v11's median
+1.2 to 2.2 Hz roll rms was above v10's in every rough cell (pooled 0.0150 against 0.0128,
++17 %; run `20261023-122516`), the same direction as Gazebo's ring (roll-rate std 0.10
+against 0.08 rad/s). Hence rule 5. v11's steeper position penalty raised its gain, and so
+its ring for the lag it flies with. Not v11's own: the ~10 degree heading offset (v10
++10.7, v11 +10.2 degrees in `wind8`) and a full yaw command for the first 50 ms of every
+engage (both).
 
 ## Policies judged
 

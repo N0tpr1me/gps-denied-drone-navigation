@@ -40,7 +40,14 @@ structure, or a real airframe. Those are the gaps below.
 | 10 | **Truth for scoring**: the simulators score the true position (`docs/metrics.md`). | Truth has to come from mocap indoors or RTK outdoors, logged but never fused. | Needed for every real number. | Book mocap, or carry RTK, from the first real flight. |
 
 Two product gaps sit outside the table because no amount of training closes them. The hold
-point is the engage point, so standoff from the wall is the pilot's job. And the policy
+point is the engage point, so standoff from the wall is the pilot's job. Gazebo showed what
+that costs (PR #49, `docs/gazebo_check.md` "v11 in Gazebo"): a 1.4 m estimate jump toward
+the wall just before a switch to stock Position mode, which moves its setpoint with EKF2's
+reset, put the next engage's hold point on the wall face, and the props struck it as the
+estimate recovered. Stock PX4 walks into the wall the same way, so neither the policy nor an
+engage guard on the estimate alone prevents it; a measured distance to the structure (a
+rangefinder feeding PX4's collision prevention, or the camera's depth to the wall) as a
+floor under the hold would. And the policy
 assumes a flat wall, while real structures include lattice towers and blades (both in
 `sim2real/px4/README.md`, "Not here yet"; mapping is out of scope in `docs/decisions.md`).
 
