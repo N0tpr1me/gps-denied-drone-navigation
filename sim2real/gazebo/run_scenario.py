@@ -33,6 +33,9 @@ from sim2real.gazebo.verify_trace import verify
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_IMAGE = "structure-hold/px4-sitl:v1.17.0"
+# sim2real/docker/Dockerfile.watch: the same image plus a browser view of Gazebo on WATCH_PORT.
+WATCH_IMAGE = DEFAULT_IMAGE + "-watch"
+WATCH_PORT = 6080
 WORLD = "wall_slab"
 
 
@@ -42,6 +45,15 @@ def git_commit() -> str:
                               capture_output=True, text=True, check=True).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def watch_options() -> list[str]:
+    """``docker run`` options that stream Gazebo's GUI to http://localhost:WATCH_PORT."""
+    return ["-p", f"{WATCH_PORT}:{WATCH_PORT}", "-e", "WATCH=1"]
+
+
+def watch_url() -> str:
+    return f"http://localhost:{WATCH_PORT}/vnc.html?autoconnect=1&resize=scale"
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,

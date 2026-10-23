@@ -95,3 +95,14 @@ def test_pass_line_needs_every_check():
         bad[key] = False
         assert not run_gazebo.assemble(bad)["ok"]
     assert not run_gazebo.assemble({})["ok"]
+
+
+def test_docker_command_watch_publishes_the_browser_view(tmp_path):
+    plain = run_gazebo.docker_command("img", tmp_path, "0,0,0,0,0,0", 2.5, 60.0, 5.0, 1.0, [],
+                                      "name", {})
+    watched = run_gazebo.docker_command("img", tmp_path, "0,0,0,0,0,0", 2.5, 60.0, 5.0, 1.0, [],
+                                        "name", {}, watch=True)
+    assert "WATCH=1" not in plain and "-p" not in plain
+    assert "WATCH=1" in watched and "6080:6080" in watched
+    # options go before the image, so docker reads them rather than the entrypoint
+    assert watched.index("6080:6080") < watched.index("img")

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Host-side helper for the PX4 SITL image.
 #   ./run.sh build         build the image (first build: PX4 + Gazebo, roughly 20-40 min)
+#   ./run.sh build-watch   build the watch image on top of it (browser view, about a minute)
 #   ./run.sh sitl          run PX4 + Gazebo headless (Ctrl-C to stop)
 #   ./run.sh hover-test    takeoff / 30 s hover / land; writes runs/<time>_sitl_hover/
 #   ./run.sh shell         bash inside the image
@@ -18,6 +19,10 @@ case "${cmd}" in
         # Context is sim2real/ so the image picks up the PX4 module (../px4) and the Gazebo world and wind plugin (../gazebo).
         docker build -t "${IMAGE}" -f "${HERE}/Dockerfile" "$@" "${HERE}/.."
         ;;
+    build-watch)
+        docker build -t "${IMAGE}-watch" -f "${HERE}/Dockerfile.watch" \
+            --build-arg "BASE_IMAGE=${IMAGE}" "$@" "${HERE}/.."
+        ;;
     sitl|shell)
         docker run --rm -it --name px4-sitl "${IMAGE}" "${cmd}" "$@"
         ;;
@@ -28,7 +33,7 @@ case "${cmd}" in
         echo "run folder: ${out}"
         ;;
     *)
-        echo "usage: $0 {build|sitl|hover-test|shell} [args]" >&2
+        echo "usage: $0 {build|build-watch|sitl|hover-test|shell} [args]" >&2
         exit 2
         ;;
 esac

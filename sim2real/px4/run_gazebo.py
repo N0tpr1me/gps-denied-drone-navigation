@@ -51,7 +51,15 @@ from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS
 from sim2real.estimate_bridge.ulog_checks import analyse
 from sim2real.estimate_bridge.verify_trace import verify as verify_estimate
 from sim2real.gazebo.params_io import write_params
-from sim2real.gazebo.run_scenario import DEFAULT_IMAGE, WORLD, git_commit, params_summary
+from sim2real.gazebo.run_scenario import (
+    DEFAULT_IMAGE,
+    WATCH_IMAGE,
+    WORLD,
+    git_commit,
+    params_summary,
+    watch_options,
+    watch_url,
+)
 from sim2real.gazebo.scenario import load_scenario, sample_scenario
 from sim2real.gazebo.verify_trace import verify as verify_wind
 
@@ -65,7 +73,7 @@ STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
-                   env: dict[str, str]) -> list[str]:
+                   env: dict[str, str], watch: bool = False) -> list[str]:
     cmd = ["docker", "run", "--rm", "--name", name,
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
@@ -74,6 +82,8 @@ def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: fl
            "-e", "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml"]
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
+    if watch:
+        cmd += watch_options()
     cmd += [image, "hold-test", "--altitude", str(altitude), "--hold-s", str(hold_s),
             "--settle-s", str(settle_s), "--drift-tol", str(drift_tol)]
     for p in params:
@@ -196,7 +206,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="PX4 .params file (the tuned baseline's for a fair comparison)")
     ap.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                     help="module parameter set before the flight (SH_FB_EN=1, SH_CTRL=0, ...)")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", help=f"SITL image (default {DEFAULT_IMAGE}, or {WATCH_IMAGE} "
+                                     "with --watch)")
+    ap.add_argument("--watch", action="store_true",
+                    help="watch the flight live in a browser (needs run.sh build-watch)")
     ap.add_argument("--hold-s", type=float, default=60.0, help="time in Structure Hold")
     ap.add_argument("--settle-s", type=float, default=5.0, help="stock-mode hover times")
     ap.add_argument("--drift-tol", type=float, default=1.0,
@@ -205,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-hold")
     args = ap.parse_args(argv)
+    if args.image is None:
+        args.image = WATCH_IMAGE if args.watch else DEFAULT_IMAGE
 
     sc = load_scenario(args.scenario)
     if args.scenario_seed is not None:
@@ -233,9 +248,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
-                         to_environment(px4_params))
+                         to_environment(px4_params), watch=args.watch)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
+    if args.watch:
+        print("watch live:", watch_url(), "(the view appears once Gazebo is up)", flush=True)
     flight_status = subprocess.run(cmd).returncode
 
     report: dict[str, Any] = {

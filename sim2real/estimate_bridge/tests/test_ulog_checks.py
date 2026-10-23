@@ -107,3 +107,9 @@ def test_docker_command_mounts_repo_and_applies_params(tmp_path):
     assert "PX4_PARAM_EKF2_GPS_CTRL=0" in cmd
     assert cmd[-6:] == ["hover-test", "--altitude", "2.5", "--hover-s", "60.0",
                         "--local-position-only"]
+
+
+def test_docker_command_watch_publishes_the_browser_view(tmp_path):
+    cmd = run_estimate.docker_command("img", tmp_path, "-2,0,0,0,0,0", 2.5, 60.0, "c", {},
+                                      watch=True)
+    assert "WATCH=1" in cmd and cmd.index("6080:6080") < cmd.index("img")
