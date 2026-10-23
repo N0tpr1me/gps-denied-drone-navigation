@@ -53,7 +53,8 @@ piece):
 - ``MC_YAW_TQ_CUTOFF`` 2 Hz on the yaw torque and ``IMU_GYRO_CUTOFF`` 40 Hz on the gyro the
   rate loop and the module read (``envs/sims/rate_pid.py``): with them a yaw-rate command
   answers with gain 0.27 and 130 degrees of lag at 1.6 Hz, as in Gazebo, where the env
-  without them gave 0.32 and 80 degrees;
+  without them gave 0.32 and 80 degrees; the policy reads the filtered gyro one tick old,
+  which stands in for SITL's actuator latency (``env.py`` ``_observe``);
 - ``dt`` 0.012 s: the module runs on gyro callbacks once 10 ms have passed, and the Gazebo
   gyro comes at 250 Hz, so it ticks every 12 ms (83 Hz);
 - ``vision_offset_down_m`` 0.24: the bridge sends the pose of the x500 model frame, 0.24 m
