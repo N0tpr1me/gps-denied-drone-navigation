@@ -26,6 +26,19 @@ above the reference's, and on the clean cell its p95 is within ``clean_p95_slack
 reference's. Gazebo's numbers for the controllers flown there (``gazebo`` in the config) are
 printed beside the mock's so the check's own fidelity stays visible.
 
+It must also ring no more than the reference: the median of the roll action's 1.2 to 2.2 Hz
+rms over the rough cells at most ``ring_slack`` above the reference's. The thresholded wobble
+rate misses a ring that is still well under the threshold: v11 sat 17 % above v10 on it in
+every rough cell while both scored 0 % wobble, and v11 then rang at 1.7 Hz in Gazebo (PR #49).
+
+Cells with a ``reengage`` block fly the benchmark's post-hold sequence
+(``sim2real/px4/sitl_test.py``) instead: hold, a switch to stock Position mode, a re-engage
+that captures its hold point from the estimate then (``fly_reengage``). They score crashes
+after the switch, where the re-engage put its hold point, and ``reengage_fail``: a crash
+after a re-engage whose hold point was at least ``sane_m`` off the wall, i.e. one the policy
+is to blame for. A controller must have none, and crash no more than the reference there,
+in every such cell not marked ``scored: false``.
+
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.
 """
@@ -42,6 +55,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from envs.structure_hold.baseline import CascadedPd
 from envs.structure_hold.config import StructureHoldConfig
 from envs.structure_hold.env import TERM_REASONS, StructureHoldEnv
 from eval.gate1 import check_not_held_out, make_factory, merge
@@ -52,6 +66,7 @@ TIMEOUT = TERM_REASONS.index("timeout")
 DEFAULT_RULES = {
     "max_crash_increase": 0.01,
     "clean_p95_slack_m": 0.02,
+    "ring_slack": 0.05,  # median 1.2-2.2 Hz roll rms at most 5 % above the reference's
 }
 
 
@@ -121,6 +136,141 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     return rows
 
 
+def fly_reengage(env: StructureHoldEnv, controller: Any, seq: dict[str, Any],
+                 seed: int) -> list[dict[str, Any]]:
+    """Fly the benchmark's post-hold sequence, one row per env.
+
+    ``controller`` holds until ``disengage_s``. Then stock Position mode (the PD) takes over,
+    holding the estimate where the switch found it and moving that setpoint with each
+    horizontal EKF2 reset, as PX4's flight tasks do. After ``stock_s`` the module re-engages
+    as ``StructureHold::engage`` does: hold point = the estimate now, last action zeroed, the
+    policy's history refilled. ``guard_s`` > 0 holds the re-engage off until that long after
+    the last horizontal reset (a module guard under discussion). ``jump_m`` > 0 adds a vision
+    jump toward the wall, decaying as ``vio_default``'s do, ``jump_lead_s`` (a range, drawn
+    per env) before the switch: Gazebo seed 3's, which put the v11 re-engages on the wall.
+    """
+    n, dt, dev = env.num_envs, env.dt, env.device
+    steps = env.max_episode_length
+    k_dis = int(round(float(seq["disengage_s"]) / dt))
+    k_re = k_dis + int(round(float(seq["stock_s"]) / dt))
+    guard_k = int(round(float(seq.get("guard_s", 0.0)) / dt))
+    sane_m = float(seq.get("sane_m", 0.6))
+    jump_m = float(seq.get("jump_m", 0.0))
+    rng = np.random.default_rng(seed * 7919 + 17)
+    lead = rng.uniform(*[float(x) for x in seq.get("jump_lead_s", [0.0, 0.0])], size=n)
+    k_jump = k_dis - np.round(lead / dt).astype(np.int64)
+    stock = CascadedPd(env)
+    fusion = env.fusion
+    count = fusion.xy_reset_count.clone() if fusion is not None else None
+    mode = torch.zeros(n, dtype=torch.long, device=dev)  # 0 hold, 1 stock, 2 re-engaged
+    last_reset = np.full(n, -(10 ** 9), dtype=np.int64)
+    reset_lead = np.full(n, np.nan)
+    alive = torch.ones(n, dtype=torch.bool, device=dev)
+    end = np.full(n, steps, dtype=np.int64)
+    reason = np.full(n, TIMEOUT, dtype=np.int64)
+    k_eng = np.full(n, -1, dtype=np.int64)
+    capture = np.full(n, np.nan)  # the re-engage's hold point: distance off the wall
+    true_at = np.full(n, np.nan)  # and the drone's, true, at that moment
+    min_clear = np.full(n, np.inf)
+    obs, _ = env.get_observations()
+    for k in range(steps):
+        if k == k_dis:
+            mode[:] = 1
+            env.hold_point[:] = env.estimate_pos
+            stock.err_integral.zero_()
+            env._observe()
+            obs = env.obs_buf
+            back = (last_reset > k - int(round(5.0 / dt)))
+            reset_lead[back] = (k - last_reset[back]) * dt
+        if k >= k_re:
+            ready = (k - last_reset) >= guard_k
+            eng = (mode == 1) & alive & torch.as_tensor(ready, device=dev)
+            if bool(eng.any()):
+                env.hold_point[eng] = env.estimate_pos[eng]
+                env.last_action[eng] = 0.0
+                mode[eng] = 2
+                e = eng.cpu().numpy()
+                k_eng[e] = k
+                capture[e] = env.clearance(env.hold_point).cpu().numpy()[e]
+                true_at[e] = env.clearance().cpu().numpy()[e]
+                env._observe()
+                obs = env.obs_buf
+                if hasattr(controller, "reset_history"):
+                    controller.reset_history(obs, eng)
+        if jump_m > 0.0:
+            hit = torch.as_tensor(k_jump == k, device=dev)
+            if bool(hit.any()):
+                env.estimator.jump_offset[hit, 0] += jump_m  # +x: toward the wall
+        a = torch.where((mode == 1)[:, None], stock(obs), controller(obs))
+        obs, _, done, _ = env.step(a)
+        if count is not None:
+            new = fusion.xy_reset_count != count
+            count = fusion.xy_reset_count.clone()
+            last_reset[new.cpu().numpy()] = k
+            shift = new & (mode == 1)
+            if bool(shift.any()):
+                env.hold_point[shift, :2] += fusion.xy_reset_step[shift, :2]
+        still = alive & ~done
+        c = env.clearance().cpu().numpy()
+        after = (still & (mode == 2)).cpu().numpy()
+        min_clear[after] = np.minimum(min_clear[after], c[after])
+        newly = (alive & done).cpu().numpy()
+        if newly.any():
+            end[newly] = k + 1
+            reason[newly] = env.term_reason.cpu().numpy()[newly]
+        alive = still
+        if not bool(alive.any()):
+            break
+
+    rows = []
+    for i in range(n):
+        crash = bool(reason[i] != TIMEOUT)
+        engaged = bool(k_eng[i] >= 0)
+        sane = bool(engaged and capture[i] >= sane_m)
+        crash_after = crash and engaged and end[i] > k_eng[i]
+        row: dict[str, Any] = {
+            "env": i, "length_s": float(end[i] * dt), "crash": crash,
+            "reason": TERM_REASONS[int(reason[i])],
+            "crash_before_disengage": crash and end[i] <= k_dis,
+            "reengaged": engaged, "reengage_s": float(k_eng[i] * dt) if engaged else None,
+            "capture_m": float(capture[i]) if engaged else None,
+            "true_at_capture_m": float(true_at[i]) if engaged else None,
+            "sane_capture": sane,
+            "reengage_fail": bool(crash_after and sane),
+            "crash_after_wall_capture": bool(crash_after and not sane),
+            "min_clearance_m": float(min_clear[i]) if np.isfinite(min_clear[i]) else None,
+            "reset_lead_s": float(reset_lead[i]) if np.isfinite(reset_lead[i]) else None,
+        }
+        if jump_m > 0.0:
+            row["jump_lead_s"] = float(lead[i])
+        rows.append(row)
+    return rows
+
+
+def describe_reengage(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Crashes after the switch, where the re-engages put their hold point, and the crash
+    rate split by how long before the switch the last horizontal reset came (Gazebo seed 3:
+    0.1 to 0.4 s for v11, which struck the wall, 1.3 s for v10, which did not)."""
+    eng = [r for r in rows if r["reengaged"]]
+    cap = np.array([r["capture_m"] for r in eng], dtype=np.float64)
+    clear = np.array([r["min_clearance_m"] for r in eng if r["min_clearance_m"] is not None])
+    out: dict[str, Any] = {
+        "episodes": len(rows),
+        "crash_rate": float(np.mean(_col(rows, "crash"))),
+        "reengage_fail": int(sum(r["reengage_fail"] for r in rows)),
+        "wall_captures": int(sum(r["reengaged"] and not r["sane_capture"] for r in rows)),
+        "crash_after_wall_capture": int(sum(r["crash_after_wall_capture"] for r in rows)),
+        "never_reengaged": int(sum(not r["reengaged"] and not r["crash"] for r in rows)),
+        "capture_m_p5": float(np.percentile(cap, 5)) if cap.size else float("nan"),
+        "min_clearance_m_p5": float(np.percentile(clear, 5)) if clear.size else float("nan"),
+    }
+    for name, lo, hi in (("reset_under_1s", 0.0, 1.0), ("reset_1s_plus", 1.0, 99.0)):
+        rs = [r for r in rows if r["reset_lead_s"] is not None and lo <= r["reset_lead_s"] < hi]
+        out[f"crash_rate_{name}"] = float(np.mean([r["crash"] for r in rs])) if rs else None
+        out[f"episodes_{name}"] = len(rs)
+    return out
+
+
 def _col(rows: list[dict[str, Any]], key: str) -> np.ndarray:
     return np.array([r.get(key, np.nan) for r in rows], dtype=np.float64)
 
@@ -171,10 +321,16 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
 
     report: dict[str, Any] = {"seeds": seeds, "num_envs": num_envs, "window_s": window_s,
                               "wobble_threshold": thr, "rules": rules, "reference": ref,
-                              "controllers": specs, "gazebo": gazebo, "cells": []}
+                              "controllers": specs, "gazebo": gazebo, "cells": [],
+                              "reengage": []}
     t_start = time.perf_counter()
+    scale = float(p.get("reengage_scale", 1.0))  # the smoke run shrinks the sequence
     flat: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for cell in p["cells"]:
+        if cell.get("reengage"):
+            report["reengage"].append(run_reengage_cell(p, cell, names, factories, seeds,
+                                                        num_envs, scale, device, writer))
+            continue
         env_cfg = StructureHoldConfig.from_dict(merge(p.get("base_env") or {}, cell.get("env")))
         rows: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
         for seed in seeds:
@@ -215,8 +371,15 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             "p95_lower": cmp["ci"][1] < 1.0,
             "lift_not_higher": pa["lift_m_mean"] <= pr["lift_m_mean"],
             "wobble_not_higher": pa["wobble_rate"] <= pr["wobble_rate"],
+            "ring_not_higher": (pa["wobble_rms_median"]
+                                <= pr["wobble_rms_median"] * (1.0 + rules["ring_slack"])),
             "crash_ok": pa["crash_rate"] <= pr["crash_rate"] + rules["max_crash_increase"],
         }
+        for c in [c for c in report["reengage"] if c["scored"]]:
+            d = c["controllers"]
+            checks[f"{c['name']}_no_reengage_fail"] = d[name]["reengage_fail"] == 0
+            checks[f"{c['name']}_crash_ok"] = (d[name]["crash_rate"] <= d[ref]["crash_rate"]
+                                               + rules["max_crash_increase"])
         for c in clean:
             d = {x["name"]: x for x in report["cells"]}[c]["controllers"]
             checks[f"{c}_p95_ok"] = (d[name]["p95_m_mean"]
@@ -250,6 +413,41 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
     return {"headline": headline, "vs_baseline": wording}
 
 
+def run_reengage_cell(p: dict[str, Any], cell: dict[str, Any], names: list[str],
+                      factories: dict[str, Any], seeds: list[int], num_envs: int,
+                      scale: float, device: str, writer: Any) -> dict[str, Any]:
+    """Fly one ``reengage`` cell (``fly_reengage``) for every controller and seed."""
+    seq = dict(cell["reengage"])
+    for key in ("disengage_s", "stock_s", "after_s", "guard_s"):
+        if key in seq:
+            seq[key] = float(seq[key]) * scale
+    if "jump_lead_s" in seq:
+        seq["jump_lead_s"] = [float(x) * scale for x in seq["jump_lead_s"]]
+    total = seq["disengage_s"] + seq["stock_s"] + seq["after_s"]
+    env_cfg = StructureHoldConfig.from_dict(merge(merge(p.get("base_env") or {}, cell.get("env")),
+                                                  {"episode_length_s": total}))
+    rows: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+    for seed in seeds:
+        for name in names:
+            env = StructureHoldEnv(env_cfg, num_envs, seed=seed, device=device)
+            t0 = time.perf_counter()
+            r = fly_reengage(env, factories[name](env), seq, seed)
+            for row in r:
+                writer.metric(seed, cell=cell["name"], controller=name, **row)
+            rows[name].extend(r)
+            d = describe_reengage(r)
+            print(f"gazebo_check: {cell['name']} seed {seed} {name}: crash {d['crash_rate']:.1%}, "
+                  f"re-engage failures {d['reengage_fail']}, hold points under "
+                  f"{seq.get('sane_m', 0.6)} m off the wall {d['wall_captures']} (crashed "
+                  f"{d['crash_after_wall_capture']}), closest after re-engage p5 "
+                  f"{d['min_clearance_m_p5']:.2f} m ({time.perf_counter() - t0:.0f} s)",
+                  flush=True)
+    return {"name": cell["name"], "label": cell.get("label", cell["name"]),
+            "scored": bool(cell.get("scored", True)),
+            "reengage": cell["reengage"], "env": cell.get("env") or {},
+            "controllers": {name: describe_reengage(rows[name]) for name in names}}
+
+
 def markdown(report: dict[str, Any]) -> str:
     names = [c["name"] for c in report["controllers"]]
     gz = report.get("gazebo") or {}
@@ -269,8 +467,8 @@ def markdown(report: dict[str, Any]) -> str:
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
                          f"{d['wobble_rate']:.0%} | {gtxt} |")
     lines += ["", "Rough-estimate cells pooled:", "",
-              "| controller | crash | p95 (m) | lift (m) | wobble | verdict |",
-              "| --- | --- | --- | --- | --- | --- |"]
+              "| controller | crash | p95 (m) | lift (m) | wobble | ring (median rms) | verdict |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
     for name in names:
         d = report["pooled_rough"][name]
         v = report["verdicts"].get(name)
@@ -280,7 +478,26 @@ def markdown(report: dict[str, Any]) -> str:
             f"{v['p95_ratio']['ci'][1]:.2f}; failed: "
             f"{', '.join(k for k, ok in v['checks'].items() if not ok) or 'none'})")
         lines.append(f"| {name} | {d['crash_rate']:.1%} | {d['p95_m_mean']:.3f} | "
-                     f"{d['lift_m_mean']:+.3f} | {d['wobble_rate']:.0%} | {vtxt} |")
+                     f"{d['lift_m_mean']:+.3f} | {d['wobble_rate']:.0%} | "
+                     f"{d['wobble_rms_median']:.4f} | {vtxt} |")
+    if report.get("reengage"):
+        lines += ["", "Hold, stock Position mode, re-engage (crash = any after the switch; "
+                  "re-engage failure = a crash after a re-engage whose hold point was a sane "
+                  "distance off the wall):", "",
+                  "| cell | controller | crash | re-engage failures | hold points at the wall "
+                  "(crashed) | crash, last reset < 1 s before the switch | 1 s or more | "
+                  "closest after re-engage, p5 (m) |",
+                  "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+        pct = lambda x: "-" if x is None else f"{x:.0%}"  # noqa: E731
+        for c in report["reengage"]:
+            for name in names:
+                d = c["controllers"][name]
+                lines.append(
+                    f"| {c['label']} | {name} | {d['crash_rate']:.1%} | {d['reengage_fail']} | "
+                    f"{d['wall_captures']} ({d['crash_after_wall_capture']}) | "
+                    f"{pct(d['crash_rate_reset_under_1s'])} of {d['episodes_reset_under_1s']} | "
+                    f"{pct(d['crash_rate_reset_1s_plus'])} of {d['episodes_reset_1s_plus']} | "
+                    f"{d['min_clearance_m_p5']:.2f} |")
     return "\n".join(lines) + "\n"
 
 

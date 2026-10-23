@@ -1,0 +1,82 @@
+# Policy v12 candidate: v11 (run 20261023-114507, released as v11) continued to stop the
+# 1.7 Hz ring it showed in Gazebo (PR #49) without giving back its tighter hold.
+# - The ring: v11's median 1.2-2.2 Hz roll-action rms in the Gazebo-like check is 17 % above
+#   v10's in every rough cell (both well under the wobble threshold), and in Gazebo v11 rang
+#   at 1.7 Hz on 2 of 9 flights. A ring is a loop with too little phase margin for the lag
+#   it flies with; v11's steeper position penalty raised its gain. Training lag here goes to
+#   60 ms (v11: 30 ms), so a policy that rings at the high end pays for it in position error.
+# - Wall contact at the x500's 0.40 m (v11: the 5-inch 0.25 m): the props reach 0.40 m.
+# - Exploration std reset to 0.05 (v11's sat at the 0.01 floor, where it cannot learn).
+# Judged by eval/configs/gazebo_check.yaml: must beat v10 there, ring rule and re-engage
+# cell included, before any Gazebo re-fly.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v12.yaml --smoke --device cpu
+name: structure_hold_ppo_v12
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261023-114507_structure_hold_ppo_v11_s0_f28680c/policy.pt  # v11
+  resume_std: 0.05  # v11's sat at the 0.01 floor of std_range, where the clamp passes no gradient
+  iterations: 1000  # ~28k env-steps/s on 4 CPU cores: ~30 min plus selection, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the Gazebo benchmark's hover; the drift needs 20 to 40 s to grow
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+      pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
+      pos_scale_m: 0.5
+    # Extra rate-setpoint lag up to 30 ms, drawn per episode, as for v6 (the tick itself is
+    # now in the preset).
+    rate_lag_s: [0.0, 0.06]  # v11: [0.0, 0.03]
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.04  # v10 and stage A: 0.1, five times vio_default's 0.02
+      dropout_rate_hz: 0.04
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

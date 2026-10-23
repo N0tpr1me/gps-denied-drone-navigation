@@ -105,6 +105,10 @@ class TorchFusion:
         self.since_fuse = z(n, 3)  # [horizontal position, height, horizontal velocity]
         self.stopped = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.resets = 0  # count, for tests and diagnostics
+        # Per env, as PX4's vehicle_local_position carries them: how many horizontal position
+        # resets so far (xy_reset_counter) and the step of the last one (delta_xy).
+        self.xy_reset_count = torch.zeros(n, dtype=torch.long, device=self.device)
+        self.xy_reset_step = z(n, 3)
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
     def reset(self, env_ids: Any, pos: torch.Tensor, vel: torch.Tensor) -> None:
@@ -150,6 +154,9 @@ class TorchFusion:
             step = torch.where(mask, fix_pos - self.p_d, torch.zeros_like(self.p_d))
             self.p_d = self.p_d + step
             self.p_o, self.hist_p = self.p_o + step, self.hist_p + step
+            xy = mask[:, 0] | mask[:, 1]
+            self.xy_reset_count += xy.long()
+            self.xy_reset_step = torch.where(xy[:, None], step, self.xy_reset_step)
             self.P11 = torch.where(mask, torch.full_like(self.P11, cfg.pos_noise_m ** 2), self.P11)
             self.P12 = torch.where(mask, torch.zeros_like(self.P12), self.P12)
         if fix_vel is not None:

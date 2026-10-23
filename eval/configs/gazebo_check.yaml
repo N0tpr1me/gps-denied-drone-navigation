@@ -5,19 +5,19 @@
 # released policy (v10) here.
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
-# To judge a new policy, add it under controllers (v10 stays as the reference; v9 is here for
-# the check's fidelity, Gazebo has flown both).
+# To judge a new policy, add it under controllers (v10 stays as the reference; v11 is here
+# for the check's fidelity: Gazebo has flown both, and v11 lost there, PR #49).
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
-expected_hours: 0.6
+expected_hours: 0.75
 gpus: 1
 params:
   controllers:
-    - name: v9
-      policy: training/policies/structure_hold_v9.onnx
     - name: v10
       policy: training/policies/structure_hold_v10.onnx
+    - name: v11
+      policy: training/policies/structure_hold_v11.onnx
   # The released policy, flown in Gazebo (PR #44). Before it: v6, then v9 (PR #42).
   reference: v10
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
@@ -30,6 +30,10 @@ params:
     clean_p95_slack_m: 0.02
   base_env:
     airframe: gz_x500_sitl
+    # The x500's props touch the wall at 0.40 m centre distance: rotors 0.24 to 0.26 m from
+    # the centre (airframes.py) plus the 0.14 m prop radius. Gazebo's v11 strikes began at
+    # 0.36 to 0.40 m (PR #49 seed 3). The scorer's default is a 5-inch quad's 0.25 m.
+    contact_radius_m: 0.40
     episode_length_s: 60.0  # the benchmark's 60 s hover
     hold_distance: 1.0  # wall1m_* scenarios
     hold_height: 2.4  # where the module's hold point sits at the 2.5 m hover
@@ -86,6 +90,27 @@ params:
       label: "8 m/s into the wall, vio_default"
       env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
                           turb_sigma: 1.0}}
+    # The benchmark's post-hold sequence (sim2real/px4/sitl_test.py): hold, stock Position
+    # mode, re-engage with the hold point captured from the estimate then
+    # (eval.gazebo_check.fly_reengage). Scored: no crash after a re-engage whose hold point
+    # sits at least sane_m off the wall, and no more crashes than the reference.
+    - name: reengage
+      label: "4 m/s, hold / stock / re-engage, vio_default"
+      reengage: {disengage_s: 20.0, stock_s: 5.4, after_s: 14.6, sane_m: 0.6}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5,
+                          gust_start: [5.0, 35.0]}}
+    # Gazebo seed 3: a 1.4 m vision jump toward the wall shortly before the switch. EKF2
+    # resets onto it, stock Position mode moves its setpoint with the reset, and the
+    # re-engage captures a hold point at the wall; the v11 flights struck it, v10's (reset
+    # 1.3 s before the switch, not 0.1 to 0.4 s) did not. Not scored: no controller that
+    # holds the estimate can avoid the wall from there (docs/gazebo_check.md).
+    - name: reengage_jump
+      label: "4 m/s, re-engage after a 1.4 m jump toward the wall"
+      scored: false
+      reengage: {disengage_s: 20.0, stock_s: 5.4, after_s: 14.6, sane_m: 0.6, jump_m: 1.4,
+                 jump_lead_s: [0.5, 3.0]}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5,
+                          gust_start: [5.0, 35.0]}}
   # What v6, v8, v9 and v10 did in Gazebo (PR #35, #37, #42, #44; per flight from the exported
   # traces, on this check's definitions: lift and wobble over the last 40 s). Printed beside
   # the mock. Gazebo's 4 and 8 m/s winds blow into the wall, so its 8 m/s numbers sit under
@@ -120,6 +145,7 @@ smoke:
   bootstrap: 50
   seeds: [7001]
   window_s: 1.0
+  reengage_scale: 0.05  # the 40 s sequence in 2 s
   base_env:  # replaces base_env whole (launch merges the smoke block one level deep)
     airframe: gz_x500_sitl
     episode_length_s: 2.0
