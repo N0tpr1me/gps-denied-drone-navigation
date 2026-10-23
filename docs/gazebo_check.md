@@ -7,7 +7,7 @@ goes to the Mac for a Gazebo re-fly (`docs/decisions.md`, 2026-10-23).
 
     python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~25 min
 
-To judge a new policy, add it under `params.controllers` in that config (keep v9, the
+To judge a new policy, add it under `params.controllers` in that config (keep v10, the
 reference: the released policy) and run it. The verdict is in the run's `report.md` and
 `summary.json`.
 
@@ -85,7 +85,7 @@ Per episode, over the last 40 s (the first 20 s hold the engage transient):
 - **p95** over the whole episode on the true centre of mass (`eval/metrics.py`), and crashes.
 
 A policy **passes** (beats the reference, the released policy: v6 until v9's Gazebo flights,
-v9 since) when, pooled over the rough cells:
+then v9, and v10 since its Gazebo flights, PR #44) when, pooled over the rough cells:
 
 1. its mean p95 is lower than the reference's (paired bootstrap 95 % interval of the ratio
    below 1);
@@ -94,7 +94,7 @@ v9 since) when, pooled over the rough cells:
 4. its crash rate is at most 1 point above the reference's;
 
 and on the clean cell its p95 is within 0.02 m of the reference's. Only a policy that passes
-goes to the Mac. The report prints Gazebo's own numbers for v6, v8 and v9 beside the mock's,
+goes to the Mac. The report prints Gazebo's own numbers for v6, v8, v9 and v10 beside the mock's,
 so the check's fidelity stays in view; when a new policy flies in Gazebo, add its numbers
 under `gazebo` in the config.
 
@@ -149,6 +149,28 @@ Where it is off:
 Each new Gazebo flight is a test of the check: put its numbers under `gazebo` in the config
 and see whether the mock still ranks the policies the way Gazebo does.
 
+### v10: the first forward test
+
+v10 was the first policy released on this check as it stands (EKF2's resets, `wind8_wall`),
+so its Gazebo flights (PR #44, 2026-10-23) test the check's prediction rather than fit it.
+Mock: run `20261023-074020`. Gazebo: the module thread's clean flight and nine `vio_default`
+flights, re-measured from the traces on this check's definitions.
+
+| cell | v10 mock p95 / lift / wobble | v10 Gazebo p95 / lift / wobble | v9 mock p95 | v9 Gazebo p95 |
+| --- | --- | --- | --- | --- |
+| calm, clean | 0.04 / +0.03 / 0 % | 0.04 / +0.03 / 0 of 1 | 0.08 | 0.08 |
+| calm | 0.34 / +0.04 / 0 % | 0.38 / +0.04 / 0 of 3 | 0.42 | 0.44 |
+| 4 m/s | 0.34 / +0.04 / 0 % | 0.38 / +0.05 / 0 of 3 | 0.44 | 0.49 |
+| 8 m/s | 0.36 / +0.03 / 0 % | 0.39 / +0.05 / 0 of 3 | 0.46 | 0.64 |
+| 8 m/s into the wall | 0.36 / +0.05 / 0 % | (Gazebo's 8 m/s flights) | 0.57 | 0.64 |
+
+Pooled over the rough cells, v10's p95 over v9's was 0.73 in the mock and 0.73 in Gazebo
+(0.38 m against 0.52 m over the nine flights). The mock called the size of the improvement,
+the absence of any wobble, the lift to within 0.01 m, and the fix for v9's drift (next
+section). Its p95 still sits 0.03 to 0.04 m under Gazebo's in each rough cell, the few
+centimetres the truth point accounts for (above). The benchmark's own scoring (`docs/baseline.md`) puts v10 at 0.37 / 0.38 / 0.39 m against
+tuned PX4's 0.57 m.
+
 ## The 8 m/s drift (v9)
 
 In one of v9's three 8 m/s Gazebo flights (`wall1m_wind_8ms`, seed 2) the drone slid away
@@ -179,7 +201,9 @@ blows into the wall in only a fraction of episodes. Gazebo's other two 8 m/s fli
 v10 (`training/configs/structure_hold_ppo_v10.yaml`) is v9 trained 1000 iterations more with
 60 s episodes and the mean wind always blowing with a component into the wall. In the same
 probe it holds within 0.09 m at 8 m/s into the wall and 0.19 m at 12 m/s, and does not drift
-in any other direction.
+in any other direction. In Gazebo none of its three 8 m/s flights drifted; seed 2, v9's
+drift flight, held 0.35 m p95 with a horizontal offset of 0.04 m (v9 1.01 m and 0.46 m;
+`docs/baseline.md`).
 
 Every policy so far also holds its heading about 11 degrees (0.2 rad) off the wall normal,
 in Gazebo and in the mock alike: a trait of the policy, not a gap in the mock. The heading
@@ -192,4 +216,4 @@ penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
 | v6 | reference | 0.53 m / +0.18 m / 65 % | reference | 0.65 m / +0.26 m / 6 of 9 |
 | v8 | `20261023-044747` | 0.68 m / +0.47 m / 93 % | does not beat v6 | 0.71 m / +0.43 m / 9 of 9 |
 | v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | 0.52 m / +0.06 m / 0 of 9; 8 m/s drift in 1 of 3 (PR #42) |
-| v10 | `20261023-074020` (five cells, with resets) | 0.35 m / +0.04 m / 0 % (v9 0.47 m / +0.05 m / 0 %) | beats v9 (p95 ratio 0.73) | re-fly pending |
+| v10 | `20261023-074020` (five cells, with resets) | 0.35 m / +0.04 m / 0 % (v9 0.47 m / +0.05 m / 0 %) | beats v9 (p95 ratio 0.73) | 0.38 m / +0.05 m / 0 of 9, no drift (PR #44); the reference since |
