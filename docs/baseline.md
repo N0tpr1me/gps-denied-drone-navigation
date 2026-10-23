@@ -338,3 +338,82 @@ clearance 0.81 m, 8 m/s seed 2). **Verdict: v9 is better than v6 overall.** Its 
 lower in every wind (−29 / −23 / −5 %) and it keeps further from the wall in every wind. Its vertical offset
 is about a quarter of v6's, and the wobble shows in 0 of 9 flights against 6. The one open
 item is the slow 8 m/s excursion on seed 2.
+
+## Structure Hold v10 vs tuned PX4
+
+Same benchmark again, on policy v10 (v9's recipe, also trained on wind into the wall and
+EKF2's resets to the fix), module headers at `02c7c8e`, image rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v9 / **v10** | worst toward wall m, tuned v1 / v9 / **v10** | crashes, tuned / v9 / v10 | failsafes, tuned / v9 / v10 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 0.442 (0.534) / **0.372 (0.449)** | 0.240 (0.420) / 0.017 (0.051) / **0.087 (0.188)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 4 m/s | 0.570 (0.919) / 0.491 (0.517) / **0.375 (0.444)** | 0.230 (0.406) / 0.020 (0.059) / **0.075 (0.171)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 0.646 (1.007) / **0.391 (0.472)** | 0.214 (0.386) / 0.136 (0.241) / **0.084 (0.163)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 1/3 |
+
+v10 had no crash and no failed check other than the script's position_held drift tolerance
+(6 of 9, as v6, v8 and v9). The one failsafe (8 m/s seed 3) came during PX4's own
+auto-takeoff, 15 s before the module engaged: 1.1 s in Land, then the takeoff resumed; none
+in the hold. Change in mean p95 against tuned PX4: −34 / −34 / −31 %; against v9: −16 / −24
+/ −40 %. RMS against v9: −21 / −27 / −44 %.
+
+| per seed | p95 m, calm / 4 / 8 m/s | v9 p95 m | worst toward wall m | offset up, module / truth m | roll-rate setpoint peak, std |
+|---|---|---|---|---|---|
+| seed 1 | 0.449 / 0.444 / 0.472 | 0.534 / 0.517 / 0.591 | 0.072 / 0.053 / 0.090 | +0.04 / +0.19, +0.05 / +0.20, +0.06 / +0.21 | 10.8, 10.8, 10.7 Hz; 0.17, 0.18, 0.25 rad/s |
+| seed 2 | 0.337 / 0.354 / 0.353 | 0.437 / 0.448 / 1.007 | 0.000 / 0.000 / 0.000 | +0.04 / −0.01, +0.04 / −0.01, +0.05 / +0.00 | 10.8, 10.8, 10.7 Hz; 0.18, 0.19, 0.23 rad/s |
+| seed 3 | 0.331 / 0.328 / 0.347 | 0.357 / 0.509 / 0.342 | 0.188 / 0.171 / 0.163 | +0.03 / +0.06, +0.04 / +0.07, +0.04 / +0.07 | 10.8, 10.8, 10.7 Hz; 0.19, 0.20, 0.27 rad/s |
+
+| | v9 | v10 |
+|---|---|---|
+| clean calm flight: p95, offset up, horizontal | 0.081 m, +0.04 m, 0.050 m | 0.036 m, +0.03 m, 0.014 m |
+| clean calm flight: along-wall drift (truth) mean, p2p | +0.021 m, 0.06 m | −0.008 m, 0.03 m |
+| clean calm flight: roll / pitch rate setpoint std, peak | 0.38 / 0.30 rad/s, 10.8 Hz | 0.19 / 0.14 rad/s, 10.8 Hz |
+| clean calm flight: thrust | 0.717 ± 0.007 | 0.723 ± 0.004 |
+| batch: offset up (module), mean (range) | +0.06 m (+0.02 to +0.09) | +0.04 m (+0.03 to +0.06) |
+| batch: offset up (module), seeds 1 / 2 / 3 | +0.07 / +0.04 / +0.05 m | +0.05 / +0.04 / +0.04 m |
+| batch: offset up (truth), mean (range) | +0.10 m (−0.03 to +0.24) | +0.09 m (−0.01 to +0.21) |
+| batch: horizontal offset, mean | 0.15 m (0.11 without 8 m/s seed 2) | 0.03 m |
+| batch: roll-rate setpoint std, mean | 0.31 rad/s | 0.21 rad/s |
+| batch: measured roll-rate std, mean | 0.11 rad/s | 0.08 rad/s |
+| batch: 1.6 Hz wobble | 0/9 flights | 0/9 flights |
+| batch: along-wall drift (truth) p2p, mean | 0.44 m | 0.33 m |
+| batch: mean truth offset from the wall, seeds 1 / 2 / 3 | −0.04 / −0.28 / −0.14 m | −0.01 / −0.12 / −0.04 m |
+
+Offsets and drift are measured as in the v8 section. The last row is the hold-window mean of
+the true position minus the hold point along the wall normal, negative away from the wall.
+
+Vision delay in Gazebo: EKF2 fuses each vision sample 154 ms behind real time in all nine
+benchmark flights and 158 ms in the clean flight (`estimator_aid_src_ev_pos` timestamp minus
+timestamp_sample, 152–164 ms), against `EKF2_EV_DELAY` 100 ms. `vehicle_visual_odometry`
+itself shows 0 ms, because PX4 stamps the sample when it arrives (no TIMESYNC). That is the
+same as the v9 flights (154 ms in every flight, clean included), so the delay is not higher.
+
+**Reading it.** v10 is the best policy in Gazebo so far, and it beats tuned PX4 in every wind:
+mean p95 0.37 / 0.38 / 0.39 m against 0.57 m (−34 / −34 / −31 %), and its worst flight
+(0.47 m) is half of tuned PX4's worst (0.91–0.93 m). Against v9 the mean p95 is lower in every
+wind (−16 / −24 / −40 %). The slow 8 m/s excursion on seed 2 is gone. That flight now holds
+0.353 m p95 (v9 1.007 m), with the module error under 0.12 m for the whole hold, 0.04 m
+horizontal offset (v9 0.46 m), along-wall p2p 0.21 m (v9 1.06 m) and no approach to the
+wall at all. The truth error that remains there is the estimate's own bias, which starts
+0.4 m off and shrinks as EKF2 corrects. v10 is also calmer: rate-setpoint std about two thirds of
+v9's in the batch and half on the clean flight, the steadiest thrust yet (± 0.004), and no
+1.6 Hz wobble in any flight. The vertical offset is +0.03 to +0.06 m against the estimate
+in every flight. On the clean plumbing flight it holds 0.036 m p95 (v9 0.081 m). The one thing
+that got worse is how close it comes to the wall in calm air and at 4 m/s: worst toward wall
+0.09 and 0.08 m mean against v9's 0.02, all from seed 3 (0.17–0.19 m; seeds 1 and 2 match v9).
+That is not overcorrection. Seed 3's error spikes are no sharper than v9's on the same seed
+(module error rate p99 0.32–0.33 m/s against 0.33–0.37; peak 1.13–1.14 against 0.94–1.11 m), and
+its setpoint std is lower. The difference is margin. v9 sat on seed 3 with a standing 0.15 m
+offset away from the wall, which soaked up the estimate's 0.2 m error toward the wall at about
++45 s. v10 sits on the hold point (mean offset −0.04 m), so it follows that estimate error
+0.17–0.19 m toward the wall, then recovers. Its closest clearance was 0.79 m, and it still comes
+less than half as close as tuned PX4 (0.08–0.09 m against 0.21–0.24 m). The module side was
+clean: every hold ran its full 60 s with no watchdog trip, fallback and yaw-guard shares 0, no
+saturated action, stale time up to 2.26 s in the dropout seeds, handback 0.016–0.02 s,
+GPS-free with vision fused, 0 wall contacts. **Verdict: v10 is better than v9 overall.** Its
+mean p95 is lower in every wind (−16 / −24 / −40 %) and its vertical offset is slightly smaller
+(+0.04 against +0.06 m). The wobble shows in 0 of 9 flights for both, and v10's setpoints
+are calmer. Worst toward wall is better at 8 m/s (0.08 against 0.14 m) but worse in calm air
+and at 4 m/s (0.09 and 0.08 against 0.02 m), because v10 holds the point rather than standing
+off the wall.
