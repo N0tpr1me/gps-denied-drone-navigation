@@ -69,6 +69,10 @@ class DisturbanceConfig:
 
     # Mean wind: horizontal speed, direction uniform over the compass, no vertical mean.
     mean_speed: tuple[float, float] = (0.0, 12.0)
+    # The direction the mean wind blows toward, degrees in the world frame (0 = +x, 90 = +y),
+    # as the Gazebo scenarios' wind_heading_deg. The default is the whole compass. With a
+    # wall at the origin facing -x (the structure hold env), 0 blows into the wall.
+    mean_heading_deg: tuple[float, float] = (0.0, 360.0)
     # Gust steps: a gust adds a constant horizontal wind for its duration, then stops.
     num_gusts: int = 2
     gust_start: tuple[float, float] = (2.0, 50.0)  # s from episode start
@@ -160,11 +164,11 @@ def sample_params(
     def u(r: tuple[float, float], *shape: int) -> np.ndarray:
         return rng.uniform(r[0], r[1], size=(n, *shape))
 
-    def horizontal(speed: np.ndarray) -> np.ndarray:
-        heading = rng.uniform(0.0, 2.0 * math.pi, size=speed.shape)
+    def horizontal(speed: np.ndarray, lo: float = 0.0, hi: float = 2.0 * math.pi) -> np.ndarray:
+        heading = rng.uniform(lo, hi, size=speed.shape)
         return np.stack([speed * np.cos(heading), speed * np.sin(heading), 0.0 * speed], -1)
 
-    mean_wind = horizontal(u(cfg.mean_speed))
+    mean_wind = horizontal(u(cfg.mean_speed), *map(math.radians, cfg.mean_heading_deg))
     gust_start = u(cfg.gust_start, k)
     gust_duration = u(cfg.gust_duration, k)
     gust_wind = horizontal(u(cfg.gust_speed, k))

@@ -151,3 +151,22 @@ def test_config_from_dict():
         DisturbanceConfig(mean_speed=(5.0, 1.0))
     with pytest.raises(ValueError, match="non-zero"):
         sample_params(DisturbanceConfig(), 2, seed=0, wall_normal=(0, 0, 0))
+
+
+def test_mean_heading_range_turns_only_the_mean_wind():
+    base = DisturbanceConfig(mean_speed=8.0)
+    # The default draws over the whole compass, as before the option existed.
+    rng = np.random.default_rng(5)
+    speed = rng.uniform(8.0, 8.0, size=6)
+    heading = rng.uniform(0.0, 2.0 * math.pi, size=6)
+    np.testing.assert_array_equal(sample_params(base, 6, seed=5).mean_wind[:, 0],
+                                  speed * np.cos(heading))
+    into = sample_params(DisturbanceConfig(mean_speed=8.0, mean_heading_deg=0.0), 6, seed=5)
+    np.testing.assert_allclose(into.mean_wind, np.tile([8.0, 0.0, 0.0], (6, 1)), atol=1e-12)
+    cone = sample_params(DisturbanceConfig(mean_speed=8.0, mean_heading_deg=(-30, 30)), 64, seed=5)
+    toward = np.arctan2(cone.mean_wind[:, 1], cone.mean_wind[:, 0])
+    assert (np.abs(toward) <= math.radians(30)).all()
+    # Gusts, turbulence and the rest keep the default draw.
+    ref = sample_params(base, 6, seed=5)
+    for name in ("gust_start", "gust_wind", "turb_amp", "turb_phase", "k_quad", "wall_floor"):
+        np.testing.assert_array_equal(getattr(into, name), getattr(ref, name))
