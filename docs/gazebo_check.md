@@ -121,3 +121,11 @@ Where it is off:
 
 Each new Gazebo flight is a test of the check: put its numbers under `gazebo` in the config
 and see whether the mock still ranks the policies the way Gazebo does.
+
+## Policies judged
+
+| policy | check run | pooled rough p95 / lift / wobble | verdict | Gazebo |
+| --- | --- | --- | --- | --- |
+| v6 | reference | 0.53 m / +0.18 m / 65 % | reference | 0.65 m / +0.26 m / 6 of 9 |
+| v8 | `20261023-044747` | 0.68 m / +0.47 m / 93 % | does not beat v6 | 0.71 m / +0.43 m / 9 of 9 |
+| v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | re-fly pending |

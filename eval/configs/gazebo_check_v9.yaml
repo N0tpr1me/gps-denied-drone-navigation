@@ -1,0 +1,97 @@
+# The Gazebo-like check for policy v9 (training/configs/structure_hold_ppo_v9.yaml: v6
+# continued 1000 iterations on gz_x500_sitl, run 20261023-050244, iteration 2500) against
+# v6. Same seeds, cells and rules as gazebo_check.yaml.
+#   python -m training.launch --config eval/configs/gazebo_check_v9.yaml --device cpu
+name: gazebo_check_v9
+entrypoint: eval.gazebo_check
+seed: 7001  # unused: the check's seeds are params.seeds
+expected_hours: 0.3
+gpus: 1
+params:
+  controllers:
+    - name: v6
+      policy: training/policies/structure_hold_v6.onnx
+    - name: v9
+      policy: training/policies/structure_hold_v9.onnx  # run 20261023-050244, iteration 2500
+  reference: v6
+  seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 64
+  window_s: 40.0  # lift and wobble over the last 40 s (the first 20 s hold the engage transient)
+  wobble_threshold: 0.1  # roll action 1.2-2.2 Hz rms; Gazebo wobbling 0.22-0.35, quiet 0.003-0.06
+  bootstrap: 2000
+  rules:
+    max_crash_increase: 0.01
+    clean_p95_slack_m: 0.02
+  base_env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the benchmark's 60 s hover
+    hold_distance: 1.0  # wall1m_* scenarios
+    hold_height: 2.4  # where the module's hold point sits at the 2.5 m hover
+    start_offset_std_m: 0.0  # the module engages at the hold point
+    start_yaw_std_rad: 0.0
+    # vio_default (sim2real/estimate_bridge/profiles), stated in full so a later change of a
+    # default cannot silently move the check.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # The wall1m_* scenarios: both gusts 15 to 40 s into the hover, 1 to 2 s long. The mock
+      # draws the wind direction over the compass; Gazebo blows it into the wall.
+      num_gusts: 2
+      gust_start: [15.0, 40.0]
+      gust_duration: [1.0, 2.0]
+      turb_tau: 1.0
+  cells:
+    - name: calm_clean
+      label: "calm, clean estimate"
+      rough: false
+      env:
+        estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0,
+                   vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0,
+                   jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+        disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}
+    - name: calm
+      label: "calm, vio_default"
+      env: {disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}}
+    - name: wind4
+      label: "4 m/s, vio_default"
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
+    - name: wind8
+      label: "8 m/s, vio_default"
+      env: {disturbance: {mean_speed: 8.0, gust_speed: [2.0, 4.0], turb_sigma: 1.0}}
+  # What v6 and v8 did in Gazebo (PR #35, PR #37; per flight from the exported traces, on
+  # this check's definitions: lift and wobble over the last 40 s). Printed beside the mock.
+  gazebo:
+    v6:
+      calm_clean: {p95_m: 0.11, lift_m: 0.04, wobble: "0/1"}
+      calm: {p95_m: 0.62, lift_m: 0.21, wobble: "2/3"}
+      wind4: {p95_m: 0.64, lift_m: 0.23, wobble: "2/3"}
+      wind8: {p95_m: 0.68, lift_m: 0.32, wobble: "2/3"}
+    v8:
+      calm_clean: {p95_m: 0.11, lift_m: -0.01, wobble: "0/1"}
+      calm: {p95_m: 0.67, lift_m: 0.39, wobble: "3/3"}
+      wind4: {p95_m: 0.68, lift_m: 0.41, wobble: "3/3"}
+      wind8: {p95_m: 0.79, lift_m: 0.48, wobble: "3/3"}
+smoke:
+  num_envs: 4
+  bootstrap: 50
+  seeds: [7001]
+  window_s: 1.0
+  base_env:  # replaces base_env whole (launch merges the smoke block one level deep)
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    hold_distance: 1.0
+    hold_height: 2.4
