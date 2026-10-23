@@ -175,3 +175,47 @@ hold ran its full 60 s with no watchdog trip (only the scripted test trip), fall
 yaw-guard shares 0, stale time up to 2.25 s in the dropout seeds, handback 0.02 s, every
 flight GPS-free with vision fused, no PX4 failsafe while the module flew. Next lever: the
 vertical offset (hover thrust or altitude bias in the x500 mock), then the horizontal one.
+
+## Structure Hold v6 vs tuned PX4
+
+Same benchmark again, on policy v6 (v5's x500 recipe trained longer), module headers at
+`7eee67a`. That commit also carries the age fix: the policy is fed age 0 while the estimate
+is fresh (`StructureHold.cpp`: `sample.age_s = sample.stale ? _stale_s : 0`). Image
+rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v6 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v3 / v5 / **v6** | worst toward wall m, tuned v1 / v3 / v5 / **v6** | crashes, tuned / v3 / v5 / v6 | failsafes, tuned / v3 / v5 / v6 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 1.873 (1.924) / 0.717 (0.942) / **0.620 (0.859)** | 0.240 (0.420) / 0.396 (0.548) / 0.136 (0.171) / **0.158 (0.221)** | 0/3 / 2/3 / 0/3 / 0/3 | 2/3 / 0/3 / 1/3† / 0/3 |
+| 4 m/s | 0.570 (0.919) / 1.675 (1.929) / 0.700 (0.923) / **0.641 (0.889)** | 0.230 (0.406) / 0.423 (0.554) / 0.177 (0.223) / **0.188 (0.267)** | 0/3 / 2/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 1.569 (1.925) / 0.759 (1.046) / **0.679 (0.934)** | 0.214 (0.386) / 0.486 (0.646) / 0.252 (0.477) / **0.303 (0.475)** | 0/3 / 1/3 / 1/3‡ / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+
+†, ‡ as in the v5 section (neither was the module). v6 had no crash and no PX4 failsafe.
+One check failed outside the hold: on 8 m/s seed 3 the scripted re-engage after the hold tripped on
+position error before the injected test fault, so `status_trip_logged` was false. The trip
+and the handback themselves worked.
+
+| per flight, mean over the 9 batch flights | v5 | v6 |
+|---|---|---|
+| steady offset above the hold point m (range) | +0.39 (+0.35 to +0.46) | +0.23 (+0.10 to +0.39) |
+| steady horizontal offset m (range) | 0.12 (0.10 to 0.14) | 0.09 (0.04 to 0.19) |
+| roll-rate setpoint std rad/s, peak | 0.53, 1.6 Hz in 9/9 | 0.51, 1.6 Hz in 6/9, 10.9 Hz in 3/9 |
+| thrust mean | 0.713 | 0.714 |
+
+**Reading it.** v6 is the closest yet to tuned PX4: mean p95 0.62 / 0.64 / 0.68 m against
+0.57 m (+9 to +19 %), 8 to 14 % better than v5. It matches or beats tuned PX4 on the worst
+seed (0.86–0.93 m against 0.91–0.93 m) and on seed 2 (0.43–0.45 m against 0.44 m). It loses
+on seed 3 (0.57–0.66 m against 0.34–0.35 m). It stays further from the wall than tuned PX4 in calm air and at 4 m/s
+(0.16 and 0.19 m against 0.24 and 0.23 m) but comes closer at 8 m/s (0.30 against 0.21 m).
+On the clean plumbing flight v6 holds 0.114 m p95 (v5 0.41 m). The vertical offset is down to
++0.04 m (v5 +0.29 m), the horizontal one to 0.045 m, and thrust is 0.701 ± 0.03. The 1.6 Hz wobble is gone there:
+the roll and pitch setpoints now chatter at 10.9 Hz (std 0.49 and 0.57 rad/s), which the
+rate loop mostly filters (measured roll-rate std 0.16 rad/s against v5's 0.43). On the corrupted
+estimate the wobble and the offset come back on seeds 1 and 3. Those are the rough-estimate
+seeds: EKF2 vision innovation 0.18–0.23 m rms with 1–4 jumps, against 0.04 m on seed 2. There
+the setpoints peak at 1.6 Hz again and the vehicle sits +0.17 to +0.39 m high. On seed 2 it
+behaves as in the clean flight (+0.10 to +0.13 m, 10.9 Hz). The module side was clean in all
+nine flights: every hold ran its full 60 s with no watchdog trip, fallback and yaw-guard shares 0,
+stale time up to 2.25 s in the dropout seeds, handback 0.016–0.024 s, GPS-free with vision
+fused, 0 wall contacts (closest clearance 0.52 m, 8 m/s seed 1).
