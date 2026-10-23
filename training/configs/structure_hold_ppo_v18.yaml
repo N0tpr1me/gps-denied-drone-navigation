@@ -1,13 +1,18 @@
 # Policy v18 candidate: v17 (run 20261023-211755) continued with the toward-the-wall penalty
-# back at 2.0 per metre (4.0 in v16 and v17).
+# back at 2.0 per metre (4.0 in v16 and v17) and twice the body-rate penalty.
 # - v17 fixed seed 1's drift (0.04 m toward the wall in the replay, v10 0.08 m), beats v10 in
 #   every rough cell of the Gazebo-like check and is -37 % against the PD on Gate 1's headline
-#   (scratch seed 8001). But on a clean estimate it stands 0.05 m off the hold point, away from
-#   the wall (calm clean p95 0.062 m against the 0.058 m limit): with a one-sided penalty at
-#   4.0 and five times the eval rate of jumps, standing back is what the reward pays for.
-# - The jumps at 0.1 Hz are what stopped the drift (v16 had the 4.0 penalty and still drifted
-#   0.19 m; v10, trained with 0.1 Hz jumps and a 0.5 penalty, does not drift), so the penalty
-#   goes back to v13's 2.0 and the jumps stay. Everything else is v17's.
+#   (scratch seed 8001). It fails two of the check's rules (run 20261023-215357):
+#   - on a clean estimate it stands 0.05 m off the hold point, away from the wall (calm clean
+#     p95 0.062 m against the 0.058 m limit): with a one-sided penalty at 4.0 and five times
+#     the eval rate of jumps, standing back is what the reward pays for. The jumps at 0.1 Hz
+#     are what stopped the drift (v16 had the 4.0 penalty and still drifted 0.19 m; v10,
+#     trained with 0.1 Hz jumps and a 0.5 penalty, does not drift), so the penalty goes back
+#     to v13's 2.0 and the jumps stay;
+#   - it rings 13 % more than v10 (1.2 to 2.2 Hz roll, 5 % allowed). The ring came with the
+#     re-engages (v13 0.0055, v14 0.0155 on a scratch probe), which made the policy act
+#     harder on an offset; the body-rate penalty goes from 0.1 to 0.2 to damp it.
+# - Everything else is v17's.
 # Judged by the seed 1 replay, the clean offset, Gate 1's headline on a scratch seed, then
 # eval/configs/gazebo_check.yaml.
 #   python -m training.launch --config training/configs/structure_hold_ppo_v18.yaml --smoke --device cpu
@@ -32,7 +37,7 @@ params:
       mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
     reward:
       thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
-      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+      ang_vel: 0.2  # times body-rate norm, clipped at 10 rad/s (v12 to v17: 0.1), against the ring
       pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
       pos_scale_m: 0.5
       toward_wall: 2.0  # times the error toward the wall clipped at 1 m (v13 to v15; v16, v17: 4.0)
