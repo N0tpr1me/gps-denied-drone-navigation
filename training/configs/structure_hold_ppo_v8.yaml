@@ -1,0 +1,75 @@
+# Policy v8 candidate: v6 (run 20261022-223115, the v5 recipe trained 2000 iterations)
+# continued for 1000 more with the hold point 3.5 m up instead of 2 m. v6 sat 0.1 to 0.4 m
+# above its hold point in Gazebo, more on the seeds with a rough estimate. In the mock it
+# climbs and backs off the wall when its velocity or yaw-rate input is noisy or the
+# estimate jumps (0.1 Hz jumps: z +0.24 m, x -0.07 m). The policy cannot see its height, and
+# at 2 m the ground (a crash at 0.3 m) is 1.7 m below the hold point while the box edge is
+# 3 m away in every other direction, so a climb whenever the estimate looks rough buys
+# insurance against a jump driving it into the ground. At 3.5 m the ground is beyond the
+# box edge and a climb buys nothing. One change from v6; v7 (sensor noise) learned to sit
+# 0.08 m low instead.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v8.yaml --smoke --device cpu
+name: structure_hold_ppo_v8
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261022-223115_structure_hold_ppo_v5_resume_s0_ca3b52d/policy.pt  # v6: run 4, iteration 1500
+  iterations: 1000  # ~22k env-steps/s on 4 CPU cores: ~40 min, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 150 ms window, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500
+    hold_height: [3.5, 3.5]  # ground 3.2 m below, beyond the 3 m box edge
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.1  # times body-rate norm, clipped at 10 rad/s
+    # Rate-setpoint lag up to 30 ms (the module tick and the next gyro sample), drawn per
+    # episode; the x500's own rate loop is in the preset.
+    rate_lag_s: [0.0, 0.03]
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500
+    hold_height: [3.5, 3.5]
+    episode_length_s: 2.0
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
