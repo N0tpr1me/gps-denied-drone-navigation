@@ -262,9 +262,36 @@ fails:
 | 8 m/s, 2 m | 0.70 / 0.57 / 0.60 | 12.7 / 1.6 / 2.1 % | fail |
 
 Pooled: p95 0.61 / 0.50 / 0.52 m, crashes 14.4 / 1.4 / 5.7 %. Three quarters of the crashes
-are wall contacts, and they follow the raw estimate jumps: this test set's x500 has no EKF, so a 2 m jump reaches the policy as a 2 m
-step, where v9 trained (and Gazebo flies) behind EKF2, which gates a jump and later resets
-onto it. The test set is still the one Gate 1 is judged on, so v9 does not pass Gate 1; on
-the PX4 stack, where the estimate comes through EKF2, it is the better policy. The next
-policy trains with EKF2's resets in the loop (`envs/estimate/ekf.py`), so it sees jumps as
-steps again.
+are wall contacts. They come from the estimate's delay. This test set's x500 has no EKF, so
+the fix reaches the policy 50 to 150 ms late, uncompensated. v9 trained (and Gazebo flies)
+behind EKF2, which fuses the fix at its delay and predicts it forward with the IMU, so v9
+never had to fly on a late estimate. Taking the corruption apart (256 episodes, calm, 1 m,
+a scratch probe): with only the delay v9 crashes in 14 % of episodes; with only the noise,
+the bias walk or the jumps in none; with only the dropouts in 1 %. On a clean estimate, none.
+The test set is still the one Gate 1 is judged on, so v9 does not pass Gate 1; on the PX4
+stack, where the estimate comes through EKF2, it is the better policy.
+
+### On the x500: v10, run `20261023-081233`
+
+v10 is v9 continued for 1000 iterations with 60 s episodes, the wind into the wall and
+EKF2's resets (`training/configs/structure_hold_ppo_v10.yaml`); it beats v9 on the
+Gazebo-like check in every cell. Here it fails harder than v9:
+
+| Cell | p95: v10 / v9 / PD (m) | Crash: v10 / v9 / PD | v10 verdict |
+| --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.68 / 0.56 / 0.48 | 40.2 / 17.5 / 9.4 % | fail |
+| 0 m/s, 2 m | 0.87 / 0.64 / 0.52 | 35.6 / 12.8 / 2.4 % | fail |
+| 4 m/s, 1 m | 0.67 / 0.56 / 0.49 | 39.2 / 15.4 / 8.7 % | fail |
+| 4 m/s, 2 m | 0.86 / 0.63 / 0.54 | 33.6 / 12.2 / 2.4 % | fail |
+| 8 m/s, 1 m (headline) | 0.66 / 0.56 / 0.51 | 37.8 / 15.9 / 8.9 % | fail |
+| 8 m/s, 2 m | 0.90 / 0.70 / 0.60 | 34.8 / 12.7 / 2.1 % | fail |
+
+Pooled: p95 0.77 / 0.61 / 0.52 m, crashes 36.9 / 14.4 / 5.7 %. The cause is the same as
+v9's: the 50 to 150 ms late fix with nothing to compensate it (in the same scratch probe,
+the delay alone: v10 32 %, v9 14 %; the rest of the corruption alone: 0 to 1 %; the run took
+61 min because it shared the CPU with other runs). v10 corrects position errors harder than
+v9, which is what stopped the drift and also what makes a late estimate worse. Behind the
+EKF-like fusion, with the fix 150 to 200 ms late (later than the 100 ms EKF2 assumes), it
+still beats v9 (run `20261023-084937`). Every policy trained on the PX4-like stack fails
+this test set, because the module never sees a raw fix: whether Gate 1 should judge the x500
+through EKF2 is an open question (`docs/decisions.md`).
