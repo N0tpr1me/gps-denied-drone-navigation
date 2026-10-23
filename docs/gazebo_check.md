@@ -176,6 +176,11 @@ training could not see this: 20 s episodes, the drift takes 20 to 40 s to grow, 
 blows into the wall in only a fraction of episodes. Gazebo's other two 8 m/s flights and its
 4 m/s flights did not drift within 60 s; the mock's drift is stronger than Gazebo's.
 
+v10 (`training/configs/structure_hold_ppo_v10.yaml`) is v9 trained 1000 iterations more with
+60 s episodes and the mean wind always blowing with a component into the wall. In the same
+probe it holds within 0.09 m at 8 m/s into the wall and 0.19 m at 12 m/s, and does not drift
+in any other direction.
+
 Every policy so far also holds its heading about 11 degrees (0.2 rad) off the wall normal,
 in Gazebo and in the mock alike: a trait of the policy, not a gap in the mock. The heading
 penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
@@ -187,3 +192,4 @@ penalty, `heading` times 1 - cos(error), is nearly flat that close to zero.
 | v6 | reference | 0.53 m / +0.18 m / 65 % | reference | 0.65 m / +0.26 m / 6 of 9 |
 | v8 | `20261023-044747` | 0.68 m / +0.47 m / 93 % | does not beat v6 | 0.71 m / +0.43 m / 9 of 9 |
 | v9 | `20261023-053223` | 0.40 m / +0.05 m / 0 % | beats v6 (p95 ratio 0.75) | 0.52 m / +0.06 m / 0 of 9; 8 m/s drift in 1 of 3 (PR #42) |
+| v10 | `20261023-074020` (five cells, with resets) | 0.35 m / +0.04 m / 0 % (v9 0.47 m / +0.05 m / 0 %) | beats v9 (p95 ratio 0.73) | re-fly pending |
