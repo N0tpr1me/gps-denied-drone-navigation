@@ -15,7 +15,8 @@ uint8 TRIP_ESTIMATE_INVALID = 2
 uint8 TRIP_ESTIMATE_STALE = 3
 uint8 TRIP_TILT = 4
 uint8 TRIP_POSITION_ERROR = 5
-uint8 trip_reason             # TRIP_*: last watchdog trip, latched until disarm
+uint8 TRIP_ESTIMATE_RESET = 6 # entry refused: EKF reset its xy position within SH_RST_HOLD (not latched)
+uint8 trip_reason             # TRIP_*: last watchdog trip or refusal; cleared on disarm
 uint8 trip_count              # trips since boot
 
 int8 mode_id                  # nav_state assigned by commander, -1 if unregistered
@@ -26,6 +27,7 @@ float32 yaw_setpoint          # [rad]
 float32[3] position_error_ned # [m] setpoint - estimate
 float32 estimate_age_s        # [s] age of the sample the position estimate is based on (last fix)
 float32 stale_s               # [s] time since the last fresh position fix (docs/fallback.md)
+float32 reset_age_s           # [s] since the EKF last reset its xy position, -1 if never
 
 uint8 CTRL_CASCADE = 0        # placeholder P cascade (SH_CTRL 0)
 uint8 CTRL_POLICY = 1         # policy v2 with the brake-and-hover fallback (SH_CTRL 1)

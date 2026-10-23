@@ -50,7 +50,10 @@ SUB_AUTO_TAKEOFF, SUB_AUTO_LOITER, SUB_AUTO_LAND, SUB_EXTERNAL1 = 2, 3, 6, 11
 
 # structure_hold_status.state
 STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
-TRIP_TEST_FAULT = 1
+TRIP_TEST_FAULT, TRIP_ESTIMATE_RESET = 1, 6
+# With SH_RST_HOLD > 0 commander refuses the mode for that long after an EKF position
+# reset; a re-engage that lands in the window is retried until accepted or this runs out.
+REENGAGE_RETRY_S = 14.0
 
 
 @dataclass
@@ -271,10 +274,23 @@ def fly(args: argparse.Namespace) -> dict:
                                  "xy_max_drift_m": round(max(samples.posctl_drift), 3)}
     checks["stock_mode_flying_after_disengage"] = in_stock(v) and not v.tel.landed
 
-    # 4. Re-engage, trip the watchdog, expect handback and a latched refusal.
-    ack = v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    # 4. Re-engage, trip the watchdog, expect handback and a latched refusal. Commander
+    # refuses the mode (or the module hands straight back) while the EKF-reset hold-off
+    # runs, so the request is repeated once a second until it takes.
+    t_reengage = time.monotonic()
+    refusals = 0
+    while True:
+        ack = v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+        try:
+            v.wait_for(lambda: in_structure_hold(v), 1.0, "Structure Hold re-engaged")
+            break
+        except TimeoutError:
+            refusals += 1
+            if time.monotonic() - t_reengage > REENGAGE_RETRY_S:
+                raise
+    result["reengage"] = {"ack": ack, "refusals": refusals,
+                          "wait_s": round(time.monotonic() - t_reengage, 1)}
     checks["reengage_accepted"] = ack == mavlink.MAV_RESULT_ACCEPTED
-    v.wait_for(lambda: in_structure_hold(v), 5, "Structure Hold re-engaged")
     v.pump(2.0)
     v.set_param("SH_TEST_FAULT", 1)
     t_trip = time.monotonic()

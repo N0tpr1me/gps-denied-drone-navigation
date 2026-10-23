@@ -10,6 +10,7 @@ run_bridge.py      the in-container process: gz pose/info -> bridge -> MAVLink O
 config.py          estimate profiles (profiles/clean.yaml, profiles/vio_default.yaml)
 params.py          QGC .params reader -> PX4_PARAM_* environment for the container
 ekf2_ev.params     EKF2 on vision, GPS off (loaded at PX4 start, before EKF2 runs)
+heartbeat.py       PX4 HEARTBEAT custom_mode -> is Structure Hold flying (for the fault anchor)
 verify_trace.py    replay the trace through envs.estimate: PX4 got exactly the model
 ulog_checks.py     EKF2 aiding, estimate-vs-truth error, vision gaps and modes from the ulog
 run_estimate.py    host runner: scenario + profile -> run folder, verify, score
@@ -63,7 +64,25 @@ EKF2 fused vision for most of the flight. The truth-based numbers are in `metric
 and `ekf.json`.
 
 Profile keys: `name`, `seed`, `divisor` (corruptor every N-th 50 Hz sample), `estimate`
-(any `EstimateCorruptionConfig` key, or `clean`).
+(any `EstimateCorruptionConfig` key, or `clean`), `fault_anchor` (`start`, the default, or
+`engage`) and `fault_anchor_s` (25.0).
+
+Fault anchor. With `start` the fault clock runs from the bridge's first sample, so where a
+jump or dropout lands relative to the hold depends on how long PX4 took to arm and take
+off (0.8 s of spread over the seed 1 to 8 batches; seed 7's jumps landed during arming and
+broke both controllers, and v11's seed 3 strike came from a jump 0.1 to 0.4 s before the
+scripted disengage that v10 had met 1.3 s before it). With `engage` the bridge watches
+PX4's heartbeat (asked for at 20 Hz on its link) and keys the schedule to the first sample
+with Structure Hold flying: before it the same seed's draws run with every jump and
+dropout suppressed; at it the corruptor is rebuilt from the seed with the fault clock at
+`fault_anchor_s`, pre-rolled with faults suppressed, and the delay history, bias and
+dropout state carried over so the stream is continuous (`bridge.py`, `EstimateBridge._anchor`).
+From then on the draws are the ones `vio_default` makes at fault clock `fault_anchor_s` +
+time since engage, so every policy and seed meets the same faults at the same time after
+engage, and 25 s makes the in-hold faults the ones the seed 1 to 8 batches flew. The trace
+gains an `engaged` column and `verify_trace` replays with it (`anchor_t`, `anchor_step` in
+its report). Shipped as `vio_at_engage`; pass `-- --profile vio_at_engage` to
+`eval.baselines.run_baseline` for both controllers.
 
 ## Notes
 

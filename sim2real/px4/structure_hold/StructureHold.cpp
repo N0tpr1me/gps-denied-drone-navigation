@@ -41,6 +41,7 @@ void StructureHold::updateParams()
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
 	limits.max_position_error_m = _param_wd_pos_err.get();
 	limits.max_tilt_rad = math::radians(_param_wd_tilt.get());
+	limits.reset_holdoff_us = static_cast<uint64_t>(math::max(_param_rst_hold.get(), 0.f) * 1e6f);
 	_watchdog.setLimits(limits);
 
 	_gains.p_pos = _param_p_pos.get();
@@ -157,8 +158,9 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 	reply.registration_id = _arming_check_id;
 	reply.health_component_index = arming_check_reply_s::HEALTH_COMPONENT_INDEX_NONE;
 	reply.num_events = 0;
-	// Commander refuses to switch into the mode while a trip is latched.
-	reply.can_arm_and_run = _watchdog.latched() == Trip::None;
+	// Commander refuses to switch into the mode while a trip is latched or for SH_RST_HOLD
+	// after an EKF position reset (Watchdog.hpp).
+	reply.can_arm_and_run = _watchdog.latched() == Trip::None && !_watchdog.inResetHoldoff(hrt_absolute_time());
 	reply.mode_req_angular_velocity = true;
 	reply.mode_req_attitude = true;
 	reply.mode_req_local_alt = true;
@@ -198,9 +200,13 @@ void StructureHold::disengage(const char *why)
 	_state = structure_hold_status_s::STATE_STANDBY;
 }
 
-void StructureHold::handBack(Trip trip, bool xy_valid)
+void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 {
-	_watchdog.latch(trip);
+	if (latch) {
+		_watchdog.latch(trip);
+	}
+
+	_last_trip = trip;
 
 	if (_trip_count < 255) {
 		++_trip_count;
@@ -209,7 +215,7 @@ void StructureHold::handBack(Trip trip, bool xy_valid)
 	_state = structure_hold_status_s::STATE_HANDBACK;
 	_handback_step = 0;
 	_handback_xy_valid = xy_valid;
-	PX4_WARN("watchdog trip: %s, handing back", Watchdog::name(trip));
+	PX4_WARN("watchdog %s: %s, handing back", latch ? "trip" : "refusal", Watchdog::name(trip));
 	requestHandbackMode();
 }
 
@@ -449,7 +455,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	structure_hold_status_s status{};
 	status.timestamp = now;
 	status.state = _state;
-	status.trip_reason = static_cast<uint8_t>(_watchdog.latched());
+	status.trip_reason = static_cast<uint8_t>(_last_trip);
 	status.trip_count = _trip_count;
 	status.mode_id = _mode_id;
 	status.arming_check_id = _arming_check_id;
@@ -458,6 +464,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	_last_output.pos_err.copyTo(status.position_error_ned);
 	status.estimate_age_s = _last_estimate_age_s;
 	status.stale_s = _stale_s;
+	status.reset_age_s = _watchdog.resetAge(now);
 	status.controller = _param_ctrl.get() == 1 ? structure_hold_status_s::CTRL_POLICY
 			    : structure_hold_status_s::CTRL_CASCADE;
 	status.fallback_active = _fallback_active;
@@ -526,10 +533,17 @@ void StructureHold::Run()
 			_watchdog.clearLatch();
 		}
 
+		if (_armed && !armed) {
+			_last_trip = Trip::None;
+		}
+
 		_armed = armed;
 	}
 
-	_local_position_sub.update(&_local_position);
+	if (_local_position_sub.update(&_local_position)) {
+		_watchdog.noteReset(_local_position.xy_reset_counter, now);
+	}
+
 	_attitude_sub.update(&_attitude);
 	updateFix(now);
 
@@ -538,7 +552,16 @@ void StructureHold::Run()
 	switch (_state) {
 	case structure_hold_status_s::STATE_STANDBY:
 		if (mode_active) {
-			engage(_local_position);
+			if (_watchdog.inResetHoldoff(now)) {
+				// Commander normally refuses the switch (replyToArmingCheck), but its poll
+				// is 300 ms behind the reset: hand straight back, nothing latched.
+				PX4_WARN("engage refused: EKF reset its position %.1f s ago (SH_RST_HOLD %.1f s)",
+					 (double)_watchdog.resetAge(now), (double)_param_rst_hold.get());
+				handBack(Trip::EstimateReset, _local_position.xy_valid, false);
+
+			} else {
+				engage(_local_position);
+			}
 		}
 
 		break;
@@ -626,7 +649,9 @@ int StructureHold::print_status()
 	static const char *state_names[] = {"unregistered", "standby", "engaged", "handback"};
 	PX4_INFO("state: %s", state_names[_state < 4 ? _state : 0]);
 	PX4_INFO("mode_id %d, arming_check_id %d", _mode_id, _arming_check_id);
-	PX4_INFO("latched trip: %s, trips since boot: %u", Watchdog::name(_watchdog.latched()), _trip_count);
+	PX4_INFO("latched trip: %s, last: %s, trips since boot: %u, EKF reset %.1f s ago (hold-off %.1f s)",
+		 Watchdog::name(_watchdog.latched()), Watchdog::name(_last_trip), _trip_count,
+		 (double)_watchdog.resetAge(hrt_absolute_time()), (double)_param_rst_hold.get());
 	PX4_INFO("controller: %s (policy %s, history %d x %d), fallback %s, fix source %s, stale %.2f s",
 		 _param_ctrl.get() == 1 ? "policy" : "cascade", policy::NAME, policy::HISTORY, policy::NUM_OBS,
 		 _fallback_active ? "ACTIVE" : "idle", useOdometryFix() ? "visual odometry" : "local position",
