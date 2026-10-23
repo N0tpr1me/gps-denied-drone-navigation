@@ -204,6 +204,16 @@ def spread(batch: dict[str, Any], key: str = "p95_m") -> str:
     return "\n".join(lines) + "\n"
 
 
+def profile_of(run_args: list[str]) -> str:
+    """The estimate profile the runner flies: its ``--profile`` argument, else its default."""
+    for i, a in enumerate(run_args):
+        if a == "--profile" and i + 1 < len(run_args):
+            return run_args[i + 1]
+        if a.startswith("--profile="):
+            return a.split("=", 1)[1]
+    return "vio_default"
+
+
 def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
     status = ("not flown (never armable)" if not r.get("flown", True) else
               "crash" if r["crash"] else ("ok" if r["ok"] else "flown, check failed"))
@@ -214,9 +224,11 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
               f"{' (in hover)' if r['failsafe_in_hover'] else ''}")
     runner = batch.get("runner", "estimate")
     what = f"{runner} runner" if runner != "estimate" else "stock hover"
-    extra = " " + " ".join(batch["run_args"]) if batch.get("run_args") else ""
+    run_args = batch.get("run_args") or []
+    extra = " " + " ".join(run_args) if run_args else ""
+    profile = profile_of(run_args)
     return (f"| {when} | {r['run']} | {batch['commit']} | eval/baselines/run_baseline "
-            f"{batch['label']} ({what}{extra}): {r['scenario']} seed {r['seed']}, vio_default "
+            f"{batch['label']} ({what}{extra}): {r['scenario']} seed {r['seed']}, {profile} "
             f"estimate, `{batch['params']}`, GPS off | MacBook (Apple Silicon), Docker arm64 "
             f"| {status} | {result} | {{vs}} |")
 

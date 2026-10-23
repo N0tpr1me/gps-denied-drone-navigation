@@ -1,6 +1,12 @@
 import math
 
-from eval.baselines.run_baseline import aggregate, compare, failsafe_in_window, row_from_summary
+from eval.baselines.run_baseline import (
+    aggregate,
+    compare,
+    failsafe_in_window,
+    log_line,
+    row_from_summary,
+)
 
 
 def summary(scenario="wall1m_wind_8ms", seed=1, p95=0.2, toward=0.3, contacts=0,
@@ -113,3 +119,12 @@ def test_pool_merges_seed_chunks_and_prints_the_spread(tmp_path):
         pool([batch([1]), batch([1])], tmp_path / "dup.json")
     with pytest.raises(ValueError):
         pool([batch([1]), batch([2], label="other")], tmp_path / "mixed.json")
+
+
+def test_log_line_names_the_profile_the_runner_flew():
+    r = row_from_summary(summary(), ekf(CLEAN))
+    batch = {"label": "tuned_v1", "commit": "abc1234", "params": "p.params", "run_args": []}
+    assert ", vio_default estimate," in log_line(r, batch, "2026-10-23")
+    for args in (["--profile", "vio_after_takeoff"], ["--profile=vio_after_takeoff"]):
+        line = log_line(r, {**batch, "run_args": args}, "2026-10-23")
+        assert ", vio_after_takeoff estimate," in line and "vio_default" not in line
