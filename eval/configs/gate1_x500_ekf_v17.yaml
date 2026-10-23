@@ -14,7 +14,7 @@ gpus: 1
 params:
   controllers:
     - name: v17
-      policy: runs/20261023-211755_structure_hold_ppo_v17_s0_71cd5bd/policy.onnx  # candidate, iteration 11500
+      policy: training/policies/structure_hold_v17.onnx  # candidate, iteration 11500
   gate_controller: v17
   seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
   num_envs: 1024
