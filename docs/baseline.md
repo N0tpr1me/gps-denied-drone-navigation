@@ -338,3 +338,197 @@ clearance 0.81 m, 8 m/s seed 2). **Verdict: v9 is better than v6 overall.** Its 
 lower in every wind (−29 / −23 / −5 %) and it keeps further from the wall in every wind. Its vertical offset
 is about a quarter of v6's, and the wobble shows in 0 of 9 flights against 6. The one open
 item is the slow 8 m/s excursion on seed 2.
+
+## Structure Hold v10 vs tuned PX4
+
+Same benchmark again, on policy v10 (v9's recipe, also trained on wind into the wall and
+EKF2's resets to the fix), module headers at `02c7c8e`, image rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v9 / **v10** | worst toward wall m, tuned v1 / v9 / **v10** | crashes, tuned / v9 / v10 | failsafes, tuned / v9 / v10 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 0.442 (0.534) / **0.372 (0.449)** | 0.240 (0.420) / 0.017 (0.051) / **0.087 (0.188)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 4 m/s | 0.570 (0.919) / 0.491 (0.517) / **0.375 (0.444)** | 0.230 (0.406) / 0.020 (0.059) / **0.075 (0.171)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 0.646 (1.007) / **0.391 (0.472)** | 0.214 (0.386) / 0.136 (0.241) / **0.084 (0.163)** | 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 1/3 |
+
+v10 had no crash and no failed check other than the script's position_held drift tolerance
+(6 of 9, as v6, v8 and v9). The one failsafe (8 m/s seed 3) came during PX4's own
+auto-takeoff, 15 s before the module engaged: 1.1 s in Land, then the takeoff resumed; none
+in the hold. Change in mean p95 against tuned PX4: −34 / −34 / −31 %; against v9: −16 / −24
+/ −40 %. RMS against v9: −21 / −27 / −44 %.
+
+| per seed | p95 m, calm / 4 / 8 m/s | v9 p95 m | worst toward wall m | offset up, module / truth m | roll-rate setpoint peak, std |
+|---|---|---|---|---|---|
+| seed 1 | 0.449 / 0.444 / 0.472 | 0.534 / 0.517 / 0.591 | 0.072 / 0.053 / 0.090 | +0.04 / +0.19, +0.05 / +0.20, +0.06 / +0.21 | 10.8, 10.8, 10.7 Hz; 0.17, 0.18, 0.25 rad/s |
+| seed 2 | 0.337 / 0.354 / 0.353 | 0.437 / 0.448 / 1.007 | 0.000 / 0.000 / 0.000 | +0.04 / −0.01, +0.04 / −0.01, +0.05 / +0.00 | 10.8, 10.8, 10.7 Hz; 0.18, 0.19, 0.23 rad/s |
+| seed 3 | 0.331 / 0.328 / 0.347 | 0.357 / 0.509 / 0.342 | 0.188 / 0.171 / 0.163 | +0.03 / +0.06, +0.04 / +0.07, +0.04 / +0.07 | 10.8, 10.8, 10.7 Hz; 0.19, 0.20, 0.27 rad/s |
+
+| | v9 | v10 |
+|---|---|---|
+| clean calm flight: p95, offset up, horizontal | 0.081 m, +0.04 m, 0.050 m | 0.036 m, +0.03 m, 0.014 m |
+| clean calm flight: along-wall drift (truth) mean, p2p | +0.021 m, 0.06 m | −0.008 m, 0.03 m |
+| clean calm flight: roll / pitch rate setpoint std, peak | 0.38 / 0.30 rad/s, 10.8 Hz | 0.19 / 0.14 rad/s, 10.8 Hz |
+| clean calm flight: thrust | 0.717 ± 0.007 | 0.723 ± 0.004 |
+| batch: offset up (module), mean (range) | +0.06 m (+0.02 to +0.09) | +0.04 m (+0.03 to +0.06) |
+| batch: offset up (module), seeds 1 / 2 / 3 | +0.07 / +0.04 / +0.05 m | +0.05 / +0.04 / +0.04 m |
+| batch: offset up (truth), mean (range) | +0.10 m (−0.03 to +0.24) | +0.09 m (−0.01 to +0.21) |
+| batch: horizontal offset, mean | 0.15 m (0.11 without 8 m/s seed 2) | 0.03 m |
+| batch: roll-rate setpoint std, mean | 0.31 rad/s | 0.21 rad/s |
+| batch: measured roll-rate std, mean | 0.11 rad/s | 0.08 rad/s |
+| batch: 1.6 Hz wobble | 0/9 flights | 0/9 flights |
+| batch: along-wall drift (truth) p2p, mean | 0.44 m | 0.33 m |
+| batch: mean truth offset from the wall, seeds 1 / 2 / 3 | −0.04 / −0.28 / −0.14 m | −0.01 / −0.12 / −0.04 m |
+
+Offsets and drift are measured as in the v8 section. The last row is the hold-window mean of
+the true position minus the hold point along the wall normal, negative away from the wall.
+
+Vision delay in Gazebo: EKF2 fuses each vision sample 154 ms behind real time in all nine
+benchmark flights and 158 ms in the clean flight (`estimator_aid_src_ev_pos` timestamp minus
+timestamp_sample, 152–164 ms), against `EKF2_EV_DELAY` 100 ms. `vehicle_visual_odometry`
+itself shows 0 ms, because PX4 stamps the sample when it arrives (no TIMESYNC). That is the
+same as the v9 flights (154 ms in every flight, clean included), so the delay is not higher.
+
+**Reading it.** v10 is the best policy in Gazebo so far, and it beats tuned PX4 in every wind:
+mean p95 0.37 / 0.38 / 0.39 m against 0.57 m (−34 / −34 / −31 %), and its worst flight
+(0.47 m) is half of tuned PX4's worst (0.91–0.93 m). Against v9 the mean p95 is lower in every
+wind (−16 / −24 / −40 %). The slow 8 m/s excursion on seed 2 is gone. That flight now holds
+0.353 m p95 (v9 1.007 m), with the module error under 0.12 m for the whole hold, 0.04 m
+horizontal offset (v9 0.46 m), along-wall p2p 0.21 m (v9 1.06 m) and no approach to the
+wall at all. The truth error that remains there is the estimate's own bias, which starts
+0.4 m off and shrinks as EKF2 corrects. v10 is also calmer: rate-setpoint std about two thirds of
+v9's in the batch and half on the clean flight, the steadiest thrust yet (± 0.004), and no
+1.6 Hz wobble in any flight. The vertical offset is +0.03 to +0.06 m against the estimate
+in every flight. On the clean plumbing flight it holds 0.036 m p95 (v9 0.081 m). The one thing
+that got worse is how close it comes to the wall in calm air and at 4 m/s: worst toward wall
+0.09 and 0.08 m mean against v9's 0.02, all from seed 3 (0.17–0.19 m; seeds 1 and 2 match v9).
+That is not overcorrection. Seed 3's error spikes are no sharper than v9's on the same seed
+(module error rate p99 0.32–0.33 m/s against 0.33–0.37; peak 1.13–1.14 against 0.94–1.11 m), and
+its setpoint std is lower. The difference is margin. v9 sat on seed 3 with a standing 0.15 m
+offset away from the wall, which soaked up the estimate's 0.2 m error toward the wall at about
++45 s. v10 sits on the hold point (mean offset −0.04 m), so it follows that estimate error
+0.17–0.19 m toward the wall, then recovers. Its closest clearance was 0.79 m, and it still comes
+less than half as close as tuned PX4 (0.08–0.09 m against 0.21–0.24 m). The module side was
+clean: every hold ran its full 60 s with no watchdog trip, fallback and yaw-guard shares 0, no
+saturated action, stale time up to 2.26 s in the dropout seeds, handback 0.016–0.02 s,
+GPS-free with vision fused, 0 wall contacts. **Verdict: v10 is better than v9 overall.** Its
+mean p95 is lower in every wind (−16 / −24 / −40 %) and its vertical offset is slightly smaller
+(+0.04 against +0.06 m). The wobble shows in 0 of 9 flights for both, and v10's setpoints
+are calmer. Worst toward wall is better at 8 m/s (0.08 against 0.14 m) but worse in calm air
+and at 4 m/s (0.09 and 0.08 against 0.02 m), because v10 holds the point rather than standing
+off the wall.
+
+## Gate 2 evidence: v10 vs tuned PX4 on 8 seeds
+
+Seeds 4–8 flown for both controllers on 2026-10-23 at `ad907ce` (same image, module headers
+from `02c7c8e`, `NAME` structure_hold_v10), pooled with seeds 1–3 (tuned `20261022-171934`,
+v10 `20261023-092547`):
+
+```bash
+python -m eval.baselines.run_baseline --label tuned_v1 --params eval/baselines/px4_tuned_v1.params --seeds 4 5 6 7 8
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v10 --params eval/baselines/px4_tuned_v1.params --seeds 4 5 6 7 8
+python -m eval.baselines.run_baseline --pool <seeds 1-3 batch.json> <seeds 4-8 batch.json> --out runs/pooled_<label>_seeds1-8.json
+python -m eval.baselines.run_baseline --compare runs/pooled_tuned_v1_seeds1-8.json runs/pooled_structure_hold_v10_seeds1-8.json
+```
+
+**Seed count: n = 8 seeds per wind, 24 flights per controller, of which 7 seeds (21 flights
+per controller) produced a hold.** Seed 7 failed before any hold for both controllers. Its
+estimate fault schedule fires two vision jumps (0.80 m at 14 s, 1.17 m at 17.7 s) while the
+vehicle is still on the ground arming. EKF2 then reports "heading estimate not stable".
+Tuned PX4 was refused arming in calm air and at 8 m/s (scored as crashes), and at 4 m/s it
+armed and flew away during PX4's own takeoff (34 m horizontal, failsafe, the 14.1 m p95
+below). v10 armed after about 140 refusals in all three winds, then PX4's stock takeoff went
+wrong the same way (truth 8–40 m off, 0.2–0.5 m up). The runner switched to Structure Hold,
+the watchdog tripped on tilt and handed back to stock PX4 within 0.2 s, and the runner timed
+out, so the flight is scored as a crash. Neither result measures the hold. The 7-seed view
+below drops seed 7 for both controllers. The protocol itself is unchanged.
+
+The 12 v10 flights of seeds 4, 5, 6 and 8 flew to the end, but the flight venv lacked
+pymavlink, so `run_gazebo` stopped before scoring. They were scored afterwards from their
+saved ulog, estimate and wind traces with the same functions (`check_ulog`, `verify`,
+`score_hold`, `row_from_summary`). The flights were not re-flown.
+
+### Pooled compare (8 seeds, as `--compare` prints it; means skip unscored flights)
+
+| scenario | p95 m | worst toward wall m | rms m | crashes | failsafes |
+|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.477 (1.099) → 0.315 (0.541), -34 % | 0.200 (0.420) → 0.086 (0.188), -57 % | 0.222 (0.449) → 0.171 (0.246), -23 % | 1/8 → 1/8 | 2/8 → 0/8 |
+| wall1m_wind_4ms | 2.187 (14.141) → 0.317 (0.554), -85 % | 0.171 (0.406) → 0.082 (0.171), -52 % | 1.154 (7.676) → 0.174 (0.255), -85 % | 0/8 → 1/8 | 3/8 → 0/8 |
+| wall1m_wind_8ms | 0.480 (1.097) → 0.331 (0.579), -31 % | 0.193 (0.386) → 0.097 (0.192), -50 % | 0.223 (0.449) → 0.183 (0.275), -18 % | 1/8 → 1/8 | 2/8 → 1/8 |
+
+Tuned PX4 → v10, mean over seeds, worst in brackets. All crashes are seed 7. The 4 m/s tuned
+mean is inflated by seed 7's takeoff flyaway.
+
+### Like for like (7 seeds, seed 7 dropped for both)
+
+| scenario | p95 m, tuned → v10 | median p95 m | worst toward wall m | min clearance m, worst | crashes | failsafes (in window) | contacts |
+|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.477 (1.099) → **0.315 (0.541), −34 %** | 0.352 → 0.331 | 0.200 (0.420) → 0.086 (0.188), −57 % | 0.536 → 0.796 | 0/7 → 0/7 | 2/7 (1) → 0/7 (0) | 0 → 0 |
+| 4 m/s | 0.479 (1.098) → **0.317 (0.554), −34 %** | 0.348 → 0.328 | 0.196 (0.406) → 0.082 (0.171), −58 % | 0.549 → 0.821 | 0/7 → 0/7 | 2/7 (1) → 0/7 (0) | 0 → 0 |
+| 8 m/s | 0.480 (1.097) → **0.331 (0.579), −31 %** | 0.344 → 0.347 | 0.193 (0.386) → 0.097 (0.192), −50 % | 0.571 → 0.794 | 0/7 → 0/7 | 2/7 (1) → 1/7 (0) | 0 → 0 |
+
+v10's one failsafe (8 m/s seed 3) is in PX4's own auto-takeoff, before the module engaged
+(see the v10 section above).
+
+### Per-seed p95 m (`--pool` spread)
+
+| tuned PX4 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean | worst |
+|---|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.911 | 0.438 | 0.352 | 0.162 | 0.213 | 1.099 | n/a | 0.168 | 0.477 | 1.099 |
+| 4 m/s | 0.919 | 0.443 | 0.348 | 0.161 | 0.213 | 1.098 | 14.141 | 0.171 | 2.187 | 14.141 |
+| 8 m/s | 0.929 | 0.435 | 0.344 | 0.161 | 0.211 | 1.097 | n/a | 0.180 | 0.480 | 1.097 |
+
+| v10 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean | worst |
+|---|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.449 | 0.337 | 0.331 | 0.129 | 0.230 | 0.541 | n/a | 0.186 | 0.315 | 0.541 |
+| 4 m/s | 0.444 | 0.354 | 0.328 | 0.126 | 0.230 | 0.554 | n/a | 0.185 | 0.317 | 0.554 |
+| 8 m/s | 0.472 | 0.353 | 0.347 | 0.123 | 0.246 | 0.579 | n/a | 0.199 | 0.331 | 0.579 |
+
+### Per-seed worst toward wall m
+
+| tuned PX4 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 |
+|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.284 | 0.015 | 0.420 | 0.085 | 0.111 | 0.384 | n/a | 0.102 |
+| 4 m/s | 0.269 | 0.013 | 0.406 | 0.081 | 0.116 | 0.384 | 0.000 | 0.099 |
+| 8 m/s | 0.246 | 0.011 | 0.386 | 0.081 | 0.128 | 0.382 | n/a | 0.114 |
+
+| v10 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 |
+|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.072 | 0.000 | 0.188 | 0.062 | 0.090 | 0.073 | n/a | 0.115 |
+| 4 m/s | 0.053 | 0.000 | 0.171 | 0.052 | 0.085 | 0.081 | n/a | 0.134 |
+| 8 m/s | 0.090 | 0.000 | 0.163 | 0.040 | 0.077 | 0.117 | n/a | 0.192 |
+
+### v10 against tuned PX4 per seed (p95 change; worst toward wall change m)
+
+| | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 8 |
+|---|---|---|---|---|---|---|---|
+| calm 0 m/s | −51 %; −0.212 | −23 %; −0.015 | −6 %; −0.232 | −20 %; −0.023 | **+8 %**; −0.021 | −51 %; −0.311 | **+11 %; +0.013** |
+| 4 m/s | −52 %; −0.216 | −20 %; −0.013 | −6 %; −0.236 | −22 %; −0.029 | **+8 %**; −0.030 | −50 %; −0.303 | **+8 %; +0.035** |
+| 8 m/s | −49 %; −0.156 | −19 %; −0.011 | **+1 %**; −0.222 | −23 %; −0.040 | **+17 %**; −0.051 | −47 %; −0.266 | **+10 %; +0.078** |
+
+Module side, v10 seeds 4, 5, 6 and 8 (12 flights): every hold ran its full 60 s (engaged
+stretch 60.6–60.7 s) with no watchdog trip and no handback in the hold. Fallback, yaw-guard
+and saturated-action shares were 0, and handback latency was 0.02 s. Stale time was at most
+1.84 s, in the dropout seeds 6 and 8. All 12 flights were GPS-free with vision fused, had 0
+wall contacts and no failsafe. Closest clearance was 0.825 m (8 m/s seed 8). The only failed
+check was the script's position_held drift tolerance on seed 6 (3 of 12), the same check
+that failed on seeds 1 and 3. The test-fault trip after the hold handed back as designed.
+
+**Reading it.** On the 7 seeds that produced a hold, v10 stays at least 30 % below tuned PX4
+in every wind. Mean p95 is −34 / −34 / −31 %, so 8 m/s clears the bar by one point. Its worst
+flight in any wind (0.58 m) is about half of tuned PX4's (1.10 m), worst toward wall halves
+(0.10 against 0.19 m at 8 m/s), and the closest clearance rises from 0.54–0.57 m to
+0.79–0.82 m. v10 has no crash, no failsafe in the hold and no contact on those seeds; tuned
+PX4 has one failsafe inside the hover window per wind (seed 3). The spread is what limits
+the claim. The mean gain comes from tuned PX4's three bad seeds (1, 6 and 3 for worst toward
+wall), where v10 cuts p95 by about half. On tuned PX4's good seeds v10 is level or slightly
+worse: seed 5 by +8 / +8 / +17 %, seed 8 by +11 / +8 / +10 % (worst toward wall up to
++0.08 m at 8 m/s), and 8 m/s seed 3 by +1 %. The median p95 is a tie at 8 m/s (0.344 against
+0.347 m) and 0.02 m better in calm air and at 4 m/s. The per-seed numbers barely move with
+wind for either controller. The estimate's fault draw per seed sets the error far more than
+the gust level does in this setup. **Verdict: at 8 m/s on 7 valid seeds (8 flown), v10's mean
+p95 is 31 % below tuned PX4's (0.331 against 0.480 m), just over the 30 % bar.** The gain is
+in robustness to bad seeds (worst flight −47 %, worst toward wall −50 %). On a typical seed
+the two are level (median −0 %). Seed 7 is a protocol problem, not a controller result:
+faults injected before takeoff break both runs, so the fault schedule should start after
+takeoff before another seed batch is flown.

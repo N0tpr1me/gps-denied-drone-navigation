@@ -89,3 +89,27 @@ def test_hold_runner_rows_read_the_flight_summary_and_expect_external_mode():
     # A failsafe Land inside the hold still counts.
     seq_fs = seq[:4] + [(50.0, "Land"), (52.0, "External 1")] + seq[4:]
     assert row_from_summary(s, ekf(seq_fs, 0.02), "External 1")["failsafe_in_hover"]
+
+
+def test_pool_merges_seed_chunks_and_prints_the_spread(tmp_path):
+    import pytest
+
+    from eval.baselines.run_baseline import pool, spread
+
+    def batch(seeds, label="v10", p95=0.3):
+        rows = [row_from_summary(summary(seed=s, p95=p95 * s), ekf(CLEAN)) for s in seeds]
+        return {"label": label, "params": "p", "commit": "abc", "seeds": list(seeds),
+                "rows": rows, "aggregate": aggregate(rows)}
+
+    pooled = pool([batch([1, 2, 3]), batch([4, 5])], tmp_path / "pooled.json")
+    assert pooled["seeds"] == [1, 2, 3, 4, 5]
+    assert pooled["aggregate"]["wall1m_wind_8ms"]["n"] == 5
+    assert abs(pooled["aggregate"]["wall1m_wind_8ms"]["p95_m_mean"] - 0.9) < 1e-9
+    assert (tmp_path / "pooled.json").exists()
+    text = spread(pooled)
+    assert "n = 5 seeds" in text and "| seed 4 |" in text and "1.500" in text
+
+    with pytest.raises(ValueError):
+        pool([batch([1]), batch([1])], tmp_path / "dup.json")
+    with pytest.raises(ValueError):
+        pool([batch([1]), batch([2], label="other")], tmp_path / "mixed.json")
