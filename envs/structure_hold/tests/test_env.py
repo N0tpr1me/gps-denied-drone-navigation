@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -374,3 +375,63 @@ def test_sensor_noise_is_off_by_default_and_touches_only_rates_attitude_and_velo
     # Slow wander: consecutive steps are nearly the same (correlation exp(-dt / tau)).
     corr = torch.corrcoef(torch.stack([w0.flatten(), e.vel_wander.flatten()]))[0, 1]
     assert corr > 0.9
+
+
+def test_reengage_moves_the_hold_point_about_the_episodes_own_and_zeroes_the_last_action():
+    # Off by default: nothing re-engages and the hold point stays put.
+    env = StructureHoldEnv(still_air(), num_envs=8, seed=5)
+    hold0 = env.hold_point.clone()
+    for _ in range(50):
+        env.step(hover_action(env))
+    assert env.reengage_count == 0 and not env.reengaged.any()
+    assert torch.equal(env.hold_point, hold0)
+
+    # On (a rate high enough to fire within the test): only after reengage_min_s, about the
+    # episode's own hold point, never nearer the wall than the nearest hold distance.
+    cfg = dataclasses.replace(still_air(reengage_rate_hz=20.0, reengage_min_s=0.2,
+                                        episode_length_s=5.0), start_offset_std_m=0.3)
+    env = StructureHoldEnv(cfg, num_envs=64, seed=5)
+    base = env.base_hold.clone()
+    assert torch.equal(base, env.hold_point)
+    seen = torch.zeros(64, dtype=torch.bool)
+    for i in range(100):
+        obs, *_ = env.step(hover_action(env))
+        if i < 19:  # episode_time < 0.2 s
+            assert not env.reengaged.any()
+        r = env.reengaged
+        seen |= r
+        if r.any():
+            assert torch.all(obs[r][:, OBS["last_action"]] == 0.0)
+            assert torch.allclose(obs[r][:, OBS["pos_err"]],
+                                  env.estimate_pos[r] - env.hold_point[r], atol=1e-6)
+    assert env.reengage_count > 64 and seen.all()
+    moved = env.hold_point - base
+    assert (moved.abs().sum(-1) > 0).any() and moved.abs().max() < 2.0
+    assert (env.hold_point[:, 0] <= -cfg.hold_distance[0] + 1e-6).all()
+    assert torch.equal(env.base_hold, base)  # the episode's own hold point never moves
+
+    # Re-engages have their own generator: the episodes' other draws are as with them off.
+    off = StructureHoldEnv(dataclasses.replace(cfg, reengage_rate_hz=0.0), 64, seed=5)
+    assert torch.equal(off.base_hold, base)
+    with pytest.raises(ValueError, match="reengage"):
+        StructureHoldConfig(reengage_rate_hz=-1.0)
+
+
+def test_height_term_charges_height_error_alone():
+    from envs.sims import QuadState
+
+    def reward_at(offset: tuple[float, float, float], height: float) -> float:
+        cfg = still_air(reward=RewardWeights(height=height, height_scale_m=0.1))
+        env = StructureHoldEnv(cfg, num_envs=1, seed=0)
+        st = env.sim.state
+        pos = env.hold_point + torch.tensor([offset])
+        env.sim.reset(torch.arange(1), QuadState(pos=pos, quat=st.quat.clone(),
+                                                 vel=st.vel.clone(), ang_vel=st.ang_vel.clone()))
+        _, reward, _, _ = env.step(hover_action(env))
+        return float(reward[0])
+
+    low, side = (0.0, 0.0, -0.05), (0.0, 0.05, 0.0)
+    assert reward_at(low, 0.0) == pytest.approx(reward_at(side, 0.0), abs=1e-3)  # off: the norm
+    extra = reward_at(low, 0.0) - reward_at(low, 0.5)
+    assert extra == pytest.approx(0.5 * (1 - math.exp(-0.5)), rel=0.05)
+    assert reward_at(side, 0.0) - reward_at(side, 0.5) == pytest.approx(0.0, abs=1e-3)

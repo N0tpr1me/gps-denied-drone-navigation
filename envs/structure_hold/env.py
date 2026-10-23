@@ -164,6 +164,13 @@ class StructureHoldEnv:
         self.term_reason = torch.zeros(n, dtype=torch.long, device=dev)
         self.counts = {"contact": 0, "ground": 0, "tilt": 0, "box": 0, "nonfinite": 0,
                        "timeout": 0}
+        # Mid-episode re-engages (cfg.reengage_rate_hz): the episode's own hold point, which
+        # they scatter about; which envs re-engaged on the last step; and their own generator,
+        # so turning them on leaves every episode's other draws as they were.
+        self.base_hold = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.reengaged = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.reengage_count = 0
+        self.reengage_rng = np.random.default_rng([int(seed), 0xE6A])
         self.reset()
 
     # ------------------------------------------------------------ state helpers
@@ -241,6 +248,7 @@ class StructureHoldEnv:
         )
         self.sim.reset(env_ids, state)
         self.hold_point[env_ids] = t(hold)
+        self.base_hold[env_ids] = t(hold)
         self.rate_pid.reset(env_ids)
         self.estimator.reset(self.sim.state.pos, self.sim.state.vel, env_ids)
         if self.fusion is not None:
@@ -430,6 +438,7 @@ class StructureHoldEnv:
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
             - w.toward_wall * toward
+            - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
             - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
@@ -455,8 +464,38 @@ class StructureHoldEnv:
             }
             extras["episode"] = ep
             self.reset_envs(done_ids)
+        self.reengaged = self._reengage(~self.done_buf)
         self._observe()
         return self.obs_buf, self.reward_buf, self.done_buf, extras
+
+    def _reengage(self, eligible: torch.Tensor) -> torch.Tensor:
+        """Mid-episode re-engages (``cfg.reengage_rate_hz``), for envs in ``eligible`` at
+        least ``reengage_min_s`` into their episode. The hold point moves to the episode's own
+        plus a fresh ``start_offset_std_m`` scatter, never nearer the wall than the nearest
+        hold distance nor within 0.5 m of the ground, and the previous action is zeroed, as
+        the module's engage does. Returns the envs that re-engaged; the caller refills their
+        policy history (``training/ppo_env.py``), so the policy meets the flat history and
+        fresh offset it meets at a start. Gate 1 opens every episode with that transient
+        (0.2 m of scatter), and a 60 s training episode has only one."""
+        cfg = self.cfg
+        mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        if cfg.reengage_rate_hz <= 0:
+            return mask
+        draw = self.reengage_rng.random(self.num_envs) < cfg.reengage_rate_hz * cfg.dt
+        mask = (torch.as_tensor(draw, device=self.device) & eligible
+                & (self.episode_time >= cfg.reengage_min_s))
+        ids = mask.nonzero(as_tuple=False).squeeze(-1)
+        if ids.numel() == 0:
+            return mask
+        offset = cfg.start_offset_std_m * self.reengage_rng.standard_normal((ids.numel(), 3))
+        hold = self.base_hold[ids] + torch.as_tensor(offset, dtype=self.dtype,
+                                                     device=self.device)
+        hold[:, 0] = hold[:, 0].clamp(max=-cfg.hold_distance[0])
+        hold[:, 2] = hold[:, 2].clamp(min=cfg.min_height_m + 0.5)
+        self.hold_point[ids] = hold
+        self.last_action[ids] = 0.0
+        self.reengage_count += int(ids.numel())
+        return mask
 
     def _observe(self) -> None:
         cfg, state = self.cfg, self.sim.state

@@ -152,7 +152,8 @@ class StructureHoldVecEnv:
 
     def step(self, actions: torch.Tensor):
         obs, reward, dones, extras = self.env.step(actions)
-        self.history.push(obs, dones)
+        # A re-engage (env cfg.reengage_rate_hz) refills the window as the module's engage does.
+        self.history.push(obs, dones | self.env.reengaged)
         self.env_steps += 1
         iteration = self.env_steps // self.steps_per_iteration
         if iteration != self.iteration:
