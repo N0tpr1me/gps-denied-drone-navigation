@@ -846,3 +846,14 @@ a difference that size from noise, but they do not show v12 ahead. v12 is better
 on the ring and on the vertical offset, and worse on worst toward the wall (seed 1: 0.27–
 0.31 m against 0.03–0.07 m). Both beat tuned PX4 by a third on p95 with no crash. The
 module stays on v10; the local SITL image was left on v10 to match `main`.
+
+**Decision (PR #52): v10 stays the released policy.** The release rule for a candidate is
+"better than v10 on the hold p95, no ring, no contact"; v12 misses the first part, so the
+module headers went back to v10 before merge and only the results, the scoring fix and
+`vio_at_hover` merged. What v12 did show: the 1.7 Hz ring rule works (ring 0.030 vs 0.035
+rad/s, roll-rate std 0.050 vs 0.077), the vertical offset is as predicted (−0.024 m on the
+estimate against v10's +0.040 m), and the matched timeline holds up (27 flights, all
+anchored, no crash, no post-hold failure). The thing to fix next is worst toward the wall:
+v12 lets the hold drift 0.27 to 0.31 m toward the wall on seed 1 where v10 drifts 0.03 to
+0.07 m, which is also where its p95 loses. First matched tuned-PX4 numbers:
+p95 0.52 m mean, 0.91 m worst (seed 1), against v10 0.33 / 0.40 and v12 0.35 / 0.41.
