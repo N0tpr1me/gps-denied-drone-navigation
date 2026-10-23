@@ -283,6 +283,11 @@ class StructureHoldConfig:
     hold_height: tuple[float, float] = (2.0, 2.0)  # m above the origin
     start_offset_std_m: float = 0.2  # start position scatter around the hold point
     start_yaw_std_rad: float = 0.2  # start heading scatter about facing the wall (+x)
+    # Mid-episode re-engages, for training: at this rate per second the hold point moves to
+    # the episode's own plus a fresh start_offset_std_m scatter, as if the module were
+    # engaged again there (env.StructureHoldEnv._reengage). 0, the default, is off.
+    reengage_rate_hz: float = 0.0
+    reengage_min_s: float = 2.0  # none in an episode's first seconds (its start is one)
     # Action 1.0 = this body rate. 2 rad/s: on PX4 dynamics a policy trained with 6 rad/s
     # banged its roll and pitch commands between the limits and tipped over through the rate
     # loop's lag; the module flew it once it clamped the commands to 1 to 2 rad/s.
@@ -320,6 +325,8 @@ class StructureHoldConfig:
             raise ValueError("hold_distance must start outside the contact radius")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
+        if self.reengage_rate_hz < 0 or self.reengage_min_s < 0:
+            raise ValueError("reengage_rate_hz and reengage_min_s must be >= 0")
         lo, hi = self.rate_lag_s
         if lo < 0 or lo > hi:
             raise ValueError(f"rate_lag_s: need 0 <= min <= max, got {self.rate_lag_s}")

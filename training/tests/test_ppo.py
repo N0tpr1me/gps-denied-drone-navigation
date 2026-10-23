@@ -71,6 +71,23 @@ def test_vecenv_groups_shapes_and_privileged_truth():
     assert torch.allclose(env.episode_time, torch.tensor([5, 6, 7, 8]) * env.dt)
 
 
+def test_vecenv_refills_the_history_on_a_reengage():
+    cfg = StructureHoldConfig(episode_length_s=5.0, reengage_rate_hz=20.0, reengage_min_s=0.1)
+    env = StructureHoldEnv(cfg, num_envs=16, seed=0)
+    vec = StructureHoldVecEnv(env, history=3)
+    hits = 0
+    for _ in range(60):
+        obs, _, dones, _ = vec.step(torch.zeros(16, 4))
+        flat = env.reengaged & ~dones
+        if flat.any():
+            hits += int(flat.sum())
+            p = obs["policy"][flat]
+            # Every slot holds the observation from just after the re-engage.
+            for k in range(3):
+                assert torch.equal(p[:, k * NUM_OBS:(k + 1) * NUM_OBS], p[:, -NUM_OBS:])
+    assert hits > 0
+
+
 def test_dropout_curriculum_grows_the_cap_with_the_iteration():
     c = DropoutCurriculum(start_s=0.5, end_s=3.0, iterations=10)
     assert c.value(0) == 0.5 and c.value(5) == 1.75 and c.value(10) == 3.0 and c.value(99) == 3.0
