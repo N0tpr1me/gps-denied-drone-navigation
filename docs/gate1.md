@@ -237,3 +237,10 @@ white noise on the velocity input is +0.08 to +0.10 m (v6 +0.13 to +0.15), on th
 input +0.06 m (v6 +0.11), under 0.1 Hz estimate jumps +0.17 m (v6 +0.24). The cost: in calm
 air on a clean estimate it drifts along the wall about +/-0.1 m on a 10 s cycle, where v6
 holds within 0.02 m. v8 replaces v6 for the next Gazebo re-fly; v7 is not released.
+
+In Gazebo (PR #37) v8 went the other way: best yet on the clean estimate (p95 0.11 m, no
+vertical offset), but on the corrupted-estimate benchmark it sat 0.42 m above its hold point
+(v6 0.23 m), wobbled at 1.6 Hz in all 9 flights (v6 6 of 9) and scored p95 0.67 / 0.68 /
+0.79 m against v6's 0.62 / 0.64 / 0.68. The module stays on v6. This is the second time a
+mock gain did not carry over, so a mock score is no longer enough to release: the mock first
+has to reproduce the rough-estimate failure (`docs/decisions.md`, 2026-10-23).
