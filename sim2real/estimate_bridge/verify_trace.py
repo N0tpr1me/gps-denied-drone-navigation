@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from sim2real.estimate_bridge.bridge import EstimateBridge, read_trace
+from sim2real.estimate_bridge.bridge import read_trace
 from sim2real.estimate_bridge.config import EstimateProfile, load_profile
 
 TOLERANCE_M = 1e-9
@@ -33,7 +33,6 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
     if n == 0:
         return {**report, "ok": False, "error": "empty trace"}
 
-    bridge = EstimateBridge(profile.estimate, profile.dt, profile.seed, profile.divisor)
     truth = np.stack([tr["tx"], tr["ty"], tr["tz"]], 1)
     est = np.stack([tr["ex"], tr["ey"], tr["ez"]], 1)
     est_v = np.stack([tr["evx"], tr["evy"], tr["evz"]], 1)
@@ -41,13 +40,12 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
     stale_mismatch = 0
     # The trace holds the corruptor's steps only; with a divisor > 1 the skipped truth
     # samples are not logged, so the replay feeds each logged row as one step.
-    replay = EstimateBridge(profile.estimate, profile.dt * profile.divisor, profile.seed, 1)
+    replay = profile.bridge(dt=profile.dt * profile.divisor, divisor=1)
     for i in range(n):
-        s = replay.update(tr["t"][i], truth[i])
+        s = replay.update(tr["t"][i], truth[i], engaged=bool(tr["engaged"][i]))
         max_pos = max(max_pos, float(np.abs(s.est_pos - est[i]).max()))
         max_vel = max(max_vel, float(np.abs(s.est_vel - est_v[i]).max()))
         stale_mismatch += int(s.stale != bool(tr["stale"][i]))
-    del bridge
 
     published_while_stale = int(np.sum((tr["published"] > 0) & (tr["stale"] > 0)))
     unpublished_fresh = int(np.sum((tr["published"] == 0) & (tr["stale"] == 0)))
@@ -67,6 +65,10 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
         "spacing_max_s": float(spacing.max()) if spacing.size else None,
         "spacing_irregular": int(np.sum(np.abs(spacing - profile.dt * profile.divisor)
                                         > 0.5 * profile.dt)) if spacing.size else 0,
+        "fault_anchor": profile.fault_anchor,
+        "anchor_t": replay.anchor_t,
+        "anchor_step": replay.anchor_step,
+        "engaged_samples": int(tr["engaged"].sum()),
     })
     report["ok"] = bool(
         max_pos <= tolerance and max_vel <= tolerance and stale_mismatch == 0

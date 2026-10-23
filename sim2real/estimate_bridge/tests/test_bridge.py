@@ -141,7 +141,7 @@ def test_verify_catches_a_wrong_seed_and_a_published_dropout(tmp_path):
     assert not rep["ok"] and rep["published_while_stale"] == 1
 
 
-@pytest.mark.parametrize("name", ["clean", "vio_default", "vio_after_takeoff"])
+@pytest.mark.parametrize("name", ["clean", "vio_default", "vio_after_takeoff", "vio_at_engage"])
 def test_shipped_profiles_load(name):
     p = load_profile(name)
     assert p.name == name and (PROFILE_DIR / f"{name}.yaml").exists()
@@ -184,3 +184,120 @@ def test_params_reader_rejects_bad_rows(tmp_path):
         read_params(f)
     f.write_text("# c\n1\t1\tA\t2\t6\n1\t1\tB\t0.5\t9\n")
     assert read_params(f) == {"A": 2, "B": 0.5}
+
+
+# ---------------------------------------------------------------------------------------
+# Fault schedule keyed to the engage (bridge.py, "Fault anchor")
+
+
+def hovering_path(n, dt=DT):
+    t = dt * np.arange(n)
+    pos = np.stack([0.3 * np.sin(0.2 * t), 0.2 * np.cos(0.3 * t), 2.0 + 0.05 * np.sin(t)], 1)
+    return t, pos
+
+
+def run_bridge(bridge, t, pos, engage_at=None):
+    out = []
+    for i, (ti, p) in enumerate(zip(t, pos, strict=True)):
+        engaged = engage_at is not None and i >= engage_at
+        out.append(bridge.update(ti, p, engaged=engaged))
+    return out
+
+
+def test_engage_anchor_repeats_vio_default_faults_from_the_anchor_for_any_engage_time():
+    # Busy faults so a 60 s run holds several jumps and dropouts.
+    cfg = dataclasses.replace(EstimateCorruptionConfig(), jump_rate_hz=0.2, dropout_rate_hz=0.2,
+                              dropout_max_s=1.0)
+    n, anchor_s = 3000, 25.0
+    t, pos = hovering_path(n)
+    ref = run_bridge(EstimateBridge(cfg, DT, seed=5), t, pos)  # vio_default's schedule
+    ref_faults = [(s.jumped, s.dropout_started) for s in ref]
+    anchor_step = round(anchor_s / DT)
+    early = ref_faults[:anchor_step]
+    assert any(f[0] for f in early) and any(f[1] for f in early)
+    for engage_at in (900, 1250, 1400):
+        b = EstimateBridge(cfg, DT, seed=5, fault_anchor="engage", fault_anchor_s=anchor_s)
+        out = run_bridge(b, t, pos, engage_at=engage_at)
+        assert b.anchor_step == engage_at and b.anchor_t == pytest.approx(t[engage_at])
+        # No jump or dropout before the engage, whatever vio_default did then.
+        assert not any(s.jumped or s.dropout_started or s.stale for s in out[:engage_at])
+        # From the engage on, the faults are vio_default's from the anchor on, step for step.
+        m = min(n - engage_at, n - anchor_step)  # the stretch both runs cover
+        got = [(s.jumped, s.dropout_started) for s in out[engage_at:engage_at + m]]
+        want = ref_faults[anchor_step:anchor_step + m]
+        assert got == want
+        assert sum(f[0] for f in got) >= 2 and sum(f[1] for f in got) >= 2
+        # And the dropout flags (what is withheld from PX4) follow suit.
+        ref_stale = [s.stale for s in ref[anchor_step:anchor_step + m]]
+        assert [s.stale for s in out[engage_at:engage_at + m]] == ref_stale
+        assert all(s.engaged == (i >= engage_at) for i, s in enumerate(out))
+
+
+def test_engage_anchor_keeps_the_stream_continuous_at_the_switch():
+    cfg = EstimateCorruptionConfig()  # default rates: no fault lands in a few seconds
+    n, engage_at = 500, 300
+    t, pos = hovering_path(n)
+    b = EstimateBridge(cfg, DT, seed=11, fault_anchor="engage", fault_anchor_s=25.0)
+    out = run_bridge(b, t, pos, engage_at=engage_at)
+    err = np.stack([s.est_pos - s.truth_pos for s in out])
+    # The estimate error across the switch moves by no more than the white noise would
+    # anyway (bias and delayed history carried over), nowhere near a jump.
+    before, after = err[engage_at - 1], err[engage_at]
+    assert np.abs(after - before).max() < 6 * cfg.pos_noise_std_m
+    plain = EstimateBridge(cfg, DT, seed=11)
+    plain.update(t[0], pos[0])
+    assert int(b.corruptor.delay_steps[0]) == int(plain.corruptor.delay_steps[0]) > 0
+
+
+def test_engage_anchor_without_engage_never_faults_and_verifies(tmp_path):
+    cfg = dataclasses.replace(EstimateCorruptionConfig(), jump_rate_hz=0.5, dropout_rate_hz=0.5,
+                              dropout_max_s=0.5)
+    prof = EstimateProfile.from_dict({"name": "t", "seed": 2, "fault_anchor": "engage",
+                                      "fault_anchor_s": 3.0, "estimate": cfg.__dict__})
+    t, pos = hovering_path(600)
+    path = tmp_path / "trace.csv"
+    w = TraceWriter(path)
+    b = prof.bridge()
+    for s in run_bridge(b, t, pos, engage_at=200):
+        w.write(s)
+    w.close()
+    assert not b.anchored or b.anchor_step == 200
+    tr = read_trace(path)
+    assert "engaged" in tr and tr["engaged"][:200].sum() == 0 and tr["engaged"][200:].all()
+    rep = verify(prof, path)
+    assert rep["ok"] and rep["anchor_step"] == 200 and rep["jumps"] > 0
+    # The replay must honour the engaged column: without it the faults land elsewhere.
+    plain = dataclasses.replace(prof, fault_anchor="start")
+    assert not verify(plain, path)["ok"]
+    # A trace without the column (older flights) still reads, with engaged = 0.
+    lines = path.read_text().splitlines()
+    cols = lines[0].split(",")
+    i = cols.index("engaged")
+    stripped = "\n".join(",".join(x for j, x in enumerate(line.split(",")) if j != i)
+                         for line in lines) + "\n"
+    (tmp_path / "old.csv").write_text(stripped)
+    old = read_trace(tmp_path / "old.csv")
+    assert old["engaged"].sum() == 0 and old["t"].size == 600
+
+
+def test_vio_at_engage_profile_is_vio_default_keyed_to_the_engage():
+    p = load_profile("vio_at_engage")
+    assert p.estimate == EstimateCorruptionConfig() and p.fault_anchor == "engage"
+    assert p.fault_anchor_s == 25.0 and p.seed == load_profile("vio_default").seed
+    assert load_profile("vio_default").fault_anchor == "start"
+    with pytest.raises(ValueError):
+        EstimateProfile.from_dict({"name": "x", "fault_anchor": "takeoff"})
+    with pytest.raises(ValueError):
+        EstimateBridge(EstimateCorruptionConfig(), DT, 1, fault_anchor="engage", fault_anchor_s=-1)
+
+
+def test_heartbeat_decoding_matches_sitl_test():
+    from sim2real.estimate_bridge.heartbeat import structure_hold_engaged
+
+    def custom(main, sub):
+        return (main << 16) | (sub << 24)
+
+    assert structure_hold_engaged(custom(4, 11))  # auto / external 1
+    assert structure_hold_engaged(custom(4, 12))  # a later external mode
+    assert not structure_hold_engaged(custom(4, 3))  # Hold
+    assert not structure_hold_engaged(custom(3, 0))  # Position

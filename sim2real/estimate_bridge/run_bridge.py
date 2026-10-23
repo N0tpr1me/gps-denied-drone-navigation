@@ -25,6 +25,12 @@ delay therefore reaches the EKF as real latency, compensated only by the constan
 
 The trace CSV (``bridge.TRACE_COLUMNS``) records every corruptor step; ``verify_trace``
 replays it on the host.
+
+Engage: the bridge reads PX4's HEARTBEAT on its own link (asked for at 20 Hz with
+SET_MESSAGE_INTERVAL, so an engage is seen within about 50 ms) and marks each sample with
+whether Structure Hold (external mode 1 under the auto main mode, as sitl_test.py decodes
+it) is flying. A profile with ``fault_anchor: engage`` keys its fault schedule to the first
+such sample (``bridge.py``).
 """
 
 from __future__ import annotations
@@ -42,19 +48,21 @@ from gz.transport13 import Node
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common as mavlink
 
-from sim2real.estimate_bridge.bridge import EstimateBridge, TraceWriter, odometry_ned
+from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
+from sim2real.estimate_bridge.heartbeat import structure_hold_engaged
 
 NAN = float("nan")
 NAN21 = [NAN] * 21
 VIO_COMPONENT_ID = 197  # MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY
+HEARTBEAT_INTERVAL_US = 50_000
 
 
 class Bridge:
     def __init__(self, args: argparse.Namespace):
         self.profile = load_profile(args.profile)
-        self.bridge = EstimateBridge(self.profile.estimate, self.profile.dt,
-                                     self.profile.seed, self.profile.divisor)
+        self.bridge = self.profile.bridge()
+        self.engaged = False
         self.model = args.model
         self.trace = TraceWriter(args.trace)
         self.lock = threading.Lock()
@@ -63,10 +71,15 @@ class Bridge:
         self.mav = mavutil.mavlink_connection(args.mavlink, source_system=args.sysid,
                                               source_component=VIO_COMPONENT_ID)
         print(f"bridge: profile {self.profile.name} seed {self.profile.seed} "
-              f"{self.bridge.output_rate_hz:.0f} Hz; waiting for PX4 on {args.mavlink}",
-              flush=True)
+              f"{self.bridge.output_rate_hz:.0f} Hz, faults keyed to the "
+              f"{self.profile.fault_anchor}; waiting for PX4 on {args.mavlink}", flush=True)
         self.mav.wait_heartbeat(timeout=args.heartbeat_timeout_s)
         print(f"bridge: PX4 heartbeat from system {self.mav.target_system}", flush=True)
+        # Heartbeats at 20 Hz on this link, so the engage is seen within about 50 ms.
+        self.mav.mav.command_long_send(
+            self.mav.target_system, self.mav.target_component,
+            mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavlink.MAVLINK_MSG_ID_HEARTBEAT, HEARTBEAT_INTERVAL_US, 0, 0, 0, 0, 0)
         if not args.no_origin:
             self.mav.mav.set_gps_global_origin_send(
                 self.mav.target_system, int(round(args.origin_lat * 1e7)),
@@ -88,14 +101,19 @@ class Bridge:
         t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         with self.lock:
             self.received += 1
+            was_anchored = self.bridge.anchored
             try:
                 sample = self.bridge.update(
-                    t, (pose.position.x, pose.position.y, pose.position.z))
+                    t, (pose.position.x, pose.position.y, pose.position.z), self.engaged)
             except ValueError as exc:  # a repeated stamp: skip, do not kill the stream
                 print(f"bridge: skipped sample: {exc}", flush=True)
                 return
             if sample is None:
                 return
+            if self.bridge.anchored and not was_anchored:
+                print(f"bridge: Structure Hold engaged at t={sample.t:.2f} s, fault clock "
+                      f"anchored at {self.profile.fault_anchor_s:.1f} s (step {sample.step})",
+                      flush=True)
             self.trace.write(sample)
             if sample.publish:
                 self.send(sample)
@@ -107,6 +125,19 @@ class Bridge:
                 self.last_log = now
                 print(f"bridge: t={sample.t:.1f} s received {self.received} sent {self.sent} "
                       f"withheld {self.dropped}", flush=True)
+
+    def on_mavlink(self, msg) -> None:
+        """PX4's traffic on the bridge link; only the autopilot heartbeat matters."""
+        if msg.get_type() != "HEARTBEAT":
+            return
+        if msg.get_srcComponent() != mavlink.MAV_COMP_ID_AUTOPILOT1:
+            return
+        engaged = structure_hold_engaged(msg.custom_mode)
+        with self.lock:
+            if engaged != self.engaged:
+                print(f"bridge: Structure Hold {'engaged' if engaged else 'not flying'}",
+                      flush=True)
+            self.engaged = engaged
 
     def send(self, sample) -> None:
         p, v = odometry_ned(sample)
@@ -147,8 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     while not stop.is_set():
-        # Drain PX4's traffic so pymavlink's buffers never fill; nothing is answered.
-        bridge.mav.recv_match(blocking=True, timeout=0.5)
+        # Drain PX4's traffic so pymavlink's buffers never fill; only the heartbeat is read.
+        msg = bridge.mav.recv_match(blocking=True, timeout=0.5)
+        if msg is not None:
+            bridge.on_mavlink(msg)
     bridge.close()
     return 0
 

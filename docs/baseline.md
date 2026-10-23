@@ -642,3 +642,24 @@ torch, which the Mac lacks). The module README points at v10 again. v11 stays in
 `training/policies/` for the training thread. It should come back only with a fix for the
 saturated, sign-flipping response to a large body-rate disturbance, and a seed 3 re-engage that
 holds.
+
+**Correction (2026-10-23 13:50, from the training thread's trace of all four ulogs).** The
+seed 3 loss of control is a prop strike on the wall, not a simulator impulse, and it is set
+up by where the re-engage captured its hold point. In each flight the 1.4 m vision jump
+toward the wall lands at 91.8 to 92.5 s and EKF2 resets onto it (+1.12 to +1.15 m xy reset)
+at 92.8 to 93.6 s, 0.1 to 0.4 s before the scripted disengage. Position mode shifts its
+setpoint by the reset, so it holds the jumped estimate, and as the jump decays it walks the
+drone from 1.16 m to 0.55 m off the wall. The re-engage then captures E +0.03 to +0.10, a
+point on the wall face, the drone keeps closing, and the spin starts at 0.36 to 0.40 m
+centre distance, which is the x500's prop reach (in the calm flight after the test-fault
+handback, with stock PX4 in charge). v10's seed 3 flight had luckier timing: jump at 91.27 s,
+reset at 92.33 s, 1.3 s before the disengage, re-engage at E −0.42, never closer than
+0.54 m. Any controller that holds that captured point would hit the wall; the policy only
+sees estimate minus hold point, so a retrain cannot fix it. What is genuinely v11's is the
+1.7 to 1.8 Hz ring and the standing yaw error. The post-strike response has no v10
+comparison because v10 never struck the wall; in the mock a 5 rad/s yaw kick crashes both.
+Two protocol fixes followed: the module refuses to engage for `SH_RST_HOLD` (10 s) after an
+EKF xy reset (PR #50; `sim2real/px4/README.md`), and the bridge profile `vio_at_engage`
+keys the fault schedule to the engage, so every policy meets the same faults at the same
+time after engage and none before takeoff (`sim2real/estimate_bridge/README.md`). The
+verdict stands: v10 stays, v11 comes back with the ring and the yaw error fixed.

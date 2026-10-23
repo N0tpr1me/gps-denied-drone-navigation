@@ -120,10 +120,49 @@ int main()
 		CHECK(wd.mayEnter(healthy()));
 	}
 
+	// Entry hold-off after an estimator reset (xy_reset_counter changed): refused for
+	// reset_holdoff_us, not latched, and check() (the in-flight rules) ignores it.
+	{
+		WatchdogLimits lim = limits;
+		lim.reset_holdoff_us = 10'000'000;
+		Watchdog w(lim);
+		const uint64_t t0 = 100'000'000;
+		auto at = [&](uint64_t t) { auto in = healthy(); in.now_us = t; in.estimate_timestamp_us = t - 10'000; return in; };
+		// The first counter value is only remembered, never a reset.
+		w.noteReset(3, t0);
+		CHECK(!w.inResetHoldoff(t0));
+		CHECK(w.resetAge(t0) < 0.f);
+		CHECK(w.mayEnter(at(t0)));
+		// Same counter again: nothing.
+		w.noteReset(3, t0 + 1'000'000);
+		CHECK(w.mayEnter(at(t0 + 1'000'000)));
+		// Counter changes: refused for 10 s, allowed from 10 s on; check() unaffected.
+		w.noteReset(4, t0 + 2'000'000);
+		CHECK(w.inResetHoldoff(t0 + 2'000'000));
+		CHECK(!w.mayEnter(at(t0 + 2'000'000)));
+		CHECK(w.check(at(t0 + 2'000'000)) == Trip::None);
+		CHECK(std::fabs(w.resetAge(t0 + 5'000'000) - 3.f) < 1e-6f);
+		CHECK(!w.mayEnter(at(t0 + 11'999'999)));
+		CHECK(w.mayEnter(at(t0 + 12'000'000)));
+		CHECK(w.latched() == Trip::None);
+		// A second reset restarts the hold-off; a wrapped counter (255 -> 0) counts too.
+		w.noteReset(255, t0 + 20'000'000);
+		w.noteReset(0, t0 + 21'000'000);
+		CHECK(!w.mayEnter(at(t0 + 30'000'000)));
+		CHECK(w.mayEnter(at(t0 + 31'000'000)));
+		// Hold-off 0 disables the rule.
+		lim.reset_holdoff_us = 0;
+		w.setLimits(lim);
+		w.noteReset(1, t0 + 40'000'000);
+		CHECK(!w.inResetHoldoff(t0 + 40'000'000));
+		CHECK(w.mayEnter(at(t0 + 40'000'000)));
+	}
+
 	// Names are stable (they end up in logs and the status topic).
 	CHECK(std::string_view(Watchdog::name(Trip::None)) == "none");
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateStale)) == "estimate_stale");
 	CHECK(std::string_view(Watchdog::name(Trip::PositionError)) == "position_error");
+	CHECK(std::string_view(Watchdog::name(Trip::EstimateReset)) == "estimate_reset");
 
 	if (failures == 0) {
 		std::printf("watchdog tests: all passed\n");

@@ -56,14 +56,26 @@ What it does today:
   hold error, in that priority order. A trip latches until disarm. On a trip the module hands back:
   Position mode (Altitude mode if the horizontal estimate is gone), then Hold, then Land
   if the previous request was refused, holding level at hover thrust in between.
+- **Engage hold-off after an EKF reset** (`SH_RST_HOLD`, 10 s; 0 disables): for that long
+  after EKF2 reset its horizontal position (`vehicle_local_position.xy_reset_counter`
+  changed) the mode's arming check reports it unavailable, so commander keeps the current
+  mode, and if the switch slipped through anyway (commander polls every 300 ms) the module
+  hands straight back with `trip_reason` `estimate_reset` (6), nothing latched. A hold point
+  captured while the estimate settles after a reset is not where the vehicle is: v11
+  re-engaged 0.1 to 0.4 s after a 1.1 m vision reset, captured a point on the wall face and
+  struck the wall (`docs/baseline.md`, v11 section). A reset during a hold does not trip the
+  watchdog; the policy is trained on them. `structure_hold_status.reset_age_s` says how long
+  ago the last reset was (−1 if none). `sitl_test.py` retries its scripted re-engage once a
+  second for up to 14 s, and records the refusals and the wait in `summary.json`.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
   on the PX4 shell prints the policy's defaults and what is actually flying.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
-  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the test hook
-  `SH_TEST_FAULT`, placeholder gains `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
+  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
+  after an EKF reset `SH_RST_HOLD`, the test hook `SH_TEST_FAULT`, placeholder gains
+  `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: the standoff logic (the hold point is still the engage point), passes along
 the surface, the fault injector that corrupts the estimate the policy sees.
@@ -249,6 +261,13 @@ python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/
 ```
 
 Result on 8 seeds (Gate 2): `docs/baseline.md`, "Gate 2 evidence: v10 vs tuned PX4 on 8 seeds".
+
+From the engage hold-off on, new comparisons should pass `-- --profile vio_at_engage` to
+`run_baseline` for both controllers: the estimate's jumps and dropouts are then keyed to
+the moment the mode engages (fault clock 25 s at engage, where the seed 1 to 8 holds
+opened), so every policy meets the same faults at the same time after engage and none
+during takeoff (`sim2real/estimate_bridge/README.md`). The seed 1 to 8 numbers above were
+flown on `vio_default` (clock from the bridge's first sample) and compare only with each other.
 
 ## Frames
 
