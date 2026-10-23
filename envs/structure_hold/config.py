@@ -35,6 +35,12 @@ class RewardWeights:
     pos: float = 1.5  # times 1 - exp(-error / pos_scale_m), so at most ``pos``
     pos_scale_m: float = 1.0  # error at which the position penalty reaches 63 % of ``pos``
     toward_wall: float = 0.5  # extra, times the error toward the wall clipped at 1 m
+    # Extra on the height error alone, times 1 - exp(-|error| / height_scale_m). Off by
+    # default. Inside the 3D norm a few centimetres of height error cost almost nothing next
+    # to a larger horizontal error, so the policy's thrust at zero error drifted between runs
+    # and v13 settled 0.05 m below the hold point on a clean estimate (docs/gazebo_check.md).
+    height: float = 0.0
+    height_scale_m: float = 0.1
     vel: float = 0.05  # times true speed clipped at 5 m/s
     # Extra speed penalty while the estimate is stale (a dropout): the policy cannot know
     # where it is, so moving fast on a frozen estimate is how it leaves the 3 m box. Off by

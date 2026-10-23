@@ -438,6 +438,7 @@ class StructureHoldEnv:
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
             - w.toward_wall * toward
+            - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
             - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)

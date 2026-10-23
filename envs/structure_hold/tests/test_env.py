@@ -415,3 +415,23 @@ def test_reengage_moves_the_hold_point_about_the_episodes_own_and_zeroes_the_las
     assert torch.equal(off.base_hold, base)
     with pytest.raises(ValueError, match="reengage"):
         StructureHoldConfig(reengage_rate_hz=-1.0)
+
+
+def test_height_term_charges_height_error_alone():
+    from envs.sims import QuadState
+
+    def reward_at(offset: tuple[float, float, float], height: float) -> float:
+        cfg = still_air(reward=RewardWeights(height=height, height_scale_m=0.1))
+        env = StructureHoldEnv(cfg, num_envs=1, seed=0)
+        st = env.sim.state
+        pos = env.hold_point + torch.tensor([offset])
+        env.sim.reset(torch.arange(1), QuadState(pos=pos, quat=st.quat.clone(),
+                                                 vel=st.vel.clone(), ang_vel=st.ang_vel.clone()))
+        _, reward, _, _ = env.step(hover_action(env))
+        return float(reward[0])
+
+    low, side = (0.0, 0.0, -0.05), (0.0, 0.05, 0.0)
+    assert reward_at(low, 0.0) == pytest.approx(reward_at(side, 0.0), abs=1e-3)  # off: the norm
+    extra = reward_at(low, 0.0) - reward_at(low, 0.5)
+    assert extra == pytest.approx(0.5 * (1 - math.exp(-0.5)), rel=0.05)
+    assert reward_at(side, 0.0) - reward_at(side, 0.5) == pytest.approx(0.0, abs=1e-3)
