@@ -480,6 +480,21 @@ log 102.06 s on a vehicle already tumbling, and the tilt watchdog (4) handed bac
 The runner's 14 s retry window ran out and the flight was scored incomplete. The module did
 what it should. The loss is stock Position mode flying on a jumped estimate between the two engages.
 
+**Outcome.** `SH_RST_HOLD` ships off (default 0, `b355f61` in PR #50). Two reasons: the mock
+replay of the seed 3 sequence shows the hold-off does not prevent the strike (v11 section
+above), and on the benchmark it refused the first engage on two seeds of three, because
+`vio_default` resets EKF2 within 10 s of the scripted engage. With the default at 0 the
+released module flies the benchmark exactly as in `092547`; the seed 3 cells above are the
+confirmation that the module change itself does not touch the hold (the hold-off was on
+at 10 s in that batch and the hold numbers are within noise). The param stays for
+operators who want the mode unavailable for a while after a reset.
+`vio_at_engage` is the profile for matched comparisons, and it now has a known property:
+the seed 3 jump that `vio_default` lands at about 92 s arrives 67 s after the engage, which
+is 1.3 s after the scripted 60 s hold ends, so the stock phase between the two engages
+meets it on every controller. Whether to shorten or move that window in the acceptance
+sequence, or to score the hold and the post-hold sequence separately, is the Gate 1
+thread's call; the hold scoring itself (first 60 s) is unaffected.
+
 ## Gate 2 evidence: v10 vs tuned PX4 on 8 seeds
 
 Seeds 4–8 flown for both controllers on 2026-10-23 at `ad907ce` (same image, module headers
