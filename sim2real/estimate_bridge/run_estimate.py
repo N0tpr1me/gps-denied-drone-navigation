@@ -99,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     prof = load_profile(args.profile)
     if args.seed is not None:
         prof = prof.with_seed(args.seed)
+    prof = prof.with_anchor_altitude(sc.hover.altitude)  # "altitude" anchor: the hover window
     px4_params = read_params(args.params)
     hover_s = args.hover_s if args.hover_s is not None else sc.hover.hover_s
     commit = git_commit()

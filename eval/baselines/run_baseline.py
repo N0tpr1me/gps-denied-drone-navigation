@@ -89,7 +89,9 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
         bool(metrics) or "ulog_error" in summary)
     modes = (ekf or {}).get("modes")
     fs_fraction = float(modes["failsafe_fraction"]) if modes else math.nan
-    window = metrics.get("window_s")
+    # The stock runner's summary has the window in its metrics; hold_summary.json has it
+    # under "hold" (run_gazebo.score_hold).
+    window = metrics.get("window_s") or (summary.get("hold") or {}).get("window_s")
     row: dict[str, Any] = {
         "scenario": summary["scenario"], "seed": summary["seed"], "run": summary["run"],
         "ok": bool(summary.get("ok")), "completed": completed,

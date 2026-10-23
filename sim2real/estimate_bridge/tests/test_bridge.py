@@ -141,7 +141,8 @@ def test_verify_catches_a_wrong_seed_and_a_published_dropout(tmp_path):
     assert not rep["ok"] and rep["published_while_stale"] == 1
 
 
-@pytest.mark.parametrize("name", ["clean", "vio_default", "vio_after_takeoff", "vio_at_engage"])
+@pytest.mark.parametrize("name", ["clean", "vio_default", "vio_after_takeoff", "vio_at_engage",
+                                  "vio_at_hover"])
 def test_shipped_profiles_load(name):
     p = load_profile(name)
     assert p.name == name and (PROFILE_DIR / f"{name}.yaml").exists()
@@ -298,6 +299,69 @@ def test_vio_at_engage_profile_is_vio_default_keyed_to_the_engage():
         EstimateProfile.from_dict({"name": "x", "fault_anchor": "takeoff"})
     with pytest.raises(ValueError):
         EstimateBridge(EstimateCorruptionConfig(), DT, 1, fault_anchor="engage", fault_anchor_s=-1)
+
+
+def takeoff_path(n, dt=DT, climb_steps=250, altitude=2.0):
+    """Ground until step 50, then a straight climb to ``altitude`` over ``climb_steps``,
+    then the hovering wander, from a spawn height of 0.25 m."""
+    t = dt * np.arange(n)
+    z = 0.25 + altitude * np.clip((np.arange(n) - 50) / climb_steps, 0.0, 1.0)
+    return t, np.stack([0.3 * np.sin(0.2 * t), 0.2 * np.cos(0.3 * t), z], 1)
+
+
+def test_altitude_anchor_fires_at_the_height_and_repeats_vio_default_from_there():
+    cfg = dataclasses.replace(EstimateCorruptionConfig(), jump_rate_hz=0.2, dropout_rate_hz=0.2,
+                              dropout_max_s=1.0)
+    n, anchor_s, alt = 3000, 25.0, 1.7
+    t, pos = takeoff_path(n)
+    ref = run_bridge(EstimateBridge(cfg, DT, seed=5), t, pos)  # vio_default's schedule
+    ref_faults = [(s.jumped, s.dropout_started) for s in ref]
+    anchor_step = round(anchor_s / DT)
+    b = EstimateBridge(cfg, DT, seed=5, fault_anchor="altitude", fault_anchor_s=anchor_s,
+                       fault_anchor_alt_m=alt)
+    out = run_bridge(b, t, pos)  # never "engaged": the stock baseline flies no mode
+    expect = int(np.flatnonzero(pos[:, 2] - pos[0, 2] >= alt)[0])
+    assert 50 < expect < 300 and b.anchor_step == expect
+    assert b.anchor_t == pytest.approx(t[expect])
+    assert not any(s.jumped or s.dropout_started or s.stale for s in out[:expect])
+    m = min(n - expect, n - anchor_step)
+    got = [(s.jumped, s.dropout_started) for s in out[expect:expect + m]]
+    assert got == ref_faults[anchor_step:anchor_step + m]
+    assert sum(f[0] for f in got) >= 2 and sum(f[1] for f in got) >= 2
+    assert not any(s.engaged for s in out)
+
+
+def test_vio_at_hover_profile_needs_the_runner_to_fill_the_height(tmp_path):
+    p = load_profile("vio_at_hover")
+    assert p.fault_anchor == "altitude" and p.fault_anchor_alt_m is None
+    assert p.estimate == EstimateCorruptionConfig() and p.fault_anchor_s == 25.0
+    with pytest.raises(ValueError):
+        p.bridge()  # no height yet
+    filled = p.with_anchor_altitude(2.0)
+    assert filled.fault_anchor_alt_m == pytest.approx(1.7)  # hover_window's 0.3 m margin
+    assert filled.with_anchor_altitude(5.0) is filled  # a set height stays
+    assert load_profile("vio_at_engage").with_anchor_altitude(2.0).fault_anchor_alt_m is None
+    assert EstimateProfile.from_dict(filled.to_dict()) == filled
+    with pytest.raises(ValueError):
+        EstimateProfile.from_dict({"name": "x", "fault_anchor": "altitude",
+                                   "fault_anchor_alt_m": 0.0})
+    # A flight on the filled profile verifies from its trace alone (the truth carries the
+    # height), and the unfilled hover profile cannot replay it.
+    cfg = dataclasses.replace(EstimateCorruptionConfig(), jump_rate_hz=0.5, dropout_rate_hz=0.5,
+                              dropout_max_s=0.5)
+    prof = dataclasses.replace(filled, seed=3, fault_anchor_s=3.0, estimate=cfg)
+    t, pos = takeoff_path(900)
+    path = tmp_path / "trace.csv"
+    w = TraceWriter(path)
+    b = prof.bridge()
+    for s in run_bridge(b, t, pos):
+        w.write(s)
+    w.close()
+    rep = verify(prof, path)
+    assert rep["ok"] and rep["fault_anchor"] == "altitude" and rep["anchor_step"] == b.anchor_step
+    assert rep["anchor_t"] == pytest.approx(b.anchor_t) and rep["jumps"] > 0
+    assert rep["engaged_samples"] == 0
+    assert not verify(dataclasses.replace(prof, fault_anchor="start"), path)["ok"]
 
 
 def test_heartbeat_decoding_matches_sitl_test():

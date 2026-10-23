@@ -64,8 +64,9 @@ EKF2 fused vision for most of the flight. The truth-based numbers are in `metric
 and `ekf.json`.
 
 Profile keys: `name`, `seed`, `divisor` (corruptor every N-th 50 Hz sample), `estimate`
-(any `EstimateCorruptionConfig` key, or `clean`), `fault_anchor` (`start`, the default, or
-`engage`) and `fault_anchor_s` (25.0).
+(any `EstimateCorruptionConfig` key, or `clean`), `fault_anchor` (`start`, the default,
+`engage` or `altitude`), `fault_anchor_s` (25.0) and `fault_anchor_alt_m` (the `altitude`
+anchor's height; `null` lets the runner fill it from the scenario).
 
 Fault anchor. With `start` the fault clock runs from the bridge's first sample, so where a
 jump or dropout lands relative to the hold depends on how long PX4 took to arm and take
@@ -82,7 +83,15 @@ time since engage, so every policy and seed meets the same faults at the same ti
 engage, and 25 s makes the in-hold faults the ones the seed 1 to 8 batches flew. The trace
 gains an `engaged` column and `verify_trace` replays with it (`anchor_t`, `anchor_step` in
 its report). Shipped as `vio_at_engage`; pass `-- --profile vio_at_engage` to
-`eval.baselines.run_baseline` for both controllers.
+`eval.baselines.run_baseline --runner hold`.
+Stock PX4 never engages the mode, so for the tuned baseline the same schedule is keyed to
+height instead: `vio_at_hover` (`fault_anchor: altitude`) anchors on the first truth
+sample `fault_anchor_alt_m` above the first one, and `run_estimate` fills that height in
+as the scenario's hover altitude minus the 0.3 m margin of `ulog_checks.hover_window`,
+where the scored hover begins. The two anchors differ by the hold runner's settle time
+between reaching altitude and engaging (a few seconds); the bridge log says which fired
+and `verify_trace` replays either from the trace. Pass `-- --profile vio_at_hover` to the
+stock runner's `run_baseline` for the tuned-PX4 side of a matched comparison.
 
 ## Notes
 
