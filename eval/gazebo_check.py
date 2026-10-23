@@ -19,12 +19,12 @@ Per episode, over the last ``window_s`` seconds (the first seconds are the engag
   (rms, action units); Gazebo's wobbling flights sit at 0.2 to 0.3, quiet ones under 0.03;
 * ``p95_m`` over the whole episode (``eval.metrics``, true centre of mass) and crashes.
 
-A controller ``beats`` the reference (v6) when, pooled over the rough-estimate cells, its p95
-is lower (paired bootstrap 95 % interval of the ratio below 1), its lift and wobble rate are
-no higher, its crash rate is no more than ``max_crash_increase`` above the reference's, and on
-the clean cell its p95 is within ``clean_p95_slack_m`` of the reference's. Gazebo's numbers
-for the controllers flown there (``gazebo`` in the config) are printed beside the mock's so
-the check's own fidelity stays visible.
+A controller ``beats`` the reference (the released policy) when, pooled over the
+rough-estimate cells, its p95 is lower (paired bootstrap 95 % interval of the ratio below 1),
+its lift and wobble rate are no higher, its crash rate is no more than ``max_crash_increase``
+above the reference's, and on the clean cell its p95 is within ``clean_p95_slack_m`` of the
+reference's. Gazebo's numbers for the controllers flown there (``gazebo`` in the config) are
+printed beside the mock's so the check's own fidelity stays visible.
 
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.

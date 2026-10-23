@@ -35,7 +35,7 @@ To judge another policy, add it under `params.controllers` and set `gate_control
   calm / 4 / 8 m/s on `vio_default`, plus 8 m/s blowing into the wall, where v9 drifts. It
   scores the lift above the hold point and the 1.6 Hz roll wobble that lifted v6 and v8 in
   Gazebo, as well as p95 and crashes, and a policy passes only if it beats the released
-  policy (v9) on all of them. Gazebo's numbers for the policies flown there are printed
+  policy (v10) on all of them. Gazebo's numbers for the policies flown there are printed
   beside the mock's.
 
 ```
