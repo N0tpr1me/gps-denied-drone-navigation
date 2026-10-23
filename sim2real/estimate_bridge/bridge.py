@@ -24,6 +24,14 @@ From then on each step's draws are the ones ``vio_default`` makes at fault clock
 ``fault_anchor_s`` + time since engage, so every policy and every seed meets the same faults
 at the same time after engage, and 25 s (the default) makes the in-hold faults the ones the
 seed 1 to 8 batches already flew (their holds opened 24.7 to 25.5 s after the first sample).
+
+``"altitude"`` is the same schedule keyed to the vehicle's own height instead: the anchor
+is the first truth sample ``fault_anchor_alt_m`` or more above the first sample's height.
+It is for the stock PX4 baseline, which never engages Structure Hold (its heartbeat never
+shows the mode, so ``"engage"`` would fly it with no fault at all): the stock runner sets
+``fault_anchor_alt_m`` to the hover altitude minus the hover window's 0.3 m margin
+(``ulog_checks.hover_window``), the height where its scored hover begins, as the engage is
+where the hold runner's scored hold begins.
 """
 
 from __future__ import annotations
@@ -47,7 +55,7 @@ TRACE_COLUMNS = (
 )
 # Trace columns added after the first flights; read as 0 when an old trace lacks them.
 OPTIONAL_TRACE_COLUMNS = ("engaged",)
-FAULT_ANCHORS = ("start", "engage")
+FAULT_ANCHORS = ("start", "engage", "altitude")
 NEVER_S = 1e9  # fault_start_s that holds every fault back for the whole flight
 
 
@@ -96,6 +104,7 @@ class EstimateBridge:
         divisor: int = 1,
         fault_anchor: str = "start",
         fault_anchor_s: float = 25.0,
+        fault_anchor_alt_m: float | None = None,
     ):
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
@@ -103,10 +112,15 @@ class EstimateBridge:
             raise ValueError(f"fault_anchor must be one of {FAULT_ANCHORS}, got {fault_anchor!r}")
         if not fault_anchor_s >= 0:
             raise ValueError("fault_anchor_s must be >= 0")
+        if fault_anchor == "altitude" and not (fault_anchor_alt_m is not None
+                                               and fault_anchor_alt_m > 0):
+            raise ValueError("fault_anchor 'altitude' needs fault_anchor_alt_m > 0 (the stock "
+                             "runner fills it from the scenario's hover altitude)")
         self.cfg, self.dt, self.seed, self.divisor = cfg, float(dt), int(seed), int(divisor)
         self.fault_anchor, self.fault_anchor_s = fault_anchor, float(fault_anchor_s)
+        self.fault_anchor_alt_m = None if fault_anchor_alt_m is None else float(fault_anchor_alt_m)
         step_dt = self.dt * self.divisor
-        if fault_anchor == "engage":
+        if fault_anchor in ("engage", "altitude"):
             # Same seed, same draws, no fault until the anchor rebuilds the corruptor.
             pre = dataclasses.replace(cfg, fault_start_s=NEVER_S)
             self.corruptor = EstimateCorruptor(pre, 1, step_dt, self.seed)
@@ -116,6 +130,7 @@ class EstimateBridge:
         self.anchor_t: float | None = None
         self._last_t: float | None = None
         self._last_pos: np.ndarray | None = None
+        self._first_z: float | None = None  # height reference for the altitude anchor
         self._received = 0
         self._steps = 0
 
@@ -133,6 +148,7 @@ class EstimateBridge:
         pos = np.asarray(pos_enu, dtype=np.float64).reshape(3)
         if self._last_pos is None:
             vel = np.zeros(3)
+            self._first_z = float(pos[2])
             self.corruptor.reset(pos[None], vel[None])
         else:
             span = float(t) - self._last_t
@@ -143,7 +159,11 @@ class EstimateBridge:
         self._received += 1
         if (self._received - 1) % self.divisor:
             return None
-        if engaged and self.fault_anchor == "engage" and not self.anchored:
+        if not self.anchored and (
+            (self.fault_anchor == "engage" and engaged)
+            or (self.fault_anchor == "altitude"
+                and float(pos[2]) - self._first_z >= self.fault_anchor_alt_m)
+        ):
             self._anchor(pos, vel, float(t))
         s = self.corruptor.step(pos[None], vel[None])
         sample = BridgeSample(

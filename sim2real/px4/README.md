@@ -267,7 +267,9 @@ python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/
 Result on 8 seeds (Gate 2): `docs/baseline.md`, "Gate 2 evidence: v10 vs tuned PX4 on 8 seeds".
 
 From PR #50 on, new comparisons should pass `-- --profile vio_at_engage` to
-`run_baseline` for both controllers: the estimate's jumps and dropouts are then keyed to
+`run_baseline --runner hold` for every policy, and `-- --profile vio_at_hover` to the stock
+runner for tuned PX4 (which never engages the mode, so the same schedule is keyed to
+reaching the hover altitude instead): the estimate's jumps and dropouts are then keyed to
 the moment the mode engages (fault clock 25 s at engage, where the seed 1 to 8 holds
 opened), so every policy meets the same faults at the same time after engage and none
 during takeoff (`sim2real/estimate_bridge/README.md`). The seed 1 to 8 numbers above were

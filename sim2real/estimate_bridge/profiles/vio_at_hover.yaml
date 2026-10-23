@@ -1,0 +1,14 @@
+# vio_at_engage's schedule for the stock PX4 baseline, which never engages Structure Hold
+# (its heartbeat never shows the mode, so vio_at_engage would fly it with no fault at all).
+# The fault clock is keyed to the first truth sample fault_anchor_alt_m above the first one
+# instead: the stock runner (run_estimate) fills that in as the scenario's hover altitude
+# minus the 0.3 m margin of ulog_checks.hover_window, i.e. the height where its scored
+# hover begins, as the engage is where the hold runner's scored hold begins. Same seed,
+# same draws, fault clock 25 s at the anchor, so the faults the stock hover meets are the
+# ones the policies meet in their holds (bridge.py, "Fault anchor"). The two anchors differ
+# by the hold runner's settle time between reaching altitude and engaging, a few seconds.
+name: vio_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null
+fault_anchor_s: 25.0

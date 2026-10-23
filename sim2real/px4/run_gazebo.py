@@ -212,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     prof = load_profile(args.profile)
     if args.seed is not None:
         prof = prof.with_seed(args.seed)
+    prof = prof.with_anchor_altitude(sc.hover.altitude)  # only an "altitude" anchor changes
     px4_params = read_params(args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

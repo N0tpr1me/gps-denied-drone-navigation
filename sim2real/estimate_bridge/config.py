@@ -6,14 +6,18 @@
     divisor: 1              # corruptor runs every divisor-th truth sample (50 Hz / divisor)
     estimate: {...}         # EstimateCorruptionConfig keys; "clean" for no corruption
     fault_anchor: start     # or "engage": fault clock keyed to the first Structure Hold
-    fault_anchor_s: 25.0    #   engage, at this fault-clock value (bridge.py docstring)
+    fault_anchor_s: 25.0    #   engage, at this fault-clock value (bridge.py docstring);
+    fault_anchor_alt_m: null  # or "altitude": keyed to reaching this height above the
+                            #   first sample (null: the stock runner fills it from the
+                            #   scenario's hover altitude)
 
 Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference), ``vio_default``
 (the ``envs.estimate`` defaults, i.e. what training uses), ``vio_after_takeoff``
 (``vio_default`` with no jump or dropout in the first 24 s, while PX4 arms and takes off)
 and ``vio_at_engage`` (``vio_default`` with its jumps and dropouts keyed to the engage,
 fault clock 25 s at engage, so every flight meets the same faults at the same time after
-engage and none before it).
+engage and none before it); ``vio_at_hover`` is the same schedule keyed to reaching the
+hover altitude, for the stock PX4 baseline, which never engages the mode.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from sim2real.estimate_bridge.bridge import FAULT_ANCHORS, EstimateBridge
 
 PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SOURCE_RATE_HZ = 50.0  # Gazebo's /world/<w>/pose/info rate in the PX4 worlds
+HOVER_MARGIN_M = 0.3  # ulog_checks.hover_window's margin: where the scored hover begins
 
 
 @dataclass(frozen=True)
@@ -39,12 +44,15 @@ class EstimateProfile:
     estimate: EstimateCorruptionConfig = field(default_factory=EstimateCorruptionConfig)
     fault_anchor: str = "start"
     fault_anchor_s: float = 25.0
+    fault_anchor_alt_m: float | None = None  # "altitude" anchor; None until a runner sets it
 
     def __post_init__(self) -> None:
         if self.fault_anchor not in FAULT_ANCHORS:
             raise ValueError(f"fault_anchor must be one of {FAULT_ANCHORS}")
         if not self.fault_anchor_s >= 0:
             raise ValueError("fault_anchor_s must be >= 0")
+        if self.fault_anchor_alt_m is not None and not self.fault_anchor_alt_m > 0:
+            raise ValueError("fault_anchor_alt_m must be > 0")
 
     @property
     def dt(self) -> float:
@@ -59,7 +67,7 @@ class EstimateProfile:
     def from_dict(cls, d: dict[str, Any]) -> EstimateProfile:
         d = dict(d)
         unknown = set(d) - {"name", "seed", "divisor", "estimate", "fault_anchor",
-                            "fault_anchor_s"}
+                            "fault_anchor_s", "fault_anchor_alt_m"}
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         if "name" not in d:
@@ -74,24 +82,36 @@ class EstimateProfile:
         divisor = int(d.get("divisor", 1))
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
+        alt = d.get("fault_anchor_alt_m")
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
-                   fault_anchor_s=float(d.get("fault_anchor_s", 25.0)))
+                   fault_anchor_s=float(d.get("fault_anchor_s", 25.0)),
+                   fault_anchor_alt_m=None if alt is None else float(alt))
 
     def with_seed(self, seed: int) -> EstimateProfile:
         """The same profile with another seed (fault anchor and everything else kept)."""
         return replace(self, seed=seed)
 
+    def with_anchor_altitude(self, hover_altitude_m: float,
+                             margin_m: float = HOVER_MARGIN_M) -> EstimateProfile:
+        """For an ``altitude`` anchor with no height set: anchor where the scored hover
+        window begins, ``margin_m`` below the hover altitude (``ulog_checks.hover_window``).
+        Other anchors, and a height already set, are returned unchanged."""
+        if self.fault_anchor != "altitude" or self.fault_anchor_alt_m is not None:
+            return self
+        return replace(self, fault_anchor_alt_m=float(hover_altitude_m) - float(margin_m))
+
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "seed": self.seed, "divisor": self.divisor,
                 "estimate": {k: v for k, v in self.estimate.__dict__.items()},
-                "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s}
+                "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s,
+                "fault_anchor_alt_m": self.fault_anchor_alt_m}
 
     def bridge(self, dt: float | None = None, divisor: int | None = None) -> EstimateBridge:
         """The bridge this profile describes (``dt`` / ``divisor`` overrides for replays)."""
         return EstimateBridge(self.estimate, self.dt if dt is None else dt, self.seed,
                               self.divisor if divisor is None else divisor,
-                              self.fault_anchor, self.fault_anchor_s)
+                              self.fault_anchor, self.fault_anchor_s, self.fault_anchor_alt_m)
 
 
 def load_profile(path: str | Path) -> EstimateProfile:

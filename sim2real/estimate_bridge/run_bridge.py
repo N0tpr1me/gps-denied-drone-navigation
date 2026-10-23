@@ -111,7 +111,9 @@ class Bridge:
             if sample is None:
                 return
             if self.bridge.anchored and not was_anchored:
-                print(f"bridge: Structure Hold engaged at t={sample.t:.2f} s, fault clock "
+                why = ("Structure Hold engaged" if self.profile.fault_anchor == "engage"
+                       else f"height {self.profile.fault_anchor_alt_m:.2f} m reached")
+                print(f"bridge: {why} at t={sample.t:.2f} s, fault clock "
                       f"anchored at {self.profile.fault_anchor_s:.1f} s (step {sample.step})",
                       flush=True)
             self.trace.write(sample)
