@@ -219,3 +219,55 @@ behaves as in the clean flight (+0.10 to +0.13 m, 10.9 Hz). The module side was 
 nine flights: every hold ran its full 60 s with no watchdog trip, fallback and yaw-guard shares 0,
 stale time up to 2.25 s in the dropout seeds, handback 0.016–0.024 s, GPS-free with vision
 fused, 0 wall contacts (closest clearance 0.52 m, 8 m/s seed 1).
+
+## Structure Hold v8 vs tuned PX4
+
+Same benchmark again, on policy v8 (the x500 recipe trained with the hold point 3.5 m up),
+module headers at `b3e875f`, image rebuilt, 2026-10-23:
+`python -m eval.baselines.run_baseline --runner hold --label structure_hold_v8 --params eval/baselines/px4_tuned_v1.params`.
+Mean over seeds 1–3, worst in brackets.
+
+| scenario | p95 hold error m, tuned v1 / v5 / v6 / **v8** | worst toward wall m, tuned v1 / v5 / v6 / **v8** | crashes, tuned / v5 / v6 / v8 | failsafes, tuned / v5 / v6 / v8 |
+|---|---|---|---|---|
+| calm 0 m/s | 0.567 (0.911) / 0.717 (0.942) / 0.620 (0.859) / **0.671 (0.967)** | 0.240 (0.420) / 0.136 (0.171) / 0.158 (0.221) / **0.255 (0.434)** | 0/3 / 0/3 / 0/3 / 0/3 | 2/3 / 1/3† / 0/3 / 0/3 |
+| 4 m/s | 0.570 (0.919) / 0.700 (0.923) / 0.641 (0.889) / **0.677 (0.971)** | 0.230 (0.406) / 0.177 (0.223) / 0.188 (0.267) / **0.252 (0.380)** | 0/3 / 0/3 / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+| 8 m/s | 0.570 (0.929) / 0.759 (1.046) / 0.679 (0.934) / **0.793 (1.018)** | 0.214 (0.386) / 0.252 (0.477) / 0.303 (0.475) / **0.351 (0.487)** | 0/3 / 1/3‡ / 0/3 / 0/3 | 2/3 / 0/3 / 0/3 / 0/3 |
+
+†, ‡ as in the v5 section (neither was the module). v8 had no crash, no PX4 failsafe and
+no failed check other than the script's position_held drift tolerance (6 of 9, as v6).
+
+| | v6 | v8 |
+|---|---|---|
+| clean calm flight: p95, offset up, horizontal | 0.114 m, +0.04 m, 0.045 m | 0.109 m, −0.01 m, 0.064 m |
+| clean calm flight: along-wall drift (truth) mean, p2p, period | −0.024 m, 0.14 m, 2.1 s | −0.031 m, 0.16 m, 2.4 s |
+| clean calm flight: roll / pitch rate setpoint std, peak | 0.49 / 0.57 rad/s, 10.9 Hz | 0.39 / 0.39 rad/s, 10.7 Hz |
+| clean calm flight: thrust | 0.701 ± 0.030 | 0.710 ± 0.016 |
+| batch: offset up, mean (range) | +0.23 m (+0.10 to +0.39) | +0.42 m (+0.36 to +0.55) |
+| batch: offset up, seeds 1 / 2 / 3 | +0.25 / +0.11 / +0.32 m | +0.40 / +0.42 / +0.45 m |
+| batch: horizontal offset, mean | 0.09 m | 0.08 m |
+| batch: roll-rate setpoint std, mean | 0.51 rad/s | 0.64 rad/s |
+| batch: 1.6 Hz wobble | 6/9 flights (seeds 1, 3) | 9/9 flights |
+| batch: along-wall drift (truth) p2p, mean | 0.55 m | 0.50 m |
+
+The offsets are the module's position error (hold point minus estimate) over the hold.
+The along-wall drift is truth against the hold point, so in the batch it also contains the
+estimate's own jumps and bias walk. Its 20–30 s period on seeds 1 and 3 is that, not the
+policy.
+
+**Reading it.** On the clean flight v8 is the best policy so far: p95 0.109 m and no
+vertical offset (−0.01 m against v6's +0.04 m). Its thrust is steadier (± 0.016) and its
+setpoint chatter is lower (0.39 rad/s). The along-wall drift the training side expected
+(about ±0.1 m on a 10 s cycle) did not show: drift along the wall is 0.16 m peak to peak at
+2.4 s, about v6's. On the corrupted estimate that advantage is gone. The 1.6 Hz wobble now
+shows in every flight, including seed 2, which v6 held cleanly. The vertical offset comes
+back larger than v6's in every seed (+0.36 to +0.55 m, mean +0.42 against +0.23 m). Mean
+p95 is 0.67 / 0.68 / 0.79 m: 6 to 17 % worse than v6 and 18 to 39 % worse than tuned PX4's
+0.57 m. v8 also comes closer to the wall than v6 in every scenario (0.25 / 0.25 / 0.35 m
+against 0.16 / 0.19 / 0.30 m), and closer than tuned PX4. The module side was clean: every hold ran its full 60 s with no watchdog trip,
+fallback and yaw-guard shares 0, stale time up to 2.26 s in the dropout seeds, handback
+0.016–0.02 s, GPS-free with vision fused, 0 wall contacts (closest clearance 0.52 m, 8 m/s
+seed 1). **Verdict: v8 is worse than v6 overall.** It is better only on the clean estimate
+(z offset, chatter). On the benchmark itself it loses on p95, distance toward the wall,
+vertical offset and the 1.6 Hz wobble. Its along-wall drift is about the same. v6 stays the
+better policy in Gazebo. The module therefore stays on v6: its headers were regenerated from
+`structure_hold_v6.onnx` in the same PR, and v8 is kept only as a recorded experiment.
