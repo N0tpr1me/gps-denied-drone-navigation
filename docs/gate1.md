@@ -203,3 +203,37 @@ trained 150 ms), rate-loop lag (to 100 ms), stale gyro and attitude inputs (to 5
 estimate that leads the truth. Noisy rate or velocity inputs lift the hold in the mock (white
 noise 0.15 on either: +0.1 m for v5 and v6), so the wobble probably causes the lift. v6 starts
 lower: it sits 0.01 m high in calm air, where v5 sat 0.09 m high.
+
+### On the x500: v7 and v8, runs `20261023-004222` and `20261023-020243`
+
+v6 in Gazebo (PR #35) trails tuned PX4 by 9 to 19 %, almost all of it a hold 0.1 to 0.4 m
+above the hold point, larger on the seeds where the vision estimate is rough (0.2 m
+innovation, jumps, dropouts). Two candidates, both v6 continued for 1000 iterations with one
+change, scored on the same episodes as v6 above.
+
+- v7 (`structure_hold_ppo_v7.yaml`) trains with noise on the gyro, attitude and velocity
+  inputs (`cfg.sensor_noise`). Under noisy inputs it lifts half as much as v6, but on clean
+  inputs it sits 0.08 m low: it learned an offset rather than ignoring the noise.
+- v8 (`structure_hold_ppo_v8.yaml`) trains with the hold point 3.5 m up instead of 2 m. In the
+  mock v6 climbs and backs off the wall when its wall-axis velocity or yaw-rate input is noisy
+  or the estimate jumps. The policy cannot see its height, and at 2 m the ground (a crash at
+  0.3 m) is 1.7 m below the hold point while the box edge is 3 m away, so a climb when the
+  estimate looks rough pays as insurance against a jump. At 3.5 m the ground is beyond the box
+  edge. The test set keeps its 2 m hold point.
+
+| Cell | p95: v8 / v7 / v6 / PD (m) | Crash: v8 / v7 / v6 / PD | v8 verdict |
+| --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.45 / 0.50 / 0.47 / 0.48 | 1.0 / 1.0 / 1.5 / 9.4 % | pass (-6 %) |
+| 0 m/s, 2 m | 0.47 / 0.50 / 0.48 / 0.52 | 0.8 / 1.0 / 0.8 / 2.4 % | pass (-10 %) |
+| 4 m/s, 1 m | 0.47 / 0.50 / 0.50 / 0.49 | 1.3 / 0.7 / 1.6 / 8.7 % | fail (-4 %, CI to +1 %) |
+| 4 m/s, 2 m | 0.48 / 0.51 / 0.49 / 0.54 | 1.2 / 1.0 / 0.8 / 2.4 % | pass (-10 %) |
+| 8 m/s, 1 m (headline) | 0.49 / 0.52 / 0.52 / 0.51 | 1.6 / 1.6 / 2.1 / 8.9 % | fail (-4 %) |
+| 8 m/s, 2 m | 0.54 / 0.56 / 0.57 / 0.60 | 1.4 / 1.3 / 1.6 / 2.1 % | pass (-11 %) |
+
+Pooled: p95 0.48 / 0.51 / 0.50 / 0.52 m, crashes 1.2 / 1.1 / 1.4 / 5.7 %. v8 is tighter than
+v6 in every cell with the same crash rate and passes 4 of 6 cells; rate roughness 32 rad/s2
+(v6 25), thrust 0.9 per second (v6 1.1). In the mock at a 2 m hold point its lift under 0.15
+white noise on the velocity input is +0.08 to +0.10 m (v6 +0.13 to +0.15), on the yaw-rate
+input +0.06 m (v6 +0.11), under 0.1 Hz estimate jumps +0.17 m (v6 +0.24). The cost: in calm
+air on a clean estimate it drifts along the wall about +/-0.1 m on a 10 s cycle, where v6
+holds within 0.02 m. v8 replaces v6 for the next Gazebo re-fly; v7 is not released.
