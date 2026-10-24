@@ -128,8 +128,11 @@ def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str
     """One Gazebo flight's estimate faults from the bridge's corruptor, run offline with the
     flight's seed and profile (``sim2real.estimate_bridge``), engaged ``engage_s`` after the
     bridge's first sample as the benchmark engages (28 s: the hold runner's anchor in all 24
-    v19 flights of PR #62, 27.98 to 28.01 s; the bias walk runs from the first sample, so this
-    sets the bias the hold starts with): ``offsets`` (steps, 3), the position offset (bias walk
+    v19 flights of PR #62, 27.98 to 28.01 s). With the profile's ``bias_from_anchor`` (the
+    shipped ``vio_at_engage`` sets it, PR #65) the bias walk starts at the engage, so the
+    stream from there does not depend on ``engage_s``; ``bias_from_anchor: false`` in the spec
+    replays flights flown before it, whose walk ran from the first sample and so carried the
+    takeoff's bias into the hold. Returns ``offsets`` (steps, 3), the position offset (bias walk
     plus jump offsets, ENU) at each env step of the hold; ``events``, its dropouts as
     ``apply_event`` takes them; ``delay_s``. The corruption does not depend on where the drone
     is, so every controller flown on that seed got this stream."""
@@ -139,7 +142,8 @@ def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str
     prof = load_profile(spec.get("profile", "vio_at_engage"))
     engage_s = float(spec.get("engage_s", 28.0))
     b = EstimateBridge(prof.estimate, prof.dt, int(spec["seed"]), prof.divisor,
-                       prof.fault_anchor, prof.fault_anchor_s)
+                       prof.fault_anchor, prof.fault_anchor_s,
+                       bias_from_anchor=bool(spec.get("bias_from_anchor", prof.bias_from_anchor)))
     pos = np.zeros(3)
     ts: list[float] = []
     off: list[np.ndarray] = []

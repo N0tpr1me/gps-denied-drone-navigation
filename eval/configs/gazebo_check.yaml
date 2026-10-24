@@ -107,9 +107,13 @@ params:
     # left out seed 3's bias (0.05 to 0.10 m toward the wall all hold): v10's seed 3 p95 was
     # 0.36 m here against Gazebo's 0.26, seed 2's 0.26 against 0.31; with the stream 0.25 and
     # 0.33. The stream starts 28 s after the bridge's first sample, where the hold runner's
-    # anchor fell in all 24 v19 flights of PR #62 (fitting the stream to Gazebo's vision error
-    # agrees: flat from 27.5 to 29.5 s; 25 s left seed 2's bias at 0.04 m per axis against
-    # Gazebo's 0.10). Scored apart from the pooled cells: mean worst toward the wall at most
+    # anchor fell in all 24 v19 flights of PR #62. Since PR #65 (`bias_from_anchor` in
+    # vio_at_engage) the bias walk starts there too, so the hold meets the same bias whenever
+    # the anchor fires; flights before it carried the takeoff's bias in (seed 3's 0.05 to
+    # 0.10 m toward the wall below), and `bridge: {bias_from_anchor: false}` replays those.
+    # On the corrected stream (Gazebo batch 20261024-111238, PR #67) v19 at 4 m/s: seed 1
+    # 0.19 m here against 0.23, seed 2 0.30 against 0.28, seed 3 0.26 against 0.26 and 0.24 m
+    # toward the wall against 0.28. Scored apart from the pooled cells: mean worst toward the wall at most
     # toward_wall_slack_m above the reference's, and the p95 not worse than the reference's
     # (paired interval reaching 1 or below). Seed 1: a 1.80 m vision jump 35.14 s into the
     # hold, nearly all along the wall, and a 0.66 s dropout 4.8 s later; v12 drifted 0.27 to
@@ -126,7 +130,7 @@ params:
       env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
       bridge: {profile: vio_at_engage, seed: 2, engage_s: 28.0}
     - name: seed3_events
-      label: "4 m/s, Gazebo seed 3's faults: a bias toward the wall, jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
+      label: "4 m/s, Gazebo seed 3's faults: jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
       rough: false
       env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
       bridge: {profile: vio_at_engage, seed: 3, engage_s: 28.0}
@@ -202,14 +206,17 @@ params:
       seed1_jump: {p95_m: 0.26, lift_m: -0.02, wobble: "0/3", toward_m: 0.07}
       seed2_events: {p95_m: 0.34, lift_m: -0.02, wobble: "0/3", toward_m: 0.00}
       seed3_events: {p95_m: 0.29, lift_m: -0.02, wobble: "0/3", toward_m: 0.23}
-    v19:  # PR #61, matched timeline (no offset reported)
-      calm: {p95_m: 0.28, wobble: "0/3", toward_m: 0.07, fast_ring: 0.010}
-      wind4: {p95_m: 0.29, wobble: "0/3", toward_m: 0.07, fast_ring: 0.010}
-      wind8: {p95_m: 0.30, wobble: "0/3", toward_m: 0.09, fast_ring: 0.010}
-      wind8_wall: {p95_m: 0.30, wobble: "0/3", toward_m: 0.09, fast_ring: 0.010}
-      seed1_jump: {p95_m: 0.30, wobble: "0/3", toward_m: 0.02}
-      seed2_events: {p95_m: 0.32, wobble: "0/3", toward_m: 0.00}
-      seed3_events: {p95_m: 0.24, wobble: "0/3", toward_m: 0.21}
+    # The seed rows of v10, v12 and v18 were flown on the stream before PR #65 (the takeoff's
+    # bias carried into the hold); the replay cells now fly the corrected stream, which only
+    # v19 has flown.
+    v19:  # PR #67, corrected stream: 8 seeds for the wind cells, seeds 1 to 3 for the replays
+      calm: {p95_m: 0.22, wobble: "0/8", toward_m: 0.08, fast_ring: 0.010}
+      wind4: {p95_m: 0.22, wobble: "0/8", toward_m: 0.08, fast_ring: 0.010}
+      wind8: {p95_m: 0.23, wobble: "0/8", toward_m: 0.09, fast_ring: 0.010}
+      wind8_wall: {p95_m: 0.23, wobble: "0/8", toward_m: 0.09, fast_ring: 0.010}
+      seed1_jump: {p95_m: 0.23, wobble: "0/3"}
+      seed2_events: {p95_m: 0.28, wobble: "0/3"}
+      seed3_events: {p95_m: 0.26, wobble: "0/3", toward_m: 0.28}
 smoke:
   num_envs: 4
   bootstrap: 50

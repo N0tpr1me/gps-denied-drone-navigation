@@ -137,15 +137,21 @@ def test_a_jump_away_from_the_wall_draws_a_controller_toward_it():
 
 def test_bridge_stream_replays_the_flight_with_its_bias():
     # Gazebo seed 3 (vio_at_engage): the three jumps the replay cells used to script, and the
-    # slow bias toward the wall they left out.
+    # bias walk, which starts at the engage since PR #65.
     st = gazebo_check.bridge_stream({"seed": 3}, 60.0, 0.012)
     o = st["offsets"]
     step = np.diff(o, axis=0)
     k = np.where(np.linalg.norm(step, axis=1) > 0.05)[0]
     assert np.allclose((k + 1) * 0.012, [40.10, 47.70, 59.40], atol=0.013)
     assert np.allclose(step[k[0]], [-0.574, -0.074, 0.768], atol=0.01)
-    assert o[: int(40 / 0.012), 0].min() > -0.01 and o[: int(40 / 0.012), 0].mean() > 0.03
+    assert np.abs(o[0]).max() < 0.01 and np.abs(o[: int(40 / 0.012)]).max() > 0.03
     assert st["events"] == [] and st["delay_s"] == pytest.approx(0.14)
+    # Flights before PR #65 carried the takeoff's walk into the hold: on seed 3 a bias toward
+    # the wall until the first jump, and the same jumps.
+    old = gazebo_check.bridge_stream({"seed": 3, "bias_from_anchor": False}, 60.0, 0.012)
+    o_old = old["offsets"]
+    assert o_old[0, 0] > 0.04 and o_old[: int(40 / 0.012), 0].mean() > 0.03
+    assert np.allclose(np.diff(o_old, axis=0)[k], step[k], atol=0.01)
     s1 = gazebo_check.bridge_stream({"seed": 1}, 60.0, 0.012)
     assert [(round(e["t_s"], 2), round(e["dropout_s"], 2)) for e in s1["events"]] == [(39.94, 0.66)]
 

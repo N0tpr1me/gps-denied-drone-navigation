@@ -1,5 +1,6 @@
 # The Gazebo-like check for the v20 candidate (training/configs/structure_hold_ppo_v20.yaml):
-# eval/configs/gazebo_check.yaml with the reference v19 and the candidate only.
+# eval/configs/gazebo_check.yaml with the reference v19 and the candidate only, as run
+# (20261024-120832): the replays fly the stream before PR #65 (bias_from_anchor: false).
 #   python -m training.launch --config eval/configs/gazebo_check_v20.yaml --device cpu
 # The Gazebo-like check (eval/gazebo_check.py, docs/gazebo_check.md): fly policies in the
 # mock the way the Gazebo benchmark flies them, on the gz_x500_sitl airframe (PX4's yaw torque
@@ -120,17 +121,17 @@ params:
       label: "4 m/s, Gazebo seed 1's faults: a 1.8 m jump along the wall at 35 s, then a dropout"
       rough: false
       env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
-      bridge: {profile: vio_at_engage, seed: 1, engage_s: 28.0}
+      bridge: {profile: vio_at_engage, seed: 1, engage_s: 28.0, bias_from_anchor: false}
     - name: seed2_events
       label: "4 m/s, Gazebo seed 2's faults: a 0.46 m jump at 8 s, a 2 s dropout at 53 s"
       rough: false
       env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
-      bridge: {profile: vio_at_engage, seed: 2, engage_s: 28.0}
+      bridge: {profile: vio_at_engage, seed: 2, engage_s: 28.0, bias_from_anchor: false}
     - name: seed3_events
       label: "4 m/s, Gazebo seed 3's faults: a bias toward the wall, jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
       rough: false
       env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
-      bridge: {profile: vio_at_engage, seed: 3, engage_s: 28.0}
+      bridge: {profile: vio_at_engage, seed: 3, engage_s: 28.0, bias_from_anchor: false}
     # The benchmark's post-hold sequence (sim2real/px4/sitl_test.py): hold, stock Position
     # mode, re-engage with the hold point captured from the estimate then
     # (eval.gazebo_check.fly_reengage). Scored: no crash after a re-engage whose hold point
