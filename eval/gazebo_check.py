@@ -56,6 +56,13 @@ v10 0.03 to 0.07 m (PR #52); the pooled p95 had passed v12 because it chases jum
 Each replayed seed's p95 must also not be worse than the reference's (``p95_not_worse``: the
 paired ratio's interval reaches 1 or below): v18's Gazebo win over v10 was seed 1 alone, with
 seeds 2 and 3 1 to 25 % looser (PR #58), and the pooled cells draw random fault timelines.
+A cell with ``bridge`` (``{seed, profile, engage_s}``) replays the flight's whole fault stream
+instead (``bridge_stream``): the bridge's corruptor run offline with that seed gives the
+position offset it added at every step of the hold (its slow bias walk as well as the jumps),
+its dropouts and its delay; the env's own bias walk, jumps and dropouts are off and its delay is
+the bridge's. The jumps alone left out seed 3's bias, 0.05 to 0.10 m toward the wall all hold,
+which stands every controller back before the jumps: v10's replayed p95 there was 0.36 m
+against Gazebo's 0.26, and 0.26 with the stream.
 
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.
@@ -117,11 +124,56 @@ def apply_event(env: StructureHoldEnv, event: dict[str, Any]) -> None:
                                               device=est.dropout_bias.device)
 
 
+def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str, Any]:
+    """One Gazebo flight's estimate faults from the bridge's corruptor, run offline with the
+    flight's seed and profile (``sim2real.estimate_bridge``), engaged at ``engage_s`` of sim
+    time as the benchmark engages: ``offsets`` (steps, 3), the position offset (bias walk plus
+    jump offsets, ENU) at each env step of the hold; ``events``, its dropouts as
+    ``apply_event`` takes them; ``delay_s``. The corruption does not depend on where the drone
+    is, so every controller flown on that seed got this stream."""
+    from sim2real.estimate_bridge.bridge import EstimateBridge
+    from sim2real.estimate_bridge.config import load_profile
+
+    prof = load_profile(spec.get("profile", "vio_at_engage"))
+    engage_s = float(spec.get("engage_s", 25.0))
+    b = EstimateBridge(prof.estimate, prof.dt, int(spec["seed"]), prof.divisor,
+                       prof.fault_anchor, prof.fault_anchor_s)
+    pos = np.zeros(3)
+    ts: list[float] = []
+    off: list[np.ndarray] = []
+    events: list[dict[str, Any]] = []
+    for k in range(int(round((engage_s + episode_s + 1.0) / prof.dt))):
+        t = k * prof.dt
+        s = b.update(t, pos, engaged=t >= engage_s)
+        if s is None or t < engage_s:
+            continue
+        c = b.corruptor
+        ts.append(t - engage_s)
+        off.append(np.asarray(c.bias[0]) + np.asarray(c.jump_offset[0]))
+        if s.dropout_started:
+            events.append({"t_s": t - engage_s, "dropout_s": (int(c.dropout_left[0]) + 1) * c.dt,
+                           "accel_bias": np.asarray(c.dropout_bias[0]).tolist()})
+    # Each env step takes the bridge's last sample at or before it (a jump stays a step).
+    k = np.searchsorted(ts, np.arange(int(round(episode_s / dt))) * dt + 1e-9, side="right") - 1
+    return {"offsets": np.asarray(off)[np.clip(k, 0, len(off) - 1)], "events": events,
+            "delay_s": float(b.corruptor.delay_steps[0]) * b.corruptor.dt}
+
+
+def bridge_env(stream: dict[str, Any]) -> dict[str, Any]:
+    """Env overrides for a ``bridge_stream`` replay: no faults of the env's own (the offsets
+    carry the bias walk), the bridge's delay, room for a jump in the bias."""
+    d = stream["delay_s"]
+    return {"estimate": {"bias_walk_std_m_per_sqrt_s": 0.0, "bias_max_m": 10.0,
+                         "jump_rate_hz": 0.0, "dropout_rate_hz": 0.0,
+                         "delay_min_s": d, "delay_max_s": d}}
+
+
 def fly(env: StructureHoldEnv, controller: Any, window_s: float,
-        wobble_threshold: float, events: list[dict[str, Any]] | None = None
-        ) -> list[dict[str, Any]]:
+        wobble_threshold: float, events: list[dict[str, Any]] | None = None,
+        offsets: np.ndarray | None = None) -> list[dict[str, Any]]:
     """Fly each env's first episode; one row per env. ``events`` start scripted estimate
-    faults (``apply_event``) at their ``t_s``, the same moment in every env."""
+    faults (``apply_event``) at their ``t_s``, the same moment in every env; ``offsets``
+    (steps, 3) set the estimate's position bias at every step (``bridge_stream``)."""
     cfg, n, steps, dt = env.cfg, env.num_envs, env.max_episode_length, env.dt
     at: dict[int, list[dict[str, Any]]] = {}
     for e in events or []:
@@ -135,7 +187,11 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     end = np.full(n, steps, dtype=np.int64)
     reason = np.full(n, TIMEOUT, dtype=np.int64)
     obs, _ = env.get_observations()
+    bias = env.estimator.bias
     for k in range(steps):
+        if offsets is not None:
+            bias[:] = torch.as_tensor(offsets[min(k, len(offsets) - 1)], dtype=bias.dtype,
+                                      device=bias.device)
         for e in at.get(k, []):
             apply_event(env, e)
         a = controller(obs)
@@ -389,13 +445,20 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             report["reengage"].append(run_reengage_cell(p, cell, names, factories, seeds,
                                                         num_envs, scale, device, writer))
             continue
-        env_cfg = StructureHoldConfig.from_dict(merge(p.get("base_env") or {}, cell.get("env")))
+        env_over = merge(p.get("base_env") or {}, cell.get("env"))
+        events, offsets = list(cell.get("events") or []), None
+        if cell.get("bridge"):
+            c0 = StructureHoldConfig.from_dict(env_over)
+            stream = bridge_stream(cell["bridge"], c0.episode_length_s, c0.dt)
+            env_over = merge(env_over, bridge_env(stream))
+            events, offsets = events + stream["events"], stream["offsets"]
+        env_cfg = StructureHoldConfig.from_dict(env_over)
         rows: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
         for seed in seeds:
             for name in names:
                 env = StructureHoldEnv(env_cfg, num_envs, seed=seed, device=device)
                 t0 = time.perf_counter()
-                r = fly(env, factories[name](env), window_s, thr, cell.get("events"))
+                r = fly(env, factories[name](env), window_s, thr, events, offsets)
                 for row in r:
                     writer.metric(seed, cell=cell["name"], controller=name, **row)
                 rows[name].extend(r)
@@ -409,7 +472,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
         report["cells"].append({
             "name": cell["name"], "label": cell.get("label", cell["name"]),
             "rough": bool(cell.get("rough", True)), "env": cell.get("env") or {},
-            "replay": bool(cell.get("events")), "scored": bool(cell.get("scored", True)),
+            "replay": bool(cell.get("events") or cell.get("bridge")),
+            "scored": bool(cell.get("scored", True)),
             "controllers": {name: describe(rows[name]) for name in names},
             "vs_reference": {name: paired_p95_ratio(rows[name], rows[ref], rng, n_boot)
                              for name in names if name != ref},

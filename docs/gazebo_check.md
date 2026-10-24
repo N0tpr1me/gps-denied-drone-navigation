@@ -5,10 +5,11 @@ than v6 in Gazebo. The mock had none of what made them fail there. This page say
 was, how the mock now models it, and the check a new policy must pass in the mock before it
 goes to the Mac for a Gazebo re-fly (`docs/decisions.md`, 2026-10-23).
 
-    python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~35 min per pair
+    python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~50 min
 
-To judge a new policy, add it under `params.controllers` in that config (keep v19, the
-reference: the released policy) and run it. The verdict is in the run's `report.md` and
+That config flies v19 (the reference: the released policy), v10 and v18. To judge a new
+policy, copy it with v19 and the candidate under `params.controllers` (about 35 min; as
+`gazebo_check_v19.yaml` did with v10 and v19) and run it. The verdict is in the run's `report.md` and
 `summary.json`.
 
 ## What Gazebo showed

@@ -5,11 +5,12 @@
 # released policy (v19 since PR #61; v10 before it) here.
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
-# To judge a new policy, add it under controllers (v19 stays as the reference; v10 and v18
-# are here for the check's fidelity: Gazebo flew them on the same fault timeline and v19
-# beat both, v10 by 12 to 16 % hold p95 and v18 by 3 % with its 3.3 Hz ring gone (PR #61);
-# the check must pass neither. Run 20261024-032135 with reference v10 failed v12 and v18,
-# the two candidates Gazebo did not release, and run 20261024-024323 passed v19.)
+# This file is the fidelity run (about 50 min): v19 the reference, v10 and v18 because Gazebo
+# flew them on the same fault timeline and v19 beat both, v10 by 12 to 16 % hold p95 and v18
+# by 3 % with its 3.3 Hz ring gone (PR #61); the check must pass neither. Run
+# 20261024-032135 with reference v10 failed v12 and v18, the two candidates Gazebo did not
+# release, and run 20261024-024323 passed v19. To judge a new policy, copy it with v19 and
+# the candidate only (as gazebo_check_v19.yaml has v10 and v19; about 35 min).
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
@@ -97,43 +98,35 @@ params:
       label: "8 m/s into the wall, vio_default"
       env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
                           turb_sigma: 1.0}}
-    # Gazebo seed 1 on vio_at_engage, replayed: the bridge's own draws for that seed
-    # (sim2real/estimate_bridge, fault clock 25 s at engage) put a 1.80 m vision jump 35.14 s
-    # into the hold, nearly all of it along the wall, and a 0.66 s dropout 4.8 s later. v12
-    # drifted 0.27 to 0.31 m toward the wall on it, v10 0.03 to 0.07 m (PR #52); the jump
-    # alone does it. Random jumps and dropouts are off so the replayed ones are the only
-    # faults; noise, bias and delay stay. Scored apart from the pooled cells: mean worst
-    # toward the wall at most toward_wall_slack_m above the reference's, and the p95 not
-    # worse than the reference's (paired interval reaching 1 or below).
+    # Gazebo seeds 1 to 3 on vio_at_engage, replayed: the bridge's corruptor run offline with
+    # the flight's seed (sim2real/estimate_bridge, engaged at 25 s of sim time) gives the whole
+    # fault stream of the hold, the same for every controller on that seed: the position
+    # offset at every step (its slow bias walk and its jumps), its dropouts and its delay
+    # (eval.gazebo_check.bridge_stream). The env's own bias walk, jumps and dropouts are off;
+    # noise stays. Until 2026-10-24 these cells replayed the jumps and dropouts alone, which
+    # left out seed 3's bias (0.05 to 0.10 m toward the wall all hold): v10's seed 3 p95 was
+    # 0.36 m here against Gazebo's 0.26, seed 2's 0.26 against 0.31; with the stream 0.26 and
+    # 0.31. Scored apart from the pooled cells: mean worst toward the wall at most
+    # toward_wall_slack_m above the reference's, and the p95 not worse than the reference's
+    # (paired interval reaching 1 or below). Seed 1: a 1.80 m vision jump 35.14 s into the
+    # hold, nearly all along the wall, and a 0.66 s dropout 4.8 s later; v12 drifted 0.27 to
+    # 0.31 m toward the wall on it, v10 0.03 to 0.07 m (PR #52). Seeds 2 and 3: v18 held
+    # seed 1 37 to 42 % tighter than v10 in Gazebo and seeds 2 and 3 1 to 25 % looser.
     - name: seed1_jump
-      label: "4 m/s, Gazebo seed 1's 1.8 m jump along the wall, then a dropout"
+      label: "4 m/s, Gazebo seed 1's faults: a 1.8 m jump along the wall at 35 s, then a dropout"
       rough: false
-      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
-            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
-      events:
-        - {t_s: 35.14, jump: [-0.283, 1.775, -0.107]}
-        - {t_s: 39.94, dropout_s: 0.66, accel_bias: [-0.123, -0.067, 0.308]}
-    # Gazebo seeds 2 and 3's faults in the 60 s hold (vio_at_engage, extracted from the
-    # bridge's corruptor as for seed 1, PR #58 thread). v18 held seed 1 37 to 42 % tighter
-    # than v10 in Gazebo and seeds 2 and 3 1 to 25 % looser; a candidate must not be worse
-    # than the reference on any replayed seed (p95_not_worse).
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
+      bridge: {profile: vio_at_engage, seed: 1, engage_s: 25.0}
     - name: seed2_events
       label: "4 m/s, Gazebo seed 2's faults: a 0.46 m jump at 8 s, a 2 s dropout at 53 s"
       rough: false
-      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
-            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
-      events:
-        - {t_s: 8.22, jump: [0.203, 0.257, 0.326]}
-        - {t_s: 53.32, dropout_s: 2.02, accel_bias: [-0.121, -0.188, 0.207]}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
+      bridge: {profile: vio_at_engage, seed: 2, engage_s: 25.0}
     - name: seed3_events
-      label: "4 m/s, Gazebo seed 3's faults: jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
+      label: "4 m/s, Gazebo seed 3's faults: a bias toward the wall, jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
       rough: false
-      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
-            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
-      events:
-        - {t_s: 40.10, jump: [-0.574, -0.074, 0.768]}
-        - {t_s: 47.70, jump: [-0.222, 0.194, -0.035]}
-        - {t_s: 59.40, jump: [0.234, -0.048, -0.273]}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
+      bridge: {profile: vio_at_engage, seed: 3, engage_s: 25.0}
     # The benchmark's post-hold sequence (sim2real/px4/sitl_test.py): hold, stock Position
     # mode, re-engage with the hold point captured from the estimate then
     # (eval.gazebo_check.fly_reengage). Scored: no crash after a re-engage whose hold point
