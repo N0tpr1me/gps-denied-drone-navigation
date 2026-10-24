@@ -135,6 +135,36 @@ def test_a_jump_away_from_the_wall_draws_a_controller_toward_it():
     assert all(r["toward_wall_m"] < 0.05 for r in rows)
 
 
+def test_bridge_stream_replays_the_flight_with_its_bias():
+    # Gazebo seed 3 (vio_at_engage): the three jumps the replay cells used to script, and the
+    # slow bias toward the wall they left out.
+    st = gazebo_check.bridge_stream({"seed": 3}, 60.0, 0.012)
+    o = st["offsets"]
+    step = np.diff(o, axis=0)
+    k = np.where(np.linalg.norm(step, axis=1) > 0.05)[0]
+    assert np.allclose((k + 1) * 0.012, [40.10, 47.70, 59.40], atol=0.013)
+    assert np.allclose(step[k[0]], [-0.574, -0.074, 0.768], atol=0.01)
+    assert o[: int(40 / 0.012), 0].min() > 0.0 and o[: int(40 / 0.012), 0].mean() > 0.03
+    assert st["events"] == [] and st["delay_s"] == pytest.approx(0.14)
+    s1 = gazebo_check.bridge_stream({"seed": 1}, 60.0, 0.012)
+    assert [(round(e["t_s"], 2), round(e["dropout_s"], 2)) for e in s1["events"]] == [(39.94, 0.66)]
+
+
+def test_offsets_move_the_estimate_and_the_drone_follows():
+    # A 0.2 m offset toward the wall from 1 s on: holding the estimate stands the drone
+    # 0.2 m back.
+    from envs.structure_hold.baseline import CascadedPd
+
+    env = _reengage_env({"bias_max_m": 10.0}, n=4)
+    off = np.zeros((env.max_episode_length, 3))
+    off[int(1.0 / env.dt):, 0] = 0.2
+    rows = gazebo_check.fly(env, CascadedPd(env), 2.0, 0.1, None, off)
+    assert all(0.15 < r["p95_m"] < 0.3 and r["toward_wall_m"] < 0.05 for r in rows)
+    env = _reengage_env({}, n=4)
+    rows = gazebo_check.fly(env, CascadedPd(env), 2.0, 0.1)
+    assert all(r["p95_m"] < 0.05 for r in rows)
+
+
 def test_smoke_run_writes_report(tmp_path):
     out = subprocess.run(
         [sys.executable, "-m", "training.launch", "--config", "eval/configs/gazebo_check.yaml",
@@ -147,8 +177,8 @@ def test_smoke_run_writes_report(tmp_path):
                                                     "wind8_wall", "seed1_jump", "seed2_events",
                                                     "seed3_events"]
     assert [c["name"] for c in report["reengage"]] == ["reengage", "reengage_jump"]
-    assert report["reference"] == "v10" and "beats" in report["verdicts"]["v12"]
-    checks = report["verdicts"]["v12"]["checks"]
+    assert report["reference"] == "v19" and "beats" in report["verdicts"]["v10"]
+    checks = report["verdicts"]["v10"]["checks"]
     assert "ring_not_higher" in checks and "reengage_no_reengage_fail" in checks
     assert "fast_ring_not_higher" in checks and "v18" in report["verdicts"]
     assert "seed1_jump_toward_wall_ok" in checks and "seed1_jump_p95_ok" not in checks
