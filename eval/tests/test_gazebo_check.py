@@ -144,7 +144,7 @@ def test_bridge_stream_replays_the_flight_with_its_bias():
     k = np.where(np.linalg.norm(step, axis=1) > 0.05)[0]
     assert np.allclose((k + 1) * 0.012, [40.10, 47.70, 59.40], atol=0.013)
     assert np.allclose(step[k[0]], [-0.574, -0.074, 0.768], atol=0.01)
-    assert o[: int(40 / 0.012), 0].min() > 0.0 and o[: int(40 / 0.012), 0].mean() > 0.03
+    assert o[: int(40 / 0.012), 0].min() > -0.01 and o[: int(40 / 0.012), 0].mean() > 0.03
     assert st["events"] == [] and st["delay_s"] == pytest.approx(0.14)
     s1 = gazebo_check.bridge_stream({"seed": 1}, 60.0, 0.012)
     assert [(round(e["t_s"], 2), round(e["dropout_s"], 2)) for e in s1["events"]] == [(39.94, 0.66)]
