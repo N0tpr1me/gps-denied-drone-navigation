@@ -30,6 +30,11 @@ It must also ring no more than the reference: the median of the roll action's 1.
 rms over the rough cells at most ``ring_slack`` above the reference's. The thresholded wobble
 rate misses a ring that is still well under the threshold: v11 sat 17 % above v10 on it in
 every rough cell while both scored 0 % wobble, and v11 then rang at 1.7 Hz in Gazebo (PR #49).
+Above that band, ``fast_ring_rms`` is the larger of the roll and pitch rate commands' 2.2 to
+6 Hz rms (rad/s); its median over the rough cells must be at most ``fast_ring_slack`` above
+the reference's. v18 passed the 1.2 to 2.2 Hz rule and rang at 3.3 Hz in all 9 Gazebo
+flights, commanded (PR #58): 2.2 to 5 Hz rate setpoint rms 0.118 rad/s against v10's 0.023
+in Gazebo, 0.124 against 0.016 here.
 
 Cells with a ``reengage`` block fly the benchmark's post-hold sequence
 (``sim2real/px4/sitl_test.py``) instead: hold, a switch to stock Position mode, a re-engage
@@ -77,8 +82,12 @@ DEFAULT_RULES = {
     "max_crash_increase": 0.01,
     "clean_p95_slack_m": 0.02,
     "ring_slack": 0.05,  # median 1.2-2.2 Hz roll rms at most 5 % above the reference's
+    "fast_ring_slack": 0.25,  # median 2.2-6 Hz roll/pitch rate rms at most 25 % above
     "toward_wall_slack_m": 0.05,  # replay cells: mean worst toward the wall
 }
+
+
+FAST_RING_HZ = (2.2, 6.0)  # band of ``fast_ring_rms``, above the wobble's 1.2 to 2.2 Hz
 
 
 def band_rms(x: np.ndarray, dt: float, lo: float = 1.2, hi: float = 2.2) -> np.ndarray:
@@ -144,9 +153,13 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     w0 = max(0, steps - int(round(window_s / dt)))
     full = end == steps
     wob = np.full(n, np.nan)
+    fast = np.full(n, np.nan)
     lift = np.full(n, np.nan)
     if full.any():
         wob[full] = band_rms(act[w0:, full, 0].astype(np.float64), dt)
+        rates = act[w0:, full, :2].astype(np.float64) * cfg.max_rate_rad_s
+        fast[full] = np.maximum(band_rms(rates[:, :, 0], dt, *FAST_RING_HZ),
+                                band_rms(rates[:, :, 1], dt, *FAST_RING_HZ))
         lift[full] = est_z[w0:, full].mean(0)
     surface = Surface(point=np.zeros(3), normal=np.array([1.0, 0.0, 0.0]))
     rows = []
@@ -157,7 +170,8 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
                                "reason": TERM_REASONS[int(reason[i])]}
         if full[i]:
             row.update({"lift_m": float(lift[i]), "wobble_rms": float(wob[i]),
-                        "wobble": bool(wob[i] > wobble_threshold)})
+                        "wobble": bool(wob[i] > wobble_threshold),
+                        "fast_ring_rms": float(fast[i])})
         if length >= 2:
             t = np.arange(length + 1) * dt
             trace = Trace(t=t, pos=pos[: length + 1, i].astype(np.float64), pos_sp=hold[i],
@@ -322,6 +336,8 @@ def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "lift_m_mean": float(np.mean(_col(full, "lift_m"))) if full else float("nan"),
         "wobble_rate": float(np.mean(_col(full, "wobble"))) if full else float("nan"),
         "wobble_rms_median": float(np.median(_col(full, "wobble_rms"))) if full else float("nan"),
+        "fast_ring_median": (float(np.median(_col(full, "fast_ring_rms"))) if full
+                             else float("nan")),
     }
 
 
@@ -415,6 +431,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             "wobble_not_higher": pa["wobble_rate"] <= pr["wobble_rate"],
             "ring_not_higher": (pa["wobble_rms_median"]
                                 <= pr["wobble_rms_median"] * (1.0 + rules["ring_slack"])),
+            "fast_ring_not_higher": (pa["fast_ring_median"]
+                                     <= pr["fast_ring_median"] * (1.0 + rules["fast_ring_slack"])),
             "crash_ok": pa["crash_rate"] <= pr["crash_rate"] + rules["max_crash_increase"],
         }
         for c in [c for c in report["reengage"] if c["scored"]]:
@@ -506,15 +524,16 @@ def markdown(report: dict[str, Any]) -> str:
              f"lift and wobble over the last {report['window_s']:.0f} s; wobble = roll action "
              f"1.2-2.2 Hz rms > {report['wobble_threshold']}.", "",
              "| cell | controller | crash | p95 (m) | lift (m) | wobble | toward the wall (m) "
-             "| Gazebo p95 / lift / wobble / toward the wall |",
+             "| Gazebo p95 / lift / wobble / toward the wall / fast ring |",
              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for c in report["cells"]:
         for name in names:
             d = c["controllers"][name]
             g = (gz.get(name) or {}).get(c["name"])
             toward = f"{g['toward_m']:.2f}" if g and "toward_m" in g else "-"
+            fast = f"{g['fast_ring']:.3f}" if g and "fast_ring" in g else "-"
             gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {g.get('lift_m', float('nan')):+.2f} / "
-                    f"{g.get('wobble', '-')} / {toward}" if g else "-")
+                    f"{g.get('wobble', '-')} / {toward} / {fast}" if g else "-")
             lines.append(f"| {c['label']} | {name} | {d['crash_rate']:.1%} | "
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
                          f"{d['wobble_rate']:.0%} | {d['toward_wall_m_mean']:.3f} | {gtxt} |")
@@ -522,8 +541,8 @@ def markdown(report: dict[str, Any]) -> str:
         lines += ["", f"Gazebo, stock PX4: {report['gazebo_baseline']}"]
     lines += ["", "Rough-estimate cells pooled (replay cells apart):", "",
               "| controller | crash | p95 (m) | lift (m) | wobble | ring (median rms) "
-              "| toward the wall (m) | verdict |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "| fast ring (median, rad/s) | toward the wall (m) | verdict |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name in names:
         d = report["pooled_rough"][name]
         v = report["verdicts"].get(name)
@@ -534,7 +553,8 @@ def markdown(report: dict[str, Any]) -> str:
             f"{', '.join(k for k, ok in v['checks'].items() if not ok) or 'none'})")
         lines.append(f"| {name} | {d['crash_rate']:.1%} | {d['p95_m_mean']:.3f} | "
                      f"{d['lift_m_mean']:+.3f} | {d['wobble_rate']:.0%} | "
-                     f"{d['wobble_rms_median']:.4f} | {d['toward_wall_m_mean']:.3f} | {vtxt} |")
+                     f"{d['wobble_rms_median']:.4f} | {d['fast_ring_median']:.3f} | "
+                     f"{d['toward_wall_m_mean']:.3f} | {vtxt} |")
     if report.get("reengage"):
         lines += ["", "Hold, stock Position mode, re-engage (crash = any after the switch; "
                   "re-engage failure = a crash after a re-engage whose hold point was a sane "
