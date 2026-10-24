@@ -12,7 +12,7 @@
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
-expected_hours: 0.75
+expected_hours: 0.9  # three controllers, eight hold cells, two re-engage cells
 gpus: 1
 params:
   controllers:
@@ -102,7 +102,8 @@ params:
     # drifted 0.27 to 0.31 m toward the wall on it, v10 0.03 to 0.07 m (PR #52); the jump
     # alone does it. Random jumps and dropouts are off so the replayed ones are the only
     # faults; noise, bias and delay stay. Scored apart from the pooled cells: mean worst
-    # toward the wall at most toward_wall_slack_m above the reference's.
+    # toward the wall at most toward_wall_slack_m above the reference's, and the p95 not
+    # worse than the reference's (paired interval reaching 1 or below).
     - name: seed1_jump
       label: "4 m/s, Gazebo seed 1's 1.8 m jump along the wall, then a dropout"
       rough: false
@@ -111,6 +112,27 @@ params:
       events:
         - {t_s: 35.14, jump: [-0.283, 1.775, -0.107]}
         - {t_s: 39.94, dropout_s: 0.66, accel_bias: [-0.123, -0.067, 0.308]}
+    # Gazebo seeds 2 and 3's faults in the 60 s hold (vio_at_engage, extracted from the
+    # bridge's corruptor as for seed 1, PR #58 thread). v18 held seed 1 37 to 42 % tighter
+    # than v10 in Gazebo and seeds 2 and 3 1 to 25 % looser; a candidate must not be worse
+    # than the reference on any replayed seed (p95_not_worse).
+    - name: seed2_events
+      label: "4 m/s, Gazebo seed 2's faults: a 0.46 m jump at 8 s, a 2 s dropout at 53 s"
+      rough: false
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
+            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
+      events:
+        - {t_s: 8.22, jump: [0.203, 0.257, 0.326]}
+        - {t_s: 53.32, dropout_s: 2.02, accel_bias: [-0.121, -0.188, 0.207]}
+    - name: seed3_events
+      label: "4 m/s, Gazebo seed 3's faults: jumps of 0.96, 0.30 and 0.36 m at 40, 48 and 59 s"
+      rough: false
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
+            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
+      events:
+        - {t_s: 40.10, jump: [-0.574, -0.074, 0.768]}
+        - {t_s: 47.70, jump: [-0.222, 0.194, -0.035]}
+        - {t_s: 59.40, jump: [0.234, -0.048, -0.273]}
     # The benchmark's post-hold sequence (sim2real/px4/sitl_test.py): hold, stock Position
     # mode, re-engage with the hold point captured from the estimate then
     # (eval.gazebo_check.fly_reengage). Scored: no crash after a re-engage whose hold point
@@ -167,6 +189,8 @@ params:
       wind8: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.023}
       wind8_wall: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.023}
       seed1_jump: {p95_m: 0.43, lift_m: 0.04, wobble: "0/3", toward_m: 0.05}
+      seed2_events: {p95_m: 0.31, lift_m: 0.04, wobble: "0/3", toward_m: 0.00}
+      seed3_events: {p95_m: 0.26, lift_m: 0.04, wobble: "0/3", toward_m: 0.17}
     v12:
       calm: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.15, fast_ring: 0.036}
       wind4: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.15, fast_ring: 0.036}
@@ -179,6 +203,8 @@ params:
       wind8: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.118}
       wind8_wall: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.118}
       seed1_jump: {p95_m: 0.26, lift_m: -0.02, wobble: "0/3", toward_m: 0.07}
+      seed2_events: {p95_m: 0.34, lift_m: -0.02, wobble: "0/3", toward_m: 0.00}
+      seed3_events: {p95_m: 0.29, lift_m: -0.02, wobble: "0/3", toward_m: 0.23}
 smoke:
   num_envs: 4
   bootstrap: 50
