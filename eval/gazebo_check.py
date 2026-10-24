@@ -126,8 +126,10 @@ def apply_event(env: StructureHoldEnv, event: dict[str, Any]) -> None:
 
 def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str, Any]:
     """One Gazebo flight's estimate faults from the bridge's corruptor, run offline with the
-    flight's seed and profile (``sim2real.estimate_bridge``), engaged at ``engage_s`` of sim
-    time as the benchmark engages: ``offsets`` (steps, 3), the position offset (bias walk plus
+    flight's seed and profile (``sim2real.estimate_bridge``), engaged ``engage_s`` after the
+    bridge's first sample as the benchmark engages (29 s: fitted to v10's and v19's Gazebo
+    vision error on seeds 1 to 3; the bias walk runs from the first sample, so this sets the
+    bias the hold starts with): ``offsets`` (steps, 3), the position offset (bias walk plus
     jump offsets, ENU) at each env step of the hold; ``events``, its dropouts as
     ``apply_event`` takes them; ``delay_s``. The corruption does not depend on where the drone
     is, so every controller flown on that seed got this stream."""
@@ -135,7 +137,7 @@ def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str
     from sim2real.estimate_bridge.config import load_profile
 
     prof = load_profile(spec.get("profile", "vio_at_engage"))
-    engage_s = float(spec.get("engage_s", 25.0))
+    engage_s = float(spec.get("engage_s", 29.0))
     b = EstimateBridge(prof.estimate, prof.dt, int(spec["seed"]), prof.divisor,
                        prof.fault_anchor, prof.fault_anchor_s)
     pos = np.zeros(3)
