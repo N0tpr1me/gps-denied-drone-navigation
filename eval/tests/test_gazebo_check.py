@@ -151,11 +151,13 @@ def test_bridge_stream_replays_the_flight_with_its_bias():
 
 
 def test_offsets_move_the_estimate_and_the_drone_follows():
-    # A 0.2 m offset toward the wall: holding the estimate stands the drone 0.2 m back.
+    # A 0.2 m offset toward the wall from 1 s on: holding the estimate stands the drone
+    # 0.2 m back.
     from envs.structure_hold.baseline import CascadedPd
 
     env = _reengage_env({"bias_max_m": 10.0}, n=4)
-    off = np.tile([0.2, 0.0, 0.0], (env.max_episode_length, 1))
+    off = np.zeros((env.max_episode_length, 3))
+    off[int(1.0 / env.dt):, 0] = 0.2
     rows = gazebo_check.fly(env, CascadedPd(env), 2.0, 0.1, None, off)
     assert all(0.15 < r["p95_m"] < 0.3 and r["toward_wall_m"] < 0.05 for r in rows)
     env = _reengage_env({}, n=4)

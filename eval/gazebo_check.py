@@ -187,9 +187,9 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     end = np.full(n, steps, dtype=np.int64)
     reason = np.full(n, TIMEOUT, dtype=np.int64)
     obs, _ = env.get_observations()
-    bias = env.estimator.bias
     for k in range(steps):
-        if offsets is not None:
+        if offsets is not None:  # the corruptor replaces its bias tensor every step
+            bias = env.estimator.bias
             bias[:] = torch.as_tensor(offsets[min(k, len(offsets) - 1)], dtype=bias.dtype,
                                       device=bias.device)
         for e in at.get(k, []):

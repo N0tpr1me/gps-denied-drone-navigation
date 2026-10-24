@@ -383,3 +383,30 @@ In Gazebo (PR #58) it held 9 to 12 % tighter than v10 on the mean but lower on o
 three, with a 3.3 Hz ring, so v10 stays the release and v18 is not the Gate 1 policy of
 record either; v17 and v18 show that the fused Gate 1 is passed by this line of training.
 The fused run took 26 min and the raw one 43 min (it shared the 4 cores for 15 min).
+
+### On the x500, both ways: v19 (the release), runs `20261024-041240` (fused) and `20261024-044004` (raw)
+
+v19 is v18 continued with a penalty on the 1 to 6 Hz part of its rate commands
+(`reward.action_band` 5.0; `training/configs/structure_hold_ppo_v19.yaml`, run
+`20261024-020006`, iteration 13500), which removed v18's 3.3 Hz ring. Gazebo released it
+(PR #61): hold p95 12 to 16 % below v10's and 44 to 47 % below tuned PX4's on the matched
+timeline. Run once on the held-out seeds as the released policy. Configs
+`eval/configs/gate1_x500_ekf_v19.yaml` and `gate1_x500_v19.yaml`; the same held-out
+episodes as v10's, v17's and v18's.
+
+| Cell | Raw: p95 v19 / PD (m) | Raw: crash v19 / PD | Raw verdict | Fused: p95 v19 / PD (m) | Fused: change | Fused: crash v19 / PD | Fused verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 1.21 / 0.48 | 63.2 / 9.4 % | fail | 0.24 / 0.32 | -26 % | 0.0 / 2.8 % | pass |
+| 0 m/s, 2 m | 1.27 / 0.52 | 62.6 / 2.4 % | fail | 0.24 / 0.34 | -31 % | 0.0 / 0.0 % | pass |
+| 4 m/s, 1 m | 1.20 / 0.49 | 62.3 / 8.7 % | fail | 0.24 / 0.32 | -27 % | 0.0 / 3.0 % | pass |
+| 4 m/s, 2 m | 1.25 / 0.54 | 61.3 / 2.4 % | fail | 0.24 / 0.36 | -34 % | 0.0 / 0.0 % | pass |
+| 8 m/s, 1 m (headline) | 1.18 / 0.51 | 61.3 / 8.9 % | fail | 0.24 / 0.37 | -34 % | 0.0 / 2.9 % | pass (headline ok) |
+| 8 m/s, 2 m | 1.26 / 0.60 | 62.2 / 2.1 % | fail | 0.26 / 0.44 | -42 % | 0.1 / 0.0 % | pass |
+| **Pooled** | **1.23 / 0.52** | **62.2 / 5.7 %** | **FAIL, 0 of 6** | **0.24 / 0.36** | | **0.0 / 1.4 %** | **PASS, 6 of 6** |
+
+Through the fusion the released policy passes Gate 1: every cell, headline -34 % (interval
+-36 to -32 %), 7 crashes in 18,432 episodes (0.04 %) against the PD's 1.4 %. On the raw fix 50 to
+150 ms late it fails like every policy since v10 (crash 62 %; v18 73 %, v17 57 %, v10 37 %):
+the policies are trained and flown behind EKF2, which takes out that delay on the drone, and
+none of them was trained on the raw fix. Which of the two scorings Gate 1 is judged on is
+the open decision in `docs/decisions.md`. The fused run took 27 min and the raw one 37 min.
