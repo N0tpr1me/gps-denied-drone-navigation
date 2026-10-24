@@ -264,7 +264,7 @@ python -m eval.baselines.run_baseline --runner hold --label structure_hold_v19 \
 python -m eval.baselines.run_baseline --compare runs/<tuned_v1>/batch.json runs/<structure_hold_v19>/batch.json
 ```
 
-Result on 8 seeds (Gate 2): `docs/baseline.md`, "Gate 2 evidence: v19 vs tuned PX4 on 8 seeds (matched fault timeline)" (v19: p95 −41 to −44 % on the mean, −7 to −14 % on the median, 0 crashes; the v10 table on the start-anchored timeline is kept above it).
+Result on 8 seeds (Gate 2): `docs/baseline.md`, "Gate 2 evidence: v19 vs tuned PX4 on 8 seeds, corrected estimate stream" (v19: p95 −47 to −48 % on the mean, −13 to −15 % on the median, lower on 6 of 8 seeds, 0 crashes; the earlier v19 and v10 tables are kept above it as the record of the protocol).
 
 From PR #50 on, new comparisons should pass `-- --profile vio_at_engage` to
 `run_baseline --runner hold` for every policy, and `-- --profile vio_at_hover` to the stock
