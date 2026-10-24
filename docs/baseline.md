@@ -857,3 +857,112 @@ anchored, no crash, no post-hold failure). The thing to fix next is worst toward
 v12 lets the hold drift 0.27 to 0.31 m toward the wall on seed 1 where v10 drifts 0.03 to
 0.07 m, which is also where its p95 loses. First matched tuned-PX4 numbers:
 p95 0.52 m mean, 0.91 m worst (seed 1), against v10 0.33 / 0.40 and v12 0.35 / 0.41.
+
+## Structure Hold v18 vs v10 vs tuned PX4 (matched fault timeline)
+
+The Gazebo re-fly of v18, the candidate that passed every rule of the Gazebo-like check
+(PR #57, p95 ratio 0.78 against v10). Flown 2026-10-24 on the Mac (Docker arm64), same
+scenarios, seeds, params and profile as the v12 comparison above, against the same v10
+and tuned PX4 batches (nothing in `sim2real/`, the bridge, the image recipe or
+`eval/baselines` changed since, so neither was re-flown):
+
+- **v18**, batch `20261024-005145_px4_baseline_structure_hold_v18_49e4272`, image rebuilt
+  on `49e4272` with `NAME structure_hold_v18` (checked in the built `px4` binary),
+  `SH_RST_HOLD` default 0:
+  `python -m eval.baselines.run_baseline --runner hold --label structure_hold_v18 --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 -- --profile vio_at_engage`
+- **v10**, batch `20261023-160114_px4_baseline_structure_hold_v10_fe4667c` (PR #52).
+- **tuned PX4**, batch `20261023-162007_px4_baseline_tuned_v1_at_hover_a5d7714` (`vio_at_hover`).
+
+All 9 v18 flights: bridge log "fault clock anchored at 25.0 s", `estimate_verify.json` and
+`wind_verify.json` ok, 0 contacts in the scored window. (A first attempt at the batch was
+stopped after two flights: it ran under a Python without `pymavlink`, so `run_gazebo`'s
+post-flight scoring crashed and no `hold_summary.json` was written. Those folders were
+set aside, not scored.)
+
+Mean over seeds, worst in brackets:
+
+| scenario | p95 m, tuned / v10 / **v18** | worst toward wall m, tuned / v10 / **v18** | rms m, tuned / v10 / **v18** | crashes | post-hold fail |
+|---|---|---|---|---|---|
+| calm 0 m/s | 0.522 (0.913) / 0.329 (0.396) / **0.288 (0.344)** | 0.229 (0.417) / 0.075 (0.184) / **0.077 (0.207)** | 0.221 / 0.173 / **0.157** | 0 / 0 / 0 of 3 | 0 / 0 / 0 of 3 |
+| 4 m/s | 0.523 (0.914) / 0.327 (0.410) / **0.296 (0.343)** | 0.220 (0.405) / 0.069 (0.172) / **0.091 (0.222)** | 0.221 / 0.176 / **0.156** | 0 / 0 / 0 of 3 | 0 / 0 / **1** of 3 |
+| 8 m/s | 0.524 (0.918) / 0.345 (0.475) / **0.304 (0.335)** | 0.218 (0.387) / 0.080 (0.166) / **0.128 (0.245)** | 0.221 / 0.185 / **0.160** | 0 / 0 / 0 of 3 | 0 / 0 / 0 of 3 |
+
+Against tuned PX4, mean p95: v18 −45 / −44 / −42 %. v18 against v10: p95 −12 / −9 / −12 %,
+rms −9 / −12 / −13 %, worst toward wall +3 / +33 / +60 %.
+
+Per seed (p95 / rms / worst toward wall / min clearance, m; no flight had a contact in the
+scored window):
+
+| cell | tuned PX4 | v10 | **v18** |
+|---|---|---|---|
+| calm, seed 1 | 0.913 / 0.364 / 0.262 / 0.881 | 0.396 / 0.217 / 0.042 / 0.966 | **0.235 / 0.151 / 0.025 / 0.981** |
+| calm, seed 2 | 0.301 / 0.140 / 0.008 / 0.974 | 0.307 / 0.152 / 0.000 / 0.999 | **0.344 / 0.180 / 0.000 / 1.030** |
+| calm, seed 3 | 0.353 / 0.159 / 0.417 / 0.571 | 0.282 / 0.149 / 0.184 / 0.805 | **0.285 / 0.140 / 0.207 / 0.797** |
+| 4 m/s, seed 1 | 0.914 / 0.366 / 0.247 / 0.851 | 0.410 / 0.221 / 0.034 / 0.972 | **0.258 / 0.154 / 0.051 / 0.957** |
+| 4 m/s, seed 2 | 0.302 / 0.139 / 0.008 / 0.973 | 0.313 / 0.156 / 0.000 / 1.003 | **0.343 / 0.176 / 0.000 / 1.021** |
+| 4 m/s, seed 3 | 0.353 / 0.158 / 0.405 / 0.583 | 0.257 / 0.152 / 0.172 / 0.822 | **0.286 / 0.137 / 0.222 / 0.779** |
+| 8 m/s, seed 1 | 0.918 / 0.365 / 0.259 / 0.885 | 0.475 / 0.242 / 0.074 / 0.931 | **0.276 / 0.162 / 0.138 / 0.871** |
+| 8 m/s, seed 2 | 0.305 / 0.139 / 0.007 / 0.973 | 0.319 / 0.160 / 0.000 / 1.002 | **0.335 / 0.174 / 0.000 / 1.020** |
+| 8 m/s, seed 3 | 0.350 / 0.159 / 0.387 / 0.602 | 0.242 / 0.153 / 0.166 / 0.838 | **0.302 / 0.144 / 0.245 / 0.766** |
+
+The mean p95 win comes from seed 1 alone (−41 / −37 / −42 %); v18's p95 is higher than
+v10's on seed 2 (+12 / +10 / +5 %) and seed 3 (+1 / +11 / +25 %): lower in 3 of 9 cells.
+
+**Wall drift.** Seed 1, where v12 drifted 0.27–0.31 m toward the wall: v18 0.025 / 0.051 /
+0.138 m against v10's 0.042 / 0.034 / 0.074 m (mean 0.071 against 0.050; the check
+predicted 0.06 against 0.08). The v12 problem is gone, but v18 is not better than v10 on
+the wall: worse at 4 and 8 m/s on seed 1 and in every seed 3 cell (0.21–0.25 against
+0.17–0.18 m).
+
+**Post-hold failure (4 m/s, seed 3).** The scored hold was clean (0.779 m min clearance).
+At the sequence's re-engage (95.0 s) seed 3's estimate was 0.9–1.1 m off toward the wall;
+in the 3 s of re-engage the truth moved from 0.78 to 0.59 m clearance, the scheduled
+`test_fault` trip handed back to Position at 98.0 s, which held the faulty estimate while
+the truth crept to 0.35 m, and the commanded Land at 102.5 s struck the wall about 1.5 s into the
+descent (lateral velocity −1.5 then +1.8 m/s at 1.7 m height); the vehicle fell, tumbled
+along the ground and never registered touchdown (`TimeoutError ... waiting for touchdown`).
+The strike happened under stock PX4, outside the scored window, so `contacts` is 0; v10 and
+v12 came as close on seed 3 (0.11–0.29 m truth clearance after 88 s) and landed.
+
+Offsets and ring, from the ulogs over the scored window, as for v12 (offset up = mean z
+minus the hold point's z; ring = 1.2–2.2 Hz rms of the measured roll rate):
+
+| | v10 | v18 |
+|---|---|---|
+| offset up on the estimate, mean (range) | +0.040 m (+0.030 to +0.050) | −0.021 m (−0.032 to −0.010) |
+| offset up on the truth, mean (range) | +0.066 m (−0.033 to +0.180) | +0.003 m (−0.094 to +0.116) |
+| roll-rate 1.2–2.2 Hz rms, mean (range) | 0.035 rad/s (0.018 to 0.061) | 0.010 rad/s (0.007 to 0.016), lower in 9 of 9 |
+| roll-rate std, mean | 0.077 rad/s | **0.147 rad/s, higher in 9 of 9** |
+| roll-rate setpoint 1.2–2.2 Hz rms, mean | 0.032 rad/s | 0.011 rad/s |
+
+**v18 rings at 3.4 Hz.** The 1.2–2.2 Hz band says v18 rings less, but its roll-rate std is
+twice v10's. The spectrum over the scored window puts the energy just above the band:
+
+| band, roll-rate rms rad/s (mean of 9) | 0–0.5 | 0.5–1.2 | 1.2–2.2 | 2.2–5 | 5–10 | 10–25 Hz |
+|---|---|---|---|---|---|---|
+| v10 | 0.016 | 0.035 | 0.035 | 0.015 | 0.007 | 0.051 |
+| v18 | 0.024 | 0.019 | 0.010 | **0.130** | 0.056 | 0.019 |
+
+The roll-rate spectrum peaks at 3.3–3.4 Hz in all 9 v18 flights (v10's peak is the 10.8 Hz
+rate-loop line, or ~1 Hz). It is commanded: the 2.2–5 Hz rms of the rate setpoint is
+0.118 rad/s for roll and 0.113 for pitch (peak ~4.1 Hz), against v10's 0.020 / 0.023 and
+v12's 0.023 / 0.036. The ring rule moved v18's oscillation out of the band it penalises
+rather than removing it; the Gazebo-like check's `wobble` (0 % for v18) does not see it.
+
+**Verdict proposal: v18 does not pass the release rule; v10 stays.** v18 beats v10 on the
+mean hold p95 (−9 to −12 %) and rms, and both policies beat tuned PX4 by more than a third,
+but (1) the ring regressed: a 3.4 Hz commanded oscillation, 5–9× v10's in that band (measured and commanded, roll and pitch) and
+roll-rate std 2× v10's in every flight; (2) wall drift is not better than v10's (seed 1 at
+4 and 8 m/s, all of seed 3); (3) one post-hold failure (4 m/s seed 3, a wall strike under
+stock Land after the re-engage), against none for v10; and the p95 win is seed 1 only.
+The local SITL image was rebuilt on v10 (headers from `main`) after this batch. For the
+next candidate: widen the ring metric (in the check and in training) to the whole
+1–6 Hz band, or penalise action rate, before another re-fly.
+
+**Decision (PR #58): v10 stays the released policy.** The module headers went back to v10
+before merge; only the results merged. v18 is the closest candidate yet (first mean p95
+win on the matched timeline, −9 to −12 %, and v12's seed 1 drift is gone), but a win on
+one seed of three with a new 3.4 Hz oscillation and a post-hold strike is not a release.
+Two lessons for the check: the 1.2–2.2 Hz ring band is too narrow (v18 moved the ring to
+3.4 Hz and scored 0 % wobble), and a candidate must beat v10 on the hold p95 per seed,
+not only on the mean.
