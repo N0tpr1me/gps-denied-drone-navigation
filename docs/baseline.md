@@ -1167,3 +1167,37 @@ seeds where the estimate misleads stock PX4 (two of eight, where it drifts past 
 the other six the two are within about 20 % either way and the median is 7–14 % better."
 This restates the Gate 2 table for v19; the v10 table above stays as the record of the
 start-anchored protocol.
+
+### Correction: the two runners met different estimate biases (2026-10-24)
+
+The Gate 1 thread noticed, replaying the bridge's stream offline, that the corruptor's
+bias random walk runs from the bridge's first sample and the fault anchor carries the
+accumulated bias over (for continuity), so the bias each runner meets in its scored window
+depends on how long its takeoff took before the anchor fired. Measured on the 48 flights of
+the 8-seed comparison above (`runs/bias-check/offsets.csv` on the Mac; offset = published
+estimate minus truth; "floor" = p95 of its horizontal norm over the scored window, which
+a controller that holds the estimate cannot beat):
+
+- v19 anchors 27.98–28.01 s after bridge start in every flight (`engage`); tuned PX4
+  24.2–24.95 s (`altitude`). v19's walk ran 3.1–3.8 s longer before the anchor.
+- On the quiet seeds each controller's hold p95 tracks its own floor to within a few cm
+  (tuned −0.012 to +0.07 m above it, v19 −0.035 to +0.065 m), so there the hold error is
+  mostly the estimate's offset. The floors differ by the anchor time: v19's is higher on
+  seed 2 (+0.020 to +0.025 m), seed 7 (+0.011 to +0.013) and seed 8 (+0.022 to +0.028),
+  equal on seeds 4 and 5, lower on seeds 1, 3 and 6 (−0.02 to −0.045, jump-dominated).
+- Seed 8: v19 starts its window with a larger mean bias (x −0.11 against −0.075 m,
+  z −0.096 against −0.058) and its floor is 0.022–0.028 m higher, which covers most of its
+  +0.029 to +0.037 m p95 deficit. Seed 2: the +0.024 m floor difference covers the whole
+  +0.006 to +0.019 m deficit. Seed 7: the +0.011 m covers the near tie. Seed 4: floors
+  within 0.007 m, v19 0.006–0.011 m worse, the only per-seed loss that survives.
+- Seeds 1, 3 and 6: the floors (0.3–1.1 m) are the jump; v19 holds far under them and
+  tuned PX4 sits on them. That difference is the controller's and stands.
+
+So "tuned PX4 holds tighter on seeds 2, 4 and 8" above is mostly a bias-exposure artefact
+of anchoring 3.5 s later, not a controller gap; the pooled and median numbers move by at
+most a few cm. The fix (`bias_from_anchor` in the bridge, set by `vio_at_engage` and
+`vio_at_hover`): the bias walk is held at zero until the anchor and starts there, so both
+runners meet the same bias series from the anchor on and the stream stays continuous; the
+fault schedule is unchanged. Batches flown before the fix keep their saved profile and still
+verify as flown. The 8-seed comparison is re-flown on the corrected stream for both
+controllers; the tables above stay as the record of the first protocol.
