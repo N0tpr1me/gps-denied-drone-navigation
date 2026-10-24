@@ -1,0 +1,95 @@
+# Policy v20 candidate: v19 (run 20261024-020006, the release) continued with a charge on its
+# true speed toward the wall (reward.toward_wall_vel).
+# - Gazebo seed 3 (PR #61): v19 went 0.21 m toward the wall against v10's 0.17; it follows
+#   the 47.7 s vision jump (estimate away from the wall) further than v10, in Gazebo and in
+#   the mock's replay of that flight's bridge stream.
+# - toward_wall_vel 2.0 above a 0.05 m/s deadband, clipped at 1 m/s: following a 0.3 m jump
+#   in about a second costs about 0.5 a step while it lasts, about what toward_wall 2.0
+#   charges for the 0.2 m it ends up nearer. Charging the approach, not the position, leaves
+#   the standoff alone (the mean speed is zero); a larger toward_wall moved it (v16, v17).
+# - Seeds 2, 4 and 8, where v19 lost to tuned PX4 by 2 to 22 %, are not a target: v19 holds
+#   their estimate as closely as a perfect estimate-holder would (the replays' offset floor),
+#   so the loss is in the estimate the two runners met, not the controller.
+# - Everything else is v19's.
+# Judged by a copy of eval/configs/gazebo_check.yaml holding v19 and the candidate.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v20.yaml --smoke --device cpu
+name: structure_hold_ppo_v20
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261024-020006_structure_hold_ppo_v19_s0_ef767f3/policy.pt  # v19
+  resume_std: 0.05  # as for v12 to v19: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 1000  # ~28k env-steps/s on 4 CPU cores: ~30 min plus selection, under the 1 h rule
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the Gazebo benchmark's hover; the drift needs 20 to 40 s to grow
+    reengage_rate_hz: 0.05  # a fresh 0.2 m offset about every 20 s, none in the first 2 s
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.2  # times body-rate norm, clipped at 10 rad/s (v12 to v17: 0.1), against the ring
+      pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
+      pos_scale_m: 0.5
+      toward_wall: 2.0  # times the error toward the wall clipped at 1 m (v13 to v15; v16, v17: 4.0)
+      height: 0.5  # times 1 - exp(-|height error| / 0.1 m), for the clean-estimate sag (v15)
+      height_scale_m: 0.1
+      action_band: 5.0  # times the 1 to 6 Hz rate-command power, clipped at 0.2: v18's 3.3 Hz ring
+      toward_wall_vel: 2.0  # times the true speed toward the wall above 0.05 m/s, clipped at 1
+      toward_wall_vel_deadband_mps: 0.05
+    # Extra rate-setpoint lag up to 30 ms, drawn per episode, as for v6 (the tick itself is
+    # now in the preset).
+    rate_lag_s: [0.0, 0.06]  # as v12 (v11: [0.0, 0.03])
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.1  # five times vio_default's 0.02, as for v10 and v17 (v11 to v16: 0.04)
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 250
+    select_envs: 256
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0  # a few in the 2 s smoke episodes
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

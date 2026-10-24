@@ -35,6 +35,13 @@ class RewardWeights:
     pos: float = 1.5  # times 1 - exp(-error / pos_scale_m), so at most ``pos``
     pos_scale_m: float = 1.0  # error at which the position penalty reaches 63 % of ``pos``
     toward_wall: float = 0.5  # extra, times the error toward the wall clipped at 1 m
+    # Extra on the true speed toward the wall above a deadband, clipped at 1 m/s. Off by
+    # default. A jump that moves the estimate away from the wall draws a policy that holds
+    # the estimate toward it while the jump lasts; on Gazebo seed 3 v19 went 0.21 m toward
+    # the wall that way (v10 0.17). Charging the approach, not the position, leaves the
+    # standoff alone (the mean speed is zero), unlike a larger toward_wall.
+    toward_wall_vel: float = 0.0
+    toward_wall_vel_deadband_mps: float = 0.05
     # Extra on the height error alone, times 1 - exp(-|error| / height_scale_m). Off by
     # default. Inside the 3D norm a few centimetres of height error cost almost nothing next
     # to a larger horizontal error, so the policy's thrust at zero error drifted between runs
@@ -345,6 +352,8 @@ class StructureHoldConfig:
         r = self.reward
         if not 0 < r.action_band_lo_hz < r.action_band_hi_hz or r.action_band_cap <= 0:
             raise ValueError("reward.action_band needs 0 < lo_hz < hi_hz and cap > 0")
+        if r.toward_wall_vel_deadband_mps < 0:
+            raise ValueError("reward.toward_wall_vel_deadband_mps must be >= 0")
         lo, hi = self.rate_lag_s
         if lo < 0 or lo > hi:
             raise ValueError(f"rate_lag_s: need 0 <= min <= max, got {self.rate_lag_s}")
