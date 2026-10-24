@@ -5,7 +5,8 @@ quadrotor near a wall in the simulator, on a GPS-free estimate that is noisy, la
 drops out, better than a classical controller does. This page fixes how that is measured,
 the pass rules, and the current numbers. The protocol is `eval/gate1.py`; the configs are
 `eval/configs/gate1.yaml` (nominal), `gate1_stress.yaml` (stress) and `gate1_x500.yaml` (the
-nominal test set on the PX4 Gazebo x500).
+nominal test set on the PX4 Gazebo x500); `gate1_x500_ekf_v19.yaml` and
+`gate1_x500_ekf_stress_v19.yaml` are the two sets as v19 is judged on them.
 
 It is a mock-simulator gate. The yardstick here is the cascaded PD in
 `envs/structure_hold/baseline.py`, not tuned PX4: the comparison with tuned PX4 is Gate 2,
@@ -59,16 +60,20 @@ Set on 2026-10-22, before the first scored run.
    Gate 2's target, measured here against the PD.
 4. **Crash ceiling**: the policy's crash rate pooled over the nominal cells is at most 5 %.
 5. **Stress**: rules 1 and 2 hold in every stress cell inside the envelope below, and the
-   pooled crash rate over those cells is at most 10 %.
+   pooled crash rate over those cells is at most 10 %. The long-dropout cell inside the
+   envelope stops at 3 s (since 2026-10-24, below).
 
 Gate 1 passes when all five hold.
 
-**Open question on rule 5.** Dropouts of 3 to 5 s crash the PD (49 %) about as often as v3
-(46 %): position is simply unknown for that long, and on PX4 EKF2 declares it invalid after
-5 s and the watchdog hands back. With that cell inside the envelope the pooled 10 % ceiling
-cannot be met by any controller. Proposed: judge that cell on rules 1 and 2 only and leave
-it out of the pooled ceiling, or move it outside the envelope. The rule is unchanged until
-that is decided (`docs/decisions.md`).
+**Rule 5's dropout cell, capped at 3 s (Decided 2026-10-24).** As first written, the
+envelope held dropouts of 3 to 5 s. They crash the PD about as often as the policy (v3 46 %,
+PD 49 %; v19 and the PD on the x500 about 1 episode in 10 each, below): position is simply
+unknown for that long, and on PX4 EKF2 declares it invalid after 5 s and the watchdog hands
+back. With that cell inside the envelope no controller could pass rule 5. Zain agreed on
+2026-10-24 to judge dropouts of 2 to 3 s at the same 0.05 Hz instead, and to report 3 to 5 s
+outside the envelope as a known estimator limit (`docs/decisions.md`). On the x500 through
+the fusion both dropout cells carry an accelerometer error EKF2 leaves unestimated (0.1 m/s^2,
+about half a degree of tilt), so the estimate drifts while the fix is out, as on the vehicle.
 
 ## The stress set
 
@@ -87,13 +92,22 @@ above. 3 x 512 paired episodes per cell. The knobs are in `envs/structure_hold/c
 | motor lag 80 ms | | no |
 | estimate delay 150 to 250 ms | Longer than the 50 to 150 ms v3 trained on | yes |
 | estimate delay 250 to 350 ms | | no |
-| dropouts 3 to 5 s, 0.05 Hz | Longer and more frequent dropouts | yes |
+| dropouts 2 to 3 s, 0.05 Hz | Longer and more frequent dropouts (3 to 5 s until 2026-10-24) | yes |
+| dropouts 3 to 5 s, 0.05 Hz | Past what the module is meant to ride out: EKF2 gives up at 5 s | no |
 | wall yaw moment 25 %, 50 % | Placeholder near-wall yaw moment, as a share of the 0.05 N m yaw authority at the wall in a 10 m/s wind | yes |
 | wall yaw moment 100 % | | no |
 | combined | Mass 0.8 to 1.3, inertia 0.7 to 1.5, hover error +/-10 %, motor lag 20 to 50 ms, delay 50 to 200 ms, yaw moment up to 25 % | yes |
 
 The stress scales are on the 0.8 kg placeholder airframe. The wall yaw moment is a
 placeholder model (one published data point exists); the fan rig will fit it.
+
+`eval/configs/gate1_x500_ekf_stress_v19.yaml` is the same set on the x500 through the
+EKF2-like fusion, the way Gate 1 is judged. Each cell keeps the condition it names: mass,
+inertia, hover-thrust error and motor lag as written (the x500's own motor lag is 19 ms);
+thrust/weight 1.5, which is x0.89 on the x500's 1.69 (x0.75 on the placeholder's 2.04); the
+wall yaw moment as a share of the x500's 0.185 N m yaw authority. Through the fusion a fix
+later than 150 ms is fused as if 100 ms late, as with `EKF2_EV_DELAY` set wrong. The dropout
+cells carry the 0.1 m/s^2 IMU error above.
 
 ## The x500 test set
 
@@ -132,7 +146,7 @@ by 0.4 points. At 1 m most crashes are wall contacts after an estimate jump.
 ### v3, stress: run `20261022-161518`
 
 11 of 13 envelope cells pass; the pooled crash rate is 17.7 % (PD 19.1 %), over the 10 %
-ceiling. Where v3 breaks:
+ceiling. The dropout cell then ran 3 to 5 s, inside the envelope. Where v3 breaks:
 
 | Cell | v3 p95 / crash | PD p95 / crash |
 | --- | --- | --- |
@@ -440,5 +454,48 @@ and in the 3 to 5 s cell both crash in 1 flight of 10 at half a degree of error 
 at 3 s, with half a degree, v19 passes and stays ahead of the PD; at a full degree even 3 s
 is a tie. On PX4, EKF2 gives up on the position after 5 s without aiding and the watchdog
 hands back (`SH_WD_EST_TO` 5 s), so 3 to 5 s is the stretch where the module flies on an
-estimate that is drifting fastest. The rule stays as written until Zain decides
-(`docs/decisions.md`, rule 5 row).
+estimate that is drifting fastest. Zain agreed to the cap on 2026-10-24 (`docs/decisions.md`,
+rule 5 row): the judged cell is 2 to 3 s with the 0.1 m/s^2 error, and 3 to 5 s is reported
+outside the envelope.
+
+## v19 on the stress set, x500 through the fusion: run `20261024-141925`
+
+`eval/configs/gate1_x500_ekf_stress_v19.yaml`, the held-out seeds 9001 to 9003, 3 x 512
+paired episodes per cell, the dropout cell capped at 3 s as decided. Run once, on the release.
+
+| Cell | p95 v19 / PD (m) | Change | Crash v19 / PD | Verdict |
+| --- | --- | --- | --- | --- |
+| nominal airframe | 0.24 / 0.36 | -33 % | 0.1 / 0.5 % | pass |
+| mass x0.7 | 0.24 / 0.38 | -36 % | 0.1 / 0.6 % | pass |
+| mass x1.5 | 0.24 / 0.34 | -31 % | 0.1 / 0.6 % | pass |
+| hover thrust error +/-15 % | 0.24 / 0.46 | -48 % | 0.1 / 0.5 % | pass |
+| thrust/weight 1.5 | 0.24 / 0.36 | -33 % | 0.0 / 0.5 % | pass |
+| inertia x0.5 | 0.24 / 0.36 | -33 % | 0.1 / 0.5 % | pass |
+| inertia x2 | 0.24 / 0.35 | -32 % | 0.2 / 0.5 % | pass |
+| motor lag 50 ms | 0.24 / 0.36 | -34 % | 0.0 / 0.5 % | pass |
+| estimate delay 150 to 250 ms | 0.25 / 0.37 | -33 % | 0.0 / 1.0 % | pass |
+| dropouts 2 to 3 s, 0.05 Hz, IMU error 0.1 | 0.44 / 0.48 | -9 % | 0.3 / 1.5 % | pass |
+| wall yaw moment 25 % | 0.24 / 0.36 | -33 % | 0.1 / 0.5 % | pass |
+| wall yaw moment 50 % | 0.24 / 0.36 | -33 % | 0.1 / 0.5 % | pass |
+| combined, moderate | 0.24 / 0.41 | -42 % | 0.0 / 0.6 % | pass |
+| **Pooled, envelope** | **0.26 / 0.38** | | **0.08 / 0.65 %** | **PASS, 13 of 13** |
+| motor lag 80 ms (outside) | 0.24 / 0.36 | -32 % | 0.0 / 0.5 % | pass |
+| estimate delay 250 to 350 ms (outside) | 0.27 / 0.38 | -28 % | 0.1 / 1.3 % | pass |
+| wall yaw moment 100 % (outside) | 0.24 / 0.36 | -33 % | 0.1 / 0.5 % | pass |
+| dropouts 3 to 5 s, IMU error 0.1 (outside) | 0.81 / 0.79 | +2 % | 10.9 / 9.0 % | fail |
+
+v19 passes rule 5: every envelope cell's p95 interval is below 0 and no crash interval is
+above it, and it crashes in 0.08 % of envelope episodes against the 10 % ceiling (the PD
+0.65 %). The airframe cells barely move it (p95 0.236 to 0.243 m). The PD loses most to a
+wrong hover thrust (0.46 m) and the combined cell (0.41 m). The capped dropout cell is the tightest margin, -9 %
+(interval -13 to -6 %), as on the diagnostic seeds (-10 %). Outside the envelope, 3 to 5 s
+dropouts are a tie on hold and v19 crashes slightly more than the PD (10.9 against 9.0 %,
+difference interval +0.4 to +3.6 points): once the estimate has drifted for that long
+neither controller can hold, and on PX4 the watchdog hands back at 5 s. The placeholder
+airframe's wall yaw moment model is still too small to matter at any share of the x500's yaw
+authority. The run took 48 min on 4 idle cores.
+
+**Gate 1's simulator test, status 2026-10-24: PASS.** Judged on the x500 through the
+EKF2-like fusion, v19 passes rules 1 to 4 on the nominal set (run `20261024-041240`: 6 of 6
+cells, headline -34 %, pooled crash 0.04 %) and rule 5 on the stress set (this run). Gate 1's
+other half, the interviews, is outside this page.
