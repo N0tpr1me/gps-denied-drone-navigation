@@ -4,12 +4,16 @@
 # to 2 m), on diagnostic seeds outside the held-out block: this informs the rule, it is not
 # a Gate 1 verdict. Cells: the nominal dropouts (0.2 to 3 s at 0.02 Hz), the same lengths at
 # the stress rate (0.05 Hz), the stress cell capped at 3 s (2 to 3 s at 0.05 Hz) and the
-# stress cell as written (3 to 5 s at 0.05 Hz).
+# stress cell as written (3 to 5 s at 0.05 Hz). The mock's fusion dead-reckons on the true
+# acceleration, so a dropout costs almost nothing there; the `_b01` and `_b02` cells add an
+# accelerometer error EKF2 leaves unestimated (fusion.imu_bias_mps2 0.1 and 0.2 m/s^2 per
+# axis, about 0.5 and 1 deg of tilt error), which drifts the estimate only while the fix is
+# out, as on the vehicle.
 #   python -m training.launch --config eval/configs/gate1_x500_ekf_dropout_v19.yaml --device cpu
 name: gate1_x500_ekf_dropout_v19
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
-expected_hours: 0.4  # four cells, two seeds
+expected_hours: 0.5  # ten cells, two seeds
 gpus: 1
 params:
   controllers:
@@ -60,6 +64,12 @@ params:
     - {name: drop3_005, label: "dropouts 0.2-3 s, 0.05 Hz", env: {estimate: {dropout_rate_hz: 0.05}}}
     - {name: drop2to3, label: "dropouts 2-3 s, 0.05 Hz (stress cell capped at 3 s)", env: {estimate: {dropout_min_s: 2.0, dropout_max_s: 3.0, dropout_rate_hz: 0.05}}}
     - {name: drop3to5, label: "dropouts 3-5 s, 0.05 Hz (stress cell as written)", env: {estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
+    - {name: drop_nominal_b01, label: "dropouts 0.2-3 s, 0.02 Hz, IMU error 0.1", env: {fusion: {imu_bias_mps2: 0.1}}}
+    - {name: drop2to3_b01, label: "dropouts 2-3 s, 0.05 Hz, IMU error 0.1", env: {fusion: {imu_bias_mps2: 0.1}, estimate: {dropout_min_s: 2.0, dropout_max_s: 3.0, dropout_rate_hz: 0.05}}}
+    - {name: drop3to5_b01, label: "dropouts 3-5 s, 0.05 Hz, IMU error 0.1", env: {fusion: {imu_bias_mps2: 0.1}, estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
+    - {name: drop_nominal_b02, label: "dropouts 0.2-3 s, 0.02 Hz, IMU error 0.2", env: {fusion: {imu_bias_mps2: 0.2}}}
+    - {name: drop2to3_b02, label: "dropouts 2-3 s, 0.05 Hz, IMU error 0.2", env: {fusion: {imu_bias_mps2: 0.2}, estimate: {dropout_min_s: 2.0, dropout_max_s: 3.0, dropout_rate_hz: 0.05}}}
+    - {name: drop3to5_b02, label: "dropouts 3-5 s, 0.05 Hz, IMU error 0.2", env: {fusion: {imu_bias_mps2: 0.2}, estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
 smoke:
   num_envs: 6
   bootstrap: 50
