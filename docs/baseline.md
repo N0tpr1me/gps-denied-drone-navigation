@@ -958,3 +958,11 @@ stock Land after the re-engage), against none for v10; and the p95 win is seed 1
 The local SITL image was rebuilt on v10 (headers from `main`) after this batch. For the
 next candidate: widen the ring metric (in the check and in training) to the whole
 1–6 Hz band, or penalise action rate, before another re-fly.
+
+**Decision (PR #58): v10 stays the released policy.** The module headers went back to v10
+before merge; only the results merged. v18 is the closest candidate yet (first mean p95
+win on the matched timeline, −9 to −12 %, and v12's seed 1 drift is gone), but a win on
+one seed of three with a new 3.4 Hz oscillation and a post-hold strike is not a release.
+Two lessons for the check: the 1.2–2.2 Hz ring band is too narrow (v18 moved the ring to
+3.4 Hz and scored 0 % wobble), and a candidate must beat v10 on the hold p95 per seed,
+not only on the mean.
