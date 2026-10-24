@@ -144,12 +144,14 @@ def test_smoke_run_writes_report(tmp_path):
     (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
     report = json.loads((run_dir / "report.json").read_text())
     assert [c["name"] for c in report["cells"]] == ["calm_clean", "calm", "wind4", "wind8",
-                                                    "wind8_wall", "seed1_jump"]
+                                                    "wind8_wall", "seed1_jump", "seed2_events",
+                                                    "seed3_events"]
     assert [c["name"] for c in report["reengage"]] == ["reengage", "reengage_jump"]
     assert report["reference"] == "v10" and "beats" in report["verdicts"]["v12"]
     checks = report["verdicts"]["v12"]["checks"]
     assert "ring_not_higher" in checks and "reengage_no_reengage_fail" in checks
     assert "fast_ring_not_higher" in checks and "v18" in report["verdicts"]
     assert "seed1_jump_toward_wall_ok" in checks and "seed1_jump_p95_ok" not in checks
+    assert "seed3_events_p95_not_worse" in checks and "seed2_events_toward_wall_ok" in checks
     assert not any(k.startswith("reengage_jump") for k in checks)  # not scored
     assert "| cell | controller |" in (run_dir / "report.md").read_text()

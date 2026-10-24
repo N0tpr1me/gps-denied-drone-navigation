@@ -53,6 +53,9 @@ largest true displacement along the wall normal, ``eval.metrics``) at most
 ``toward_wall_slack_m`` above the reference's, crashes no more than ``max_crash_increase``
 above. Gazebo seed 1's 1.8 m jump along the wall drew v12 0.27 to 0.31 m toward the wall and
 v10 0.03 to 0.07 m (PR #52); the pooled p95 had passed v12 because it chases jumps less.
+Each replayed seed's p95 must also not be worse than the reference's (``p95_not_worse``: the
+paired ratio's interval reaches 1 or below): v18's Gazebo win over v10 was seed 1 alone, with
+seeds 2 and 3 1 to 25 % looser (PR #58), and the pooled cells draw random fault timelines.
 
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.
@@ -453,6 +456,7 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             checks[f"{c['name']}_crash_ok"] = (d[name]["crash_rate"]
                                                <= d[ref]["crash_rate"]
                                                + rules["max_crash_increase"])
+            checks[f"{c['name']}_p95_not_worse"] = c["vs_reference"][name]["ci"][0] <= 1.0
         verdicts[name] = {"p95_ratio": cmp, "checks": checks, "beats": all(checks.values())}
     report["verdicts"] = verdicts
     report["elapsed_s"] = time.perf_counter() - t_start
