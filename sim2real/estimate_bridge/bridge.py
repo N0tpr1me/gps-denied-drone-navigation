@@ -32,6 +32,18 @@ shows the mode, so ``"engage"`` would fly it with no fault at all): the stock ru
 ``fault_anchor_alt_m`` to the hover altitude minus the hover window's 0.3 m margin
 (``ulog_checks.hover_window``), the height where its scored hover begins, as the engage is
 where the hold runner's scored hold begins.
+
+Bias from the anchor (``bias_from_anchor``): the corruptor's bias random walk runs from its
+first step, and the anchor carries the accumulated bias over for continuity, so the bias a
+runner meets in its scored window depends on how many bridge samples came before its
+anchor: the hold runner engages about 29 s after the bridge starts, the stock runner reaches
+the hover height a few seconds earlier, and on the quiet seeds the bias sets the p95 floor
+each controller sits on (the Gate 1 thread found this on the 8-seed v19 comparison, seeds
+2, 4 and 8). With ``bias_from_anchor`` the walk is held at zero before the anchor and the
+rebuilt corruptor's bias is zero at it, so from the anchor on both runners meet the same
+bias series (the seed's increments from fault clock ``fault_anchor_s`` on), and the stream
+is still continuous (0 to 0). The shipped ``vio_at_engage`` and ``vio_at_hover`` set it; old
+traces replay with the profile saved in their run folder, which does not.
 """
 
 from __future__ import annotations
@@ -105,6 +117,7 @@ class EstimateBridge:
         fault_anchor: str = "start",
         fault_anchor_s: float = 25.0,
         fault_anchor_alt_m: float | None = None,
+        bias_from_anchor: bool = False,
     ):
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
@@ -119,10 +132,15 @@ class EstimateBridge:
         self.cfg, self.dt, self.seed, self.divisor = cfg, float(dt), int(seed), int(divisor)
         self.fault_anchor, self.fault_anchor_s = fault_anchor, float(fault_anchor_s)
         self.fault_anchor_alt_m = None if fault_anchor_alt_m is None else float(fault_anchor_alt_m)
+        self.bias_from_anchor = bool(bias_from_anchor) and fault_anchor != "start"
         step_dt = self.dt * self.divisor
         if fault_anchor in ("engage", "altitude"):
-            # Same seed, same draws, no fault until the anchor rebuilds the corruptor.
+            # Same seed, same draws, no fault until the anchor rebuilds the corruptor; with
+            # bias_from_anchor no bias walk either, so the bias carried over at the anchor
+            # is zero for every anchor time (the draws are still consumed, step for step).
             pre = dataclasses.replace(cfg, fault_start_s=NEVER_S)
+            if self.bias_from_anchor:
+                pre = dataclasses.replace(pre, bias_walk_std_m_per_sqrt_s=0.0)
             self.corruptor = EstimateCorruptor(pre, 1, step_dt, self.seed)
         else:
             self.corruptor = EstimateCorruptor(cfg, 1, step_dt, self.seed)
@@ -187,7 +205,9 @@ class EstimateBridge:
         for _ in range(new.fault_start_steps):  # the draws vio_default makes before the anchor
             new.step(pos[None], vel[None])
         # Continuity: the delayed history, bias, held outputs and dropout state are the
-        # pre-engage stream's; the draws from here on are the anchored stream's.
+        # pre-engage stream's; the draws from here on are the anchored stream's. With
+        # bias_from_anchor the carried bias is zero, so the walk starts here for every
+        # anchor time; without it the pre-anchor walk (as long as the takeoff took) stays.
         new.buf_pos, new.buf_vel, new.head = old.buf_pos.copy(), old.buf_vel.copy(), old.head
         new.bias = old.bias.copy()
         new.jump_offset = old.jump_offset.copy()

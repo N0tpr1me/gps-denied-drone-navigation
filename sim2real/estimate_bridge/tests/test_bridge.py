@@ -259,6 +259,57 @@ def test_engage_anchor_keeps_the_stream_continuous_at_the_switch():
     assert int(b.corruptor.delay_steps[0]) == int(plain.corruptor.delay_steps[0]) > 0
 
 
+def test_bias_from_anchor_gives_every_anchor_time_the_same_bias_and_stays_continuous():
+    cfg = EstimateCorruptionConfig()
+    n = 2500
+    t, pos = hovering_path(n)
+
+    def bias_after_anchor(engage_at, bias_from_anchor):
+        b = EstimateBridge(cfg, DT, seed=4, fault_anchor="engage", fault_anchor_s=25.0,
+                           bias_from_anchor=bias_from_anchor)
+        trail = []
+        for i, (ti, p) in enumerate(zip(t, pos, strict=True)):
+            b.update(ti, p, engaged=i >= engage_at)
+            trail.append(b.corruptor.bias[0].copy())
+        trail = np.stack(trail)
+        return trail[:engage_at], trail[engage_at:engage_at + 1000]
+
+    before_a, a = bias_after_anchor(900, True)
+    before_b, b_ = bias_after_anchor(1400, True)
+    assert not before_a.any() and not before_b.any()  # no walk before the anchor
+    assert np.allclose(a, b_)  # the same bias series from the anchor, whenever it fires
+    assert np.abs(a).max() > 0.02  # and it does walk from there
+    _, c = bias_after_anchor(900, False)
+    _, d = bias_after_anchor(1400, False)
+    assert not np.allclose(c, d)  # the carried-over walk made them differ before the fix
+    # Continuity at the switch holds as before.
+    b = EstimateBridge(cfg, DT, seed=4, fault_anchor="engage", fault_anchor_s=25.0,
+                       bias_from_anchor=True)
+    out = run_bridge(b, t[:1000], pos[:1000], engage_at=900)
+    err = np.stack([s.est_pos - s.truth_pos for s in out])
+    assert np.abs(err[900] - err[899]).max() < 6 * cfg.pos_noise_std_m
+    # The fault schedule is untouched: same jumps and dropouts as without the option.
+    busy = dataclasses.replace(cfg, jump_rate_hz=0.2, dropout_rate_hz=0.2, dropout_max_s=1.0)
+    with_ = run_bridge(EstimateBridge(busy, DT, seed=5, fault_anchor="engage",
+                                      bias_from_anchor=True), t, pos, engage_at=1250)
+    without = run_bridge(EstimateBridge(busy, DT, seed=5, fault_anchor="engage"), t, pos,
+                         engage_at=1250)
+    assert [(s.jumped, s.dropout_started, s.stale) for s in with_] == \
+        [(s.jumped, s.dropout_started, s.stale) for s in without]
+    # "start" anchors ignore the option: there is nothing to key the walk to.
+    assert EstimateBridge(cfg, DT, seed=4, bias_from_anchor=True).bias_from_anchor is False
+
+
+def test_shipped_anchored_profiles_start_the_bias_at_the_anchor_and_old_ones_do_not():
+    for name in ("vio_at_engage", "vio_at_hover"):
+        prof = load_profile(name)
+        assert prof.bias_from_anchor is True
+        assert EstimateProfile.from_dict(prof.to_dict()).bias_from_anchor is True
+    old = {"name": "old", "fault_anchor": "engage"}  # a run folder's profile from before
+    assert EstimateProfile.from_dict(old).bias_from_anchor is False
+    assert load_profile("vio_default").bias_from_anchor is False
+
+
 def test_engage_anchor_without_engage_never_faults_and_verifies(tmp_path):
     cfg = dataclasses.replace(EstimateCorruptionConfig(), jump_rate_hz=0.5, dropout_rate_hz=0.5,
                               dropout_max_s=0.5)
