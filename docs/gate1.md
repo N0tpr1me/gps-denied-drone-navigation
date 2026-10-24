@@ -357,3 +357,29 @@ On the raw fix, 50 to 150 ms late, it fails as v10 did and worse (crash 57 % aga
 v10's 37 %): it is trained behind the fusion, which compensates the delay. Which scoring
 counts is Zain's call (the Proposed row in `docs/decisions.md`). The fused run took 26 min
 and the raw one 23 min on 4 idle cores.
+
+### On the x500, both ways: v18, runs `20261024-003735` (fused) and `20261024-010343` (raw)
+
+v18 is v17 continued with the toward-the-wall penalty back at 2.0 and the body-rate penalty
+at 0.2 (`training/configs/structure_hold_ppo_v18.yaml`, run `20261023-232144`, iteration
+12500), picked on the Gazebo-like check (`docs/gazebo_check.md`), where it was the first
+policy to pass every rule. Run once on the held-out seeds as the candidate for both Gate 1
+and the Gazebo re-fly. Configs `eval/configs/gate1_x500_ekf_v18.yaml` and
+`gate1_x500_v18.yaml`; the same held-out episodes as v10's and v17's.
+
+| Cell | Raw: p95 v18 / PD (m) | Raw: crash v18 / PD | Raw verdict | Fused: p95 v18 / PD (m) | Fused: change | Fused: crash v18 / PD | Fused verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.82 / 0.48 | 74.4 / 9.4 % | fail | 0.23 / 0.32 | -27 % | 0.0 / 2.8 % | pass |
+| 0 m/s, 2 m | 1.07 / 0.52 | 73.3 / 2.4 % | fail | 0.23 / 0.34 | -32 % | 0.0 / 0.0 % | pass |
+| 4 m/s, 1 m | 0.81 / 0.49 | 72.8 / 8.7 % | fail | 0.23 / 0.32 | -28 % | 0.0 / 3.0 % | pass |
+| 4 m/s, 2 m | 1.07 / 0.54 | 72.5 / 2.4 % | fail | 0.23 / 0.36 | -35 % | 0.0 / 0.0 % | pass |
+| 8 m/s, 1 m (headline) | 0.81 / 0.51 | 72.3 / 8.9 % | fail | 0.24 / 0.37 | -35 % | 0.0 / 2.9 % | pass (headline ok) |
+| 8 m/s, 2 m | 1.07 / 0.60 | 71.2 / 2.1 % | fail | 0.25 / 0.44 | -44 % | 0.0 / 0.0 % | pass |
+| **Pooled** | **0.94 / 0.52** | **72.7 / 5.7 %** | **FAIL, 0 of 6** | **0.24 / 0.36** | | **0.0 / 1.4 %** | **PASS, 6 of 6** |
+
+Through the fusion v18 passes as v17 did: headline -35 % (interval -37 to -33 %), no crash in
+18,432 episodes. On the raw fix it fails worse than v17 (crash 73 % against 57 %; v10 37 %).
+In Gazebo (PR #58) it held 9 to 12 % tighter than v10 on the mean but lower on one seed of
+three, with a 3.3 Hz ring, so v10 stays the release and v18 is not the Gate 1 policy of
+record either; v17 and v18 show that the fused Gate 1 is passed by this line of training.
+The fused run took 26 min and the raw one 43 min (it shared the 4 cores for 15 min).

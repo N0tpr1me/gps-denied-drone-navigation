@@ -435,3 +435,24 @@ def test_height_term_charges_height_error_alone():
     extra = reward_at(low, 0.0) - reward_at(low, 0.5)
     assert extra == pytest.approx(0.5 * (1 - math.exp(-0.5)), rel=0.05)
     assert reward_at(side, 0.0) - reward_at(side, 0.5) == pytest.approx(0.0, abs=1e-3)
+
+
+def test_action_band_term_charges_a_ring_not_a_slow_command():
+    def band_cost(freq_hz: float) -> float:
+        totals = []
+        for weight in (0.0, 1.0):  # same actions, same dynamics: the difference is the term
+            cfg = still_air(reward=RewardWeights(action_band=weight))
+            env = StructureHoldEnv(cfg, num_envs=1, seed=0)
+            total = 0.0
+            for k in range(400):
+                a = hover_action(env)
+                a[:, 0] = 0.05 * math.sin(2 * math.pi * freq_hz * k * cfg.dt)
+                _, reward, _, _ = env.step(a)
+                total += float(reward[0]) if k >= 200 else 0.0
+            totals.append(total)
+        return (totals[0] - totals[1]) / 200 / (0.05**2 / 2)  # per step, per unit power
+
+    ring, slow = band_cost(3.3), band_cost(0.3)
+    # |H|^2 of the first-order 1 to 6 Hz band: 0.49 at 3.3 Hz, 0.057 at 0.3 Hz.
+    assert ring == pytest.approx(0.49, rel=0.25)
+    assert slow == pytest.approx(0.057, rel=0.3)

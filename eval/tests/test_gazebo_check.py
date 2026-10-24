@@ -32,6 +32,18 @@ def test_band_rms_picks_out_the_wobble_band():
     assert rms[3] == pytest.approx(0.3 / np.sqrt(2), rel=0.05)
 
 
+def test_fast_ring_band_sees_v18s_ring_and_not_the_wobble_or_the_rate_loop():
+    dt = 0.012
+    t = np.arange(0, 40.0, dt)[:, None]
+    ring = 0.15 * np.sin(2 * np.pi * 3.33 * t)  # v18 in Gazebo and in the mock (PR #58)
+    wobble = 0.15 * np.sin(2 * np.pi * 1.63 * t)
+    rate_loop = 0.15 * np.sin(2 * np.pi * 10.8 * t)  # PX4's rate-loop line in Gazebo
+    rms = gazebo_check.band_rms(np.hstack([ring, wobble, rate_loop]), dt,
+                                *gazebo_check.FAST_RING_HZ)
+    assert rms[0] == pytest.approx(0.15 / np.sqrt(2), rel=0.02)
+    assert rms[1] < 0.01 and rms[2] < 0.01
+
+
 def test_paired_ratio_and_describe():
     rows_a = [{"p95_m": 0.5, "crash": False, "lift_m": 0.1, "wobble": True, "wobble_rms": 0.2}] * 8
     rows_b = [{"p95_m": 1.0, "crash": False, "lift_m": 0.3, "wobble": False, "wobble_rms": 0.0}] * 8
@@ -137,6 +149,7 @@ def test_smoke_run_writes_report(tmp_path):
     assert report["reference"] == "v10" and "beats" in report["verdicts"]["v12"]
     checks = report["verdicts"]["v12"]["checks"]
     assert "ring_not_higher" in checks and "reengage_no_reengage_fail" in checks
+    assert "fast_ring_not_higher" in checks and "v18" in report["verdicts"]
     assert "seed1_jump_toward_wall_ok" in checks and "seed1_jump_p95_ok" not in checks
     assert not any(k.startswith("reengage_jump") for k in checks)  # not scored
     assert "| cell | controller |" in (run_dir / "report.md").read_text()

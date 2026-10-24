@@ -131,7 +131,13 @@ class StructureHoldEnv:
         self.episode_step = torch.zeros(n, dtype=torch.long, device=dev)
         self.episode_time = torch.zeros(n, dtype=dt, device=dev)
         self.last_action = torch.zeros(n, NUM_ACTIONS, dtype=dt, device=dev)
-        self.rate_sp = torch.zeros(n, 3, dtype=dt, device=dev)  # lagged rate setpoint
+        # Rate commands through first-order filters at reward.action_band_hi_hz and lo_hz:
+        # their difference is the band the action_band term charges.
+        self.action_fast = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.action_slow = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.band_alpha = [cfg.dt / (cfg.dt + 1.0 / (2.0 * math.pi * f))
+                           for f in (cfg.reward.action_band_hi_hz, cfg.reward.action_band_lo_hz)]
+        self.rate_sp =torch.zeros(n, 3, dtype=dt, device=dev)  # lagged rate setpoint
         self.rate_lag_alpha = torch.ones(n, dtype=dt, device=dev)  # dt / tau, 1 = no lag
         self.obs_buf = torch.zeros(n, NUM_OBS, dtype=dt, device=dev)
         self.reward_buf = torch.zeros(n, dtype=dt, device=dev)
@@ -269,6 +275,8 @@ class StructureHoldEnv:
         self.episode_step[env_ids] = 0
         self.episode_time[env_ids] = 0.0
         self.last_action[env_ids] = 0.0
+        self.action_fast[env_ids] = 0.0
+        self.action_slow[env_ids] = 0.0
         self.rate_sp[env_ids] = 0.0
         tau = rng.uniform(*cfg.rate_lag_s, size=n)
         self.rate_lag_alpha[env_ids] = t(np.where(tau > 0, cfg.dt / np.maximum(tau, cfg.dt), 1.0))
@@ -425,6 +433,10 @@ class StructureHoldEnv:
         w = cfg.reward
         toward = (err @ self.wall_normal).clamp(0.0, 1.0)
         d_action = actions - self.last_action
+        rates = actions[:, :3]
+        self.action_fast = self.action_fast + self.band_alpha[0] * (rates - self.action_fast)
+        self.action_slow = self.action_slow + self.band_alpha[1] * (rates - self.action_slow)
+        band_power = ((self.action_fast - self.action_slow) ** 2).sum(-1)
         # Tilting past tilt_free_deg costs more the further it goes, so the policy learns to
         # stay level when its estimate is stale or jumps instead of flipping to chase it.
         over_tilt = (self.cos_tilt_free + gravity_body[:, 2]).clamp(min=0.0)
@@ -444,6 +456,7 @@ class StructureHoldEnv:
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
             - w.action_rate * (d_action**2).sum(-1)
+            - w.action_band * band_power.clamp(max=w.action_band_cap)
             - w.tilt * over_tilt
             - w.heading * (1.0 - cos_yaw)
             - w.yaw_rate * state.ang_vel[:, 2].abs().clamp(max=10.0)

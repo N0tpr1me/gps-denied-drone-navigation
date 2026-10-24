@@ -56,6 +56,15 @@ class RewardWeights:
     # Smoothness: squared change in normalised action between steps. 0.15 (was 0.05) after
     # v2 chattered between the rate limits on PX4 (docs/decisions.md, 2026-10-22).
     action_rate: float = 0.15
+    # Ring: the action_band_lo_hz to action_band_hi_hz part of the normalised rate commands
+    # (two first-order filters), squared and summed over the three axes, clipped at
+    # action_band_cap. Off by default. v16 to v18 commanded a 3.3 Hz roll and pitch ring that
+    # Gazebo flew too (PR #58); action_rate weights 3.3 Hz by (2 pi f dt)^2 ~ 0.06 and the
+    # body-rate term at 0.2 did not remove it. v18's band power is about 0.045, v10's 0.0035.
+    action_band: float = 0.0
+    action_band_lo_hz: float = 1.0
+    action_band_hi_hz: float = 6.0
+    action_band_cap: float = 0.2
     tilt: float = 2.0  # times (cos(tilt_free) - cos(tilt)) when tilted beyond tilt_free_deg
     tilt_free_deg: float = 45.0  # no tilt penalty up to here (fighting 12 m/s wind needs ~30)
     # Heading hold: the camera must stay on the structure, and a policy with no heading
@@ -333,6 +342,9 @@ class StructureHoldConfig:
             raise ValueError("max_rate_rad_s must be positive")
         if self.reengage_rate_hz < 0 or self.reengage_min_s < 0:
             raise ValueError("reengage_rate_hz and reengage_min_s must be >= 0")
+        r = self.reward
+        if not 0 < r.action_band_lo_hz < r.action_band_hi_hz or r.action_band_cap <= 0:
+            raise ValueError("reward.action_band needs 0 < lo_hz < hi_hz and cap > 0")
         lo, hi = self.rate_lag_s
         if lo < 0 or lo > hi:
             raise ValueError(f"rate_lag_s: need 0 <= min <= max, got {self.rate_lag_s}")
