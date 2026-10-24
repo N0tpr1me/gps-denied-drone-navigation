@@ -12,3 +12,6 @@ seed: 1
 fault_anchor: altitude
 fault_anchor_alt_m: null
 fault_anchor_s: 25.0
+# The bias walk starts at the anchor too: without this the bias each runner met in its
+# scored window depended on how long its takeoff took (bridge.py, "Bias from the anchor").
+bias_from_anchor: true
