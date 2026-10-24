@@ -1,0 +1,183 @@
+# The Gazebo-like check for the v18 candidate (training/configs/structure_hold_ppo_v18.yaml):
+# eval/configs/gazebo_check.yaml with v18 in place of v12 beside the reference v10.
+#   python -m training.launch --config eval/configs/gazebo_check_v18.yaml --device cpu
+# The Gazebo-like check (eval/gazebo_check.py, docs/gazebo_check.md): fly policies in the
+# mock the way the Gazebo benchmark flies them, on the gz_x500_sitl airframe (PX4's yaw torque
+# and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion
+# with its resets). A policy goes to the Mac for a Gazebo re-fly only if it beats the
+# released policy (v10) here.
+#   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
+# To judge a new policy, add it under controllers (v10 stays as the reference; v12 is here
+# for the check's fidelity: Gazebo flew both on the same fault timeline, and v12 lost there,
+# PR #52; the check must not pass it).
+name: gazebo_check_v18
+entrypoint: eval.gazebo_check
+seed: 7001  # unused: the check's seeds are params.seeds
+expected_hours: 0.75
+gpus: 1
+params:
+  controllers:
+    - name: v10
+      policy: training/policies/structure_hold_v10.onnx
+    - name: v18
+      policy: runs/20261023-232144_structure_hold_ppo_v18_s0_6faf0cf/policy.onnx  # candidate
+  # The released policy, flown in Gazebo (PR #44, #52). Before it: v6, then v9 (PR #42).
+  reference: v10
+  seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 64
+  window_s: 40.0  # lift and wobble over the last 40 s (the first 20 s hold the engage transient)
+  wobble_threshold: 0.1  # roll action 1.2-2.2 Hz rms; Gazebo wobbling 0.22-0.35, quiet 0.003-0.06
+  bootstrap: 2000
+  rules:
+    max_crash_increase: 0.01
+    clean_p95_slack_m: 0.02
+    toward_wall_slack_m: 0.05
+  base_env:
+    airframe: gz_x500_sitl
+    # The x500's props reach up to 0.40 m from its centre: rotors 0.24 to 0.26 m from
+    # the centre (airframes.py) plus the 0.14 m prop radius. Gazebo's v11 strikes began at
+    # 0.35 to 0.40 m (PR #49 seed 3). The scorer's default is a 5-inch quad's 0.25 m.
+    contact_radius_m: 0.40
+    episode_length_s: 60.0  # the benchmark's 60 s hover
+    hold_distance: 1.0  # wall1m_* scenarios
+    hold_height: 2.4  # where the module's hold point sits at the 2.5 m hover
+    start_offset_std_m: 0.0  # the module engages at the hold point
+    start_yaw_std_rad: 0.0
+    # vio_default (sim2real/estimate_bridge/profiles), stated in full so a later change of a
+    # default cannot silently move the check.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # The wall1m_* scenarios: both gusts 15 to 40 s into the hover, 1 to 2 s long. The mock
+      # draws the wind direction over the compass; Gazebo blows it into the wall.
+      num_gusts: 2
+      gust_start: [15.0, 40.0]
+      gust_duration: [1.0, 2.0]
+      turb_tau: 1.0
+  cells:
+    - name: calm_clean
+      label: "calm, clean estimate"
+      rough: false
+      env:
+        estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0,
+                   vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0,
+                   jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+        disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}
+    - name: calm
+      label: "calm, vio_default"
+      env: {disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}}
+    - name: wind4
+      label: "4 m/s, vio_default"
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}}
+    - name: wind8
+      label: "8 m/s, vio_default"
+      env: {disturbance: {mean_speed: 8.0, gust_speed: [2.0, 4.0], turb_sigma: 1.0}}
+    # As Gazebo flies it: the mean wind blows into the wall (wall1m_wind_8ms,
+    # wind_heading_deg 0; the gusts keep a random direction there too). v9 drifted up to 1 m
+    # off the hold point in one of its three 8 m/s Gazebo flights; a steady wind into the
+    # wall brings out the same slow drift in the mock (docs/gazebo_check.md).
+    - name: wind8_wall
+      label: "8 m/s into the wall, vio_default"
+      env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
+                          turb_sigma: 1.0}}
+    # Gazebo seed 1 on vio_at_engage, replayed: the bridge's own draws for that seed
+    # (sim2real/estimate_bridge, fault clock 25 s at engage) put a 1.80 m vision jump 35.14 s
+    # into the hold, nearly all of it along the wall, and a 0.66 s dropout 4.8 s later. v12
+    # drifted 0.27 to 0.31 m toward the wall on it, v10 0.03 to 0.07 m (PR #52); the jump
+    # alone does it. Random jumps and dropouts are off so the replayed ones are the only
+    # faults; noise, bias and delay stay. Scored apart from the pooled cells: mean worst
+    # toward the wall at most toward_wall_slack_m above the reference's.
+    - name: seed1_jump
+      label: "4 m/s, Gazebo seed 1's 1.8 m jump along the wall, then a dropout"
+      rough: false
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5},
+            estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}
+      events:
+        - {t_s: 35.14, jump: [-0.283, 1.775, -0.107]}
+        - {t_s: 39.94, dropout_s: 0.66, accel_bias: [-0.123, -0.067, 0.308]}
+    # The benchmark's post-hold sequence (sim2real/px4/sitl_test.py): hold, stock Position
+    # mode, re-engage with the hold point captured from the estimate then
+    # (eval.gazebo_check.fly_reengage). Scored: no crash after a re-engage whose hold point
+    # sits at least sane_m off the wall, and no more crashes in the hold than the reference.
+    - name: reengage
+      label: "4 m/s, hold / stock / re-engage, vio_default"
+      reengage: {disengage_s: 20.0, stock_s: 5.4, after_s: 14.6, sane_m: 0.6}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5,
+                          gust_start: [5.0, 35.0]}}
+    # Gazebo seed 3: a 1.4 m vision jump toward the wall shortly before the switch. EKF2
+    # resets onto it, stock Position mode moves its setpoint with the reset, and the
+    # re-engage captures a hold point at the wall; the v11 flights struck it, v10's (reset
+    # 1.3 s before the switch, not within 0.4 s of it) did not. Not scored: no controller that
+    # holds the estimate can avoid the wall from there (docs/gazebo_check.md).
+    - name: reengage_jump
+      label: "4 m/s, re-engage after a 1.4 m jump toward the wall"
+      scored: false
+      reengage: {disengage_s: 20.0, stock_s: 5.4, after_s: 14.6, sane_m: 0.6, jump_m: 1.4,
+                 jump_lead_s: [0.5, 3.0]}
+      env: {disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5,
+                          gust_start: [5.0, 35.0]}}
+  # What the policies did in Gazebo, printed beside the mock. v10 and v12: the matched fault
+  # timeline (vio_at_engage, seeds 1 to 3, PR #52; p95 over the 60 s hold, lift = the mean
+  # offset up on the estimate over the hold, toward = worst toward the wall); seed1_jump's
+  # p95 and toward are seed 1 alone, averaged over its three winds (lift: all nine flights). v6 to v9 (PR #35, #37, #42) flew the older
+  # start-keyed vio_default timeline, lift and wobble over the last 40 s. Gazebo's 4 and
+  # 8 m/s winds blow into the wall, so its 8 m/s numbers sit under both wind8 and wind8_wall.
+  gazebo_baseline: "tuned PX4 on the matched timeline (vio_at_hover, PR #52): p95 0.52 / 0.52 / 0.52 m at 0 / 4 / 8 m/s, seed 1 0.91 m"
+  gazebo:
+    v6:
+      calm_clean: {p95_m: 0.11, lift_m: 0.04, wobble: "0/1"}
+      calm: {p95_m: 0.62, lift_m: 0.21, wobble: "2/3"}
+      wind4: {p95_m: 0.64, lift_m: 0.23, wobble: "2/3"}
+      wind8: {p95_m: 0.68, lift_m: 0.32, wobble: "2/3"}
+      wind8_wall: {p95_m: 0.68, lift_m: 0.32, wobble: "2/3"}
+    v8:
+      calm_clean: {p95_m: 0.11, lift_m: -0.01, wobble: "0/1"}
+      calm: {p95_m: 0.67, lift_m: 0.39, wobble: "3/3"}
+      wind4: {p95_m: 0.68, lift_m: 0.41, wobble: "3/3"}
+      wind8: {p95_m: 0.79, lift_m: 0.48, wobble: "3/3"}
+      wind8_wall: {p95_m: 0.79, lift_m: 0.48, wobble: "3/3"}
+    v9:
+      calm_clean: {p95_m: 0.08, lift_m: 0.04, wobble: "0/1"}
+      calm: {p95_m: 0.44, lift_m: 0.06, wobble: "0/3"}
+      wind4: {p95_m: 0.49, lift_m: 0.07, wobble: "0/3"}
+      wind8: {p95_m: 0.64, lift_m: 0.06, wobble: "0/3"}
+      wind8_wall: {p95_m: 0.64, lift_m: 0.06, wobble: "0/3"}
+    v10:
+      calm_clean: {p95_m: 0.04, lift_m: 0.03, wobble: "0/1"}  # PR #44
+      calm: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.08}
+      wind4: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.07}
+      wind8: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08}
+      wind8_wall: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08}
+      seed1_jump: {p95_m: 0.43, lift_m: 0.04, wobble: "0/3", toward_m: 0.05}
+    v12:
+      calm: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.15}
+      wind4: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.15}
+      wind8: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.18}
+      wind8_wall: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.18}
+      seed1_jump: {p95_m: 0.42, lift_m: -0.02, wobble: "0/3", toward_m: 0.29}
+smoke:
+  num_envs: 4
+  bootstrap: 50
+  seeds: [7001]
+  window_s: 1.0
+  reengage_scale: 0.05  # the 40 s sequence in 2 s
+  base_env:  # replaces base_env whole (launch merges the smoke block one level deep)
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    hold_distance: 1.0
+    hold_height: 2.4
