@@ -432,6 +432,8 @@ class StructureHoldEnv:
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward
         toward = (err @ self.wall_normal).clamp(0.0, 1.0)
+        approach = ((state.vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
+            0.0, 1.0)
         d_action = actions - self.last_action
         rates = actions[:, :3]
         self.action_fast = self.action_fast + self.band_alpha[0] * (rates - self.action_fast)
@@ -450,6 +452,7 @@ class StructureHoldEnv:
             w.alive
             - w.pos * (1.0 - torch.exp(-err.norm(dim=-1) / w.pos_scale_m))
             - w.toward_wall * toward
+            - w.toward_wall_vel * approach
             - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
             - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)

@@ -456,3 +456,29 @@ def test_action_band_term_charges_a_ring_not_a_slow_command():
     # |H|^2 of the first-order 1 to 6 Hz band: 0.49 at 3.3 Hz, 0.057 at 0.3 Hz.
     assert ring == pytest.approx(0.49, rel=0.25)
     assert slow == pytest.approx(0.057, rel=0.3)
+
+
+def test_toward_wall_vel_charges_the_approach_speed_not_the_position():
+    from envs.sims import QuadState
+
+    def reward_at(speed: float, weight: float, offset: float = 0.0) -> float:
+        cfg = still_air(reward=RewardWeights(toward_wall_vel=weight,
+                                             toward_wall_vel_deadband_mps=0.05))
+        env = StructureHoldEnv(cfg, num_envs=1, seed=0)
+        st = env.sim.state
+        n = env.wall_normal.reshape(1, 3)
+        env.sim.reset(torch.arange(1), QuadState(pos=env.hold_point + offset * n,
+                                                 quat=st.quat.clone(), vel=speed * n,
+                                                 ang_vel=st.ang_vel.clone()))
+        _, reward, _, _ = env.step(hover_action(env))
+        return float(reward[0])
+
+    # Toward the wall: charged above the deadband (one step of drag and gravity aside).
+    assert reward_at(0.5, 0.0) - reward_at(0.5, 1.0) == pytest.approx(0.45, abs=0.02)
+    # Away from the wall, inside the deadband, or standing off the hold point toward the
+    # wall without moving: not charged.
+    assert reward_at(-0.5, 0.0) - reward_at(-0.5, 1.0) == pytest.approx(0.0, abs=1e-6)
+    assert reward_at(0.03, 0.0) - reward_at(0.03, 1.0) == pytest.approx(0.0, abs=1e-6)
+    assert reward_at(0.0, 0.0, 0.2) - reward_at(0.0, 1.0, 0.2) == pytest.approx(0.0, abs=1e-6)
+    with pytest.raises(ValueError, match="toward_wall_vel"):
+        StructureHoldConfig(reward=RewardWeights(toward_wall_vel_deadband_mps=-0.1))
