@@ -412,3 +412,33 @@ the policies are trained and flown behind EKF2, which takes out that delay on th
 none of them was trained on the raw fix. Gate 1 is judged through the fusion (Decided
 2026-10-24, `docs/decisions.md`), so v19 passes Gate 1's sim test; the raw-fix result stays
 as the delay stress result. The fused run took 27 min and the raw one 37 min.
+
+## Rule 5's dropout cell: what a 3 s cap would show (2026-10-24)
+
+Zain asked what happens if the long-dropout stress cell stopped at 3 s instead of running 3 to
+5 s. `eval/configs/gate1_x500_ekf_dropout_v19.yaml` flies v19 and the PD on the x500 through
+the EKF2-like fusion, under the stress set's base condition (mean wind 0 to 8 m/s, hold 1 to
+2 m), on diagnostic seeds 8001 and 8002 (2048 paired episodes per cell). It informs the rule;
+it is not a Gate 1 verdict, which stays on the held-out seeds.
+
+The first run (`20261024-132813`) passed every cell, 3 to 5 s included, with v19 at 0.24 m
+p95 and no crash. That says more about the mock than the policy: the fusion dead-reckons on
+the true acceleration, so a dropout costs it almost nothing. On the vehicle EKF2 leaves some
+accelerometer and tilt error unestimated, hidden while the fix is fused and drifting the
+estimate by half the error times the dropout's length squared once it stops.
+`fusion.imu_bias_mps2` (off by default) adds that error per vehicle while the fix is stale.
+Run `20261024-134117`, p95 v19 / PD and crash v19 / PD:
+
+| Dropouts (0.05 Hz unless marked) | No IMU error | IMU error 0.1 m/s^2 (about 0.5 deg) | IMU error 0.2 m/s^2 (about 1 deg) |
+| --- | --- | --- | --- |
+| 0.2 to 3 s, 0.02 Hz (nominal) | 0.24 / 0.35 m, 0.0 / 1.1 %: pass | 0.27 / 0.38 m, 0.1 / 1.2 %: pass | 0.34 / 0.42 m, 1.2 / 2.3 %: pass |
+| 2 to 3 s (capped at 3 s) | 0.24 / 0.35 m, 0.0 / 0.9 %: pass | 0.43 / 0.48 m, 0.5 / 1.6 %: pass (−10 %) | 0.71 / 0.68 m, 6.9 / 6.3 %: fail on hold (a tie) |
+| 3 to 5 s (as written) | 0.24 / 0.34 m, 0.0 / 0.9 %: pass | 0.79 / 0.77 m, 10.7 / 10.0 %: fail on hold (a tie) | 1.04 / 1.01 m, 33 / 32 %: fail on hold (a tie) |
+
+Once the estimate has drifted, no controller can hold the point: v19 and the PD crash alike,
+and in the 3 to 5 s cell both crash in 1 flight of 10 at half a degree of error and 1 of 3 at a full degree. Capped
+at 3 s, with half a degree, v19 passes and stays ahead of the PD; at a full degree even 3 s
+is a tie. On PX4, EKF2 gives up on the position after 5 s without aiding and the watchdog
+hands back (`SH_WD_EST_TO` 5 s), so 3 to 5 s is the stretch where the module flies on an
+estimate that is drifting fastest. The rule stays as written until Zain decides
+(`docs/decisions.md`, rule 5 row).
