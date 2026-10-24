@@ -109,8 +109,9 @@ rules; the PD is the same cascaded PD on the x500.
 `eval/configs/gate1_x500_ekf_v10.yaml` is the same set judged through the EKF2-like fusion
 (`gz_x500_sitl`'s, with EKF2's resets): the policy and the PD read the fused estimate, as the
 module reads EKF2, instead of the raw fix 50 to 150 ms late. Nothing else changes (airframe
-`gz_x500`, 10 ms tick, no PX4 filters, no lever arm). Whether Gate 1 is judged this way is
-Zain's call (`docs/decisions.md`, Proposed); both results are below.
+`gz_x500`, 10 ms tick, no PX4 filters, no lever arm). Gate 1 is judged this way since
+2026-10-24 (`docs/decisions.md`, Decided); the raw-fix set stays as a stress result, and both
+results are below.
 
 ## Current numbers
 
@@ -408,5 +409,6 @@ Through the fusion the released policy passes Gate 1: every cell, headline -34 %
 -36 to -32 %), 7 crashes in 18,432 episodes (0.04 %) against the PD's 1.4 %. On the raw fix 50 to
 150 ms late it fails like every policy since v10 (crash 62 %; v18 73 %, v17 57 %, v10 37 %):
 the policies are trained and flown behind EKF2, which takes out that delay on the drone, and
-none of them was trained on the raw fix. Which of the two scorings Gate 1 is judged on is
-the open decision in `docs/decisions.md`. The fused run took 27 min and the raw one 37 min.
+none of them was trained on the raw fix. Gate 1 is judged through the fusion (Decided
+2026-10-24, `docs/decisions.md`), so v19 passes Gate 1's sim test; the raw-fix result stays
+as the delay stress result. The fused run took 27 min and the raw one 37 min.
