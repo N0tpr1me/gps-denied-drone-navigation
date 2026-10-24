@@ -436,7 +436,7 @@ Run `20261024-134117`, p95 v19 / PD and crash v19 / PD:
 | 3 to 5 s (as written) | 0.24 / 0.34 m, 0.0 / 0.9 %: pass | 0.79 / 0.77 m, 10.7 / 10.0 %: fail on hold (a tie) | 1.04 / 1.01 m, 33 / 32 %: fail on hold (a tie) |
 
 Once the estimate has drifted, no controller can hold the point: v19 and the PD crash alike,
-and the 3 to 5 s cell alone reaches rule 5's 10 % ceiling at half a degree of error. Capped
+and in the 3 to 5 s cell both crash in 1 flight of 10 at half a degree of error and 1 of 3 at a full degree. Capped
 at 3 s, with half a degree, v19 passes and stays ahead of the PD; at a full degree even 3 s
 is a tie. On PX4, EKF2 gives up on the position after 5 s without aiding and the watchdog
 hands back (`SH_WD_EST_TO` 5 s), so 3 to 5 s is the stretch where the module flies on an
