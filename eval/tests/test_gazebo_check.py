@@ -147,8 +147,8 @@ def test_smoke_run_writes_report(tmp_path):
                                                     "wind8_wall", "seed1_jump", "seed2_events",
                                                     "seed3_events"]
     assert [c["name"] for c in report["reengage"]] == ["reengage", "reengage_jump"]
-    assert report["reference"] == "v10" and "beats" in report["verdicts"]["v12"]
-    checks = report["verdicts"]["v12"]["checks"]
+    assert report["reference"] == "v19" and "beats" in report["verdicts"]["v10"]
+    checks = report["verdicts"]["v10"]["checks"]
     assert "ring_not_higher" in checks and "reengage_no_reengage_fail" in checks
     assert "fast_ring_not_higher" in checks and "v18" in report["verdicts"]
     assert "seed1_jump_toward_wall_ok" in checks and "seed1_jump_p95_ok" not in checks

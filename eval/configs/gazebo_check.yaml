@@ -2,13 +2,14 @@
 # mock the way the Gazebo benchmark flies them, on the gz_x500_sitl airframe (PX4's yaw torque
 # and gyro filters, the 83 Hz module tick, the bridge's 0.24 m lever arm, EKF2-like fusion
 # with its resets). A policy goes to the Mac for a Gazebo re-fly only if it beats the
-# released policy (v10) here.
+# released policy (v19 since PR #61; v10 before it) here.
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu
-# To judge a new policy, add it under controllers (v10 stays as the reference; v12 and v18
-# are here for the check's fidelity: Gazebo flew them on v10's fault timeline and neither
-# was released, v12 for its drift toward the wall (PR #52), v18 for a 3.3 Hz ring and a win
-# on one seed of three (PR #58); the check must pass neither).
+# To judge a new policy, add it under controllers (v19 stays as the reference; v10 and v18
+# are here for the check's fidelity: Gazebo flew them on the same fault timeline and v19
+# beat both, v10 by 12 to 16 % hold p95 and v18 by 3 % with its 3.3 Hz ring gone (PR #61);
+# the check must pass neither. Run 20261024-032135 with reference v10 failed v12 and v18,
+# the two candidates Gazebo did not release, and run 20261024-024323 passed v19.)
 name: gazebo_check
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
@@ -16,14 +17,14 @@ expected_hours: 0.9  # three controllers, eight hold cells, two re-engage cells
 gpus: 1
 params:
   controllers:
+    - name: v19
+      policy: training/policies/structure_hold_v19.onnx
     - name: v10
       policy: training/policies/structure_hold_v10.onnx
-    - name: v12
-      policy: training/policies/structure_hold_v12.onnx
     - name: v18
       policy: training/policies/structure_hold_v18.onnx
-  # The released policy, flown in Gazebo (PR #44, #52). Before it: v6, then v9 (PR #42).
-  reference: v10
+  # The released policy, flown in Gazebo (PR #61). Before it: v6, v9 (PR #42), v10 (PR #44).
+  reference: v19
   seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 64
   window_s: 40.0  # lift and wobble over the last 40 s (the first 20 s hold the engage transient)
@@ -183,11 +184,11 @@ params:
     v10:
       calm_clean: {p95_m: 0.04, lift_m: 0.03, wobble: "0/1"}  # PR #44
       # fast_ring: the larger of roll and pitch rate setpoint 2.2-5 Hz rms over all 9
-      # matched-timeline flights (PR #58), rad/s
-      calm: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.023}
-      wind4: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.07, fast_ring: 0.023}
-      wind8: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.023}
-      wind8_wall: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.023}
+      # matched-timeline flights, one script for v10, v18 and v19 (PR #61), rad/s
+      calm: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.028}
+      wind4: {p95_m: 0.33, lift_m: 0.04, wobble: "0/3", toward_m: 0.07, fast_ring: 0.028}
+      wind8: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.028}
+      wind8_wall: {p95_m: 0.35, lift_m: 0.04, wobble: "0/3", toward_m: 0.08, fast_ring: 0.028}
       seed1_jump: {p95_m: 0.43, lift_m: 0.04, wobble: "0/3", toward_m: 0.05}
       seed2_events: {p95_m: 0.31, lift_m: 0.04, wobble: "0/3", toward_m: 0.00}
       seed3_events: {p95_m: 0.26, lift_m: 0.04, wobble: "0/3", toward_m: 0.17}
@@ -198,13 +199,21 @@ params:
       wind8_wall: {p95_m: 0.35, lift_m: -0.02, wobble: "0/3", toward_m: 0.18, fast_ring: 0.036}
       seed1_jump: {p95_m: 0.42, lift_m: -0.02, wobble: "0/3", toward_m: 0.29}
     v18:  # PR #58, matched timeline; lift = offset up on the estimate
-      calm: {p95_m: 0.29, lift_m: -0.02, wobble: "0/3", toward_m: 0.08, fast_ring: 0.118}
-      wind4: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.09, fast_ring: 0.118}
-      wind8: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.118}
-      wind8_wall: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.118}
+      calm: {p95_m: 0.29, lift_m: -0.02, wobble: "0/3", toward_m: 0.08, fast_ring: 0.119}
+      wind4: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.09, fast_ring: 0.119}
+      wind8: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.119}
+      wind8_wall: {p95_m: 0.30, lift_m: -0.02, wobble: "0/3", toward_m: 0.13, fast_ring: 0.119}
       seed1_jump: {p95_m: 0.26, lift_m: -0.02, wobble: "0/3", toward_m: 0.07}
       seed2_events: {p95_m: 0.34, lift_m: -0.02, wobble: "0/3", toward_m: 0.00}
       seed3_events: {p95_m: 0.29, lift_m: -0.02, wobble: "0/3", toward_m: 0.23}
+    v19:  # PR #61, matched timeline (no offset reported)
+      calm: {p95_m: 0.28, wobble: "0/3", toward_m: 0.07, fast_ring: 0.010}
+      wind4: {p95_m: 0.29, wobble: "0/3", toward_m: 0.07, fast_ring: 0.010}
+      wind8: {p95_m: 0.30, wobble: "0/3", toward_m: 0.09, fast_ring: 0.010}
+      wind8_wall: {p95_m: 0.30, wobble: "0/3", toward_m: 0.09, fast_ring: 0.010}
+      seed1_jump: {p95_m: 0.30, wobble: "0/3", toward_m: 0.02}
+      seed2_events: {p95_m: 0.32, wobble: "0/3", toward_m: 0.00}
+      seed3_events: {p95_m: 0.24, wobble: "0/3", toward_m: 0.21}
 smoke:
   num_envs: 4
   bootstrap: 50

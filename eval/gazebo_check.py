@@ -536,7 +536,8 @@ def markdown(report: dict[str, Any]) -> str:
             g = (gz.get(name) or {}).get(c["name"])
             toward = f"{g['toward_m']:.2f}" if g and "toward_m" in g else "-"
             fast = f"{g['fast_ring']:.3f}" if g and "fast_ring" in g else "-"
-            gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {g.get('lift_m', float('nan')):+.2f} / "
+            lift = f"{g['lift_m']:+.2f}" if g and "lift_m" in g else "-"
+            gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {lift} / "
                     f"{g.get('wobble', '-')} / {toward} / {fast}" if g else "-")
             lines.append(f"| {c['label']} | {name} | {d['crash_rate']:.1%} | "
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
