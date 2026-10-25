@@ -35,6 +35,19 @@ class RewardWeights:
     pos: float = 1.5  # times 1 - exp(-error / pos_scale_m), so at most ``pos``
     pos_scale_m: float = 1.0  # error at which the position penalty reaches 63 % of ``pos``
     toward_wall: float = 0.5  # extra, times the error toward the wall clipped at 1 m
+    # Extra on the true speed toward the wall above a deadband, clipped at 1 m/s. Off by
+    # default. A jump that moves the estimate away from the wall draws a policy that holds
+    # the estimate toward it while the jump lasts; on Gazebo seed 3 v19 went 0.21 m toward
+    # the wall that way (v10 0.17). Charging the approach, not the position, leaves the
+    # standoff alone (the mean speed is zero), unlike a larger toward_wall.
+    toward_wall_vel: float = 0.0
+    toward_wall_vel_deadband_mps: float = 0.05
+    # Extra on the height error alone, times 1 - exp(-|error| / height_scale_m). Off by
+    # default. Inside the 3D norm a few centimetres of height error cost almost nothing next
+    # to a larger horizontal error, so the policy's thrust at zero error drifted between runs
+    # and v13 settled 0.05 m below the hold point on a clean estimate (docs/gazebo_check.md).
+    height: float = 0.0
+    height_scale_m: float = 0.1
     vel: float = 0.05  # times true speed clipped at 5 m/s
     # Extra speed penalty while the estimate is stale (a dropout): the policy cannot know
     # where it is, so moving fast on a frozen estimate is how it leaves the 3 m box. Off by
@@ -50,6 +63,15 @@ class RewardWeights:
     # Smoothness: squared change in normalised action between steps. 0.15 (was 0.05) after
     # v2 chattered between the rate limits on PX4 (docs/decisions.md, 2026-10-22).
     action_rate: float = 0.15
+    # Ring: the action_band_lo_hz to action_band_hi_hz part of the normalised rate commands
+    # (two first-order filters), squared and summed over the three axes, clipped at
+    # action_band_cap. Off by default. v16 to v18 commanded a 3.3 Hz roll and pitch ring that
+    # Gazebo flew too (PR #58); action_rate weights 3.3 Hz by (2 pi f dt)^2 ~ 0.06 and the
+    # body-rate term at 0.2 did not remove it. v18's band power is about 0.045, v10's 0.0035.
+    action_band: float = 0.0
+    action_band_lo_hz: float = 1.0
+    action_band_hi_hz: float = 6.0
+    action_band_cap: float = 0.2
     tilt: float = 2.0  # times (cos(tilt_free) - cos(tilt)) when tilted beyond tilt_free_deg
     tilt_free_deg: float = 45.0  # no tilt penalty up to here (fighting 12 m/s wind needs ~30)
     # Heading hold: the camera must stay on the structure, and a policy with no heading
@@ -283,6 +305,11 @@ class StructureHoldConfig:
     hold_height: tuple[float, float] = (2.0, 2.0)  # m above the origin
     start_offset_std_m: float = 0.2  # start position scatter around the hold point
     start_yaw_std_rad: float = 0.2  # start heading scatter about facing the wall (+x)
+    # Mid-episode re-engages, for training: at this rate per second the hold point moves to
+    # the episode's own plus a fresh start_offset_std_m scatter, as if the module were
+    # engaged again there (env.StructureHoldEnv._reengage). 0, the default, is off.
+    reengage_rate_hz: float = 0.0
+    reengage_min_s: float = 2.0  # none in an episode's first seconds (its start is one)
     # Action 1.0 = this body rate. 2 rad/s: on PX4 dynamics a policy trained with 6 rad/s
     # banged its roll and pitch commands between the limits and tipped over through the rate
     # loop's lag; the module flew it once it clamped the commands to 1 to 2 rad/s.
@@ -320,6 +347,13 @@ class StructureHoldConfig:
             raise ValueError("hold_distance must start outside the contact radius")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
+        if self.reengage_rate_hz < 0 or self.reengage_min_s < 0:
+            raise ValueError("reengage_rate_hz and reengage_min_s must be >= 0")
+        r = self.reward
+        if not 0 < r.action_band_lo_hz < r.action_band_hi_hz or r.action_band_cap <= 0:
+            raise ValueError("reward.action_band needs 0 < lo_hz < hi_hz and cap > 0")
+        if r.toward_wall_vel_deadband_mps < 0:
+            raise ValueError("reward.toward_wall_vel_deadband_mps must be >= 0")
         lo, hi = self.rate_lag_s
         if lo < 0 or lo > hi:
             raise ValueError(f"rate_lag_s: need 0 <= min <= max, got {self.rate_lag_s}")

@@ -66,7 +66,8 @@ and `ekf.json`.
 Profile keys: `name`, `seed`, `divisor` (corruptor every N-th 50 Hz sample), `estimate`
 (any `EstimateCorruptionConfig` key, or `clean`), `fault_anchor` (`start`, the default,
 `engage` or `altitude`), `fault_anchor_s` (25.0) and `fault_anchor_alt_m` (the `altitude`
-anchor's height; `null` lets the runner fill it from the scenario).
+anchor's height; `null` lets the runner fill it from the scenario) and `bias_from_anchor`
+(false; true holds the bias walk at zero until the anchor).
 
 Fault anchor. With `start` the fault clock runs from the bridge's first sample, so where a
 jump or dropout lands relative to the hold depends on how long PX4 took to arm and take
@@ -92,6 +93,15 @@ where the scored hover begins. The two anchors differ by the hold runner's settl
 between reaching altitude and engaging (a few seconds); the bridge log says which fired
 and `verify_trace` replays either from the trace. Pass `-- --profile vio_at_hover` to the
 stock runner's `run_baseline` for the tuned-PX4 side of a matched comparison.
+Both shipped anchored profiles also set `bias_from_anchor`: the corruptor's bias walk runs
+from its first step and the anchor carried the accumulated bias over, so the bias a runner
+met in its scored window depended on how long its takeoff took (the hold runner engages
+about 29 s after the bridge starts, the stock runner reaches the hover height a few seconds
+earlier), and on quiet seeds that bias is the p95 floor a controller sits on. With the key
+the walk is zero before the anchor and starts there, so both runners meet the same bias
+series from it and the stream stays continuous. Batches flown before 2026-10-24 (v10, v12,
+v18, v19 seeds 1–8 and the tuned 8-seed set) carried the takeoff bias; their run folders'
+`estimate_config.yaml` lacks the key, so `verify_trace` still replays them as flown.
 
 ## Notes
 

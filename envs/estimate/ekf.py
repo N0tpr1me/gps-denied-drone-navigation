@@ -14,6 +14,12 @@ to what shapes the module's input, per axis and batched on tensors:
   is stale (dropouts), so the filter dead-reckons on the IMU;
 - process noise ``accel_noise_mps2`` (``EKF2_ACC_NOISE``) and accelerometer noise
   ``imu_noise_mps2`` on the true acceleration;
+- optionally a constant accelerometer error per vehicle, ``imu_bias_mps2`` (the standard
+  deviation per axis, drawn at each reset), added while the fix is stale. It stands in for
+  what EKF2's bias and attitude states leave unestimated (a 0.5 deg tilt error is 0.09 m/s^2
+  sideways): while the fix is fused EKF2 absorbs it, so it only shows in a dropout, as a
+  drift of half the error times the dropout's length squared. Off by default: without it the
+  filter dead-reckons on the true acceleration and a dropout costs almost nothing;
 - EKF2's output predictor: the current state is the IMU propagated forward from the delayed
   horizon, pulled toward it with time constant ``output_tau_s`` (``EKF2_TAU_POS`` /
   ``EKF2_TAU_VEL``).
@@ -57,6 +63,7 @@ class FusionConfig:
     gate_sd: float = 5.0  # EKF2_EV_GATE
     accel_noise_mps2: float = 0.35  # EKF2_ACC_NOISE
     imu_noise_mps2: float = 0.05  # white noise on the true acceleration
+    imu_bias_mps2: float = 0.0  # constant per-vehicle accelerometer error, std per axis
     output_tau_s: float = 0.25  # EKF2_TAU_POS, EKF2_TAU_VEL
     resets: bool = False  # EKF2's resets to the fix (module docstring)
     stop_after_s: float = 0.4  # 2 x EV_MAX_INTERVAL
@@ -68,7 +75,7 @@ class FusionConfig:
                      "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"fusion {name} must be positive")
-        for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2"):
+        for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2", "imu_bias_mps2"):
             if getattr(self, name) < 0:
                 raise ValueError(f"fusion {name} must be >= 0")
 
@@ -109,6 +116,7 @@ class TorchFusion:
         # resets so far (xy_reset_counter) and the step of the last one (delta_xy).
         self.xy_reset_count = torch.zeros(n, dtype=torch.long, device=self.device)
         self.xy_reset_step = z(n, 3)
+        self.imu_bias = z(n, 3)
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
     def reset(self, env_ids: Any, pos: torch.Tensor, vel: torch.Tensor) -> None:
@@ -123,6 +131,9 @@ class TorchFusion:
         self.no_fix_s[ids] = 0.0
         self.since_fuse[ids] = 0.0
         self.stopped[ids] = False
+        if self.cfg.imu_bias_mps2 > 0:  # no draw when off, so other draws stay as they were
+            self.imu_bias[ids] = self.cfg.imu_bias_mps2 * torch.randn(
+                pos.shape[0], 3, generator=self.gen, device=self.device, dtype=self.dtype)
 
     def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor) -> torch.Tensor:
         """One scalar-per-axis measurement of position (``h_pos``) or velocity; returns which
@@ -175,6 +186,7 @@ class TorchFusion:
         cfg, dt = self.cfg, self.dt
         accel = torch.nan_to_num(accel) + cfg.imu_noise_mps2 * torch.randn(
             self.n, 3, generator=self.gen, device=self.device, dtype=self.dtype)
+        accel = accel + self.imu_bias * (~fresh)[:, None]  # EKF2 absorbs it while aided
         self.acc = torch.cat([self.acc[1:], accel[None]], 0)
         a_d = self.acc[0]  # the IMU sample at the delayed horizon
         self.p_d = self.p_d + self.v_d * dt + 0.5 * a_d * dt * dt

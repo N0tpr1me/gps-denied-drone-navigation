@@ -7,6 +7,8 @@
     estimate: {...}         # EstimateCorruptionConfig keys; "clean" for no corruption
     fault_anchor: start     # or "engage": fault clock keyed to the first Structure Hold
     fault_anchor_s: 25.0    #   engage, at this fault-clock value (bridge.py docstring);
+    bias_from_anchor: false # true: bias walk held at zero until the anchor, so both runners
+                            #   meet the same bias from it (bridge.py, "Bias from the anchor")
     fault_anchor_alt_m: null  # or "altitude": keyed to reaching this height above the
                             #   first sample (null: the stock runner fills it from the
                             #   scenario's hover altitude)
@@ -45,6 +47,7 @@ class EstimateProfile:
     fault_anchor: str = "start"
     fault_anchor_s: float = 25.0
     fault_anchor_alt_m: float | None = None  # "altitude" anchor; None until a runner sets it
+    bias_from_anchor: bool = False  # bias walk starts at the anchor (bridge.py docstring)
 
     def __post_init__(self) -> None:
         if self.fault_anchor not in FAULT_ANCHORS:
@@ -67,7 +70,7 @@ class EstimateProfile:
     def from_dict(cls, d: dict[str, Any]) -> EstimateProfile:
         d = dict(d)
         unknown = set(d) - {"name", "seed", "divisor", "estimate", "fault_anchor",
-                            "fault_anchor_s", "fault_anchor_alt_m"}
+                            "fault_anchor_s", "fault_anchor_alt_m", "bias_from_anchor"}
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         if "name" not in d:
@@ -86,7 +89,8 @@ class EstimateProfile:
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
                    fault_anchor_s=float(d.get("fault_anchor_s", 25.0)),
-                   fault_anchor_alt_m=None if alt is None else float(alt))
+                   fault_anchor_alt_m=None if alt is None else float(alt),
+                   bias_from_anchor=bool(d.get("bias_from_anchor", False)))
 
     def with_seed(self, seed: int) -> EstimateProfile:
         """The same profile with another seed (fault anchor and everything else kept)."""
@@ -105,13 +109,15 @@ class EstimateProfile:
         return {"name": self.name, "seed": self.seed, "divisor": self.divisor,
                 "estimate": {k: v for k, v in self.estimate.__dict__.items()},
                 "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s,
-                "fault_anchor_alt_m": self.fault_anchor_alt_m}
+                "fault_anchor_alt_m": self.fault_anchor_alt_m,
+                "bias_from_anchor": self.bias_from_anchor}
 
     def bridge(self, dt: float | None = None, divisor: int | None = None) -> EstimateBridge:
         """The bridge this profile describes (``dt`` / ``divisor`` overrides for replays)."""
         return EstimateBridge(self.estimate, self.dt if dt is None else dt, self.seed,
                               self.divisor if divisor is None else divisor,
-                              self.fault_anchor, self.fault_anchor_s, self.fault_anchor_alt_m)
+                              self.fault_anchor, self.fault_anchor_s, self.fault_anchor_alt_m,
+                              self.bias_from_anchor)
 
 
 def load_profile(path: str | Path) -> EstimateProfile:

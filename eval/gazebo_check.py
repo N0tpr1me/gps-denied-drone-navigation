@@ -30,6 +30,11 @@ It must also ring no more than the reference: the median of the roll action's 1.
 rms over the rough cells at most ``ring_slack`` above the reference's. The thresholded wobble
 rate misses a ring that is still well under the threshold: v11 sat 17 % above v10 on it in
 every rough cell while both scored 0 % wobble, and v11 then rang at 1.7 Hz in Gazebo (PR #49).
+Above that band, ``fast_ring_rms`` is the larger of the roll and pitch rate commands' 2.2 to
+6 Hz rms (rad/s); its median over the rough cells must be at most ``fast_ring_slack`` above
+the reference's. v18 passed the 1.2 to 2.2 Hz rule and rang at 3.3 Hz in all 9 Gazebo
+flights, commanded (PR #58): 2.2 to 5 Hz rate setpoint rms 0.118 rad/s against v10's 0.023
+in Gazebo, 0.124 against 0.016 here.
 
 Cells with a ``reengage`` block fly the benchmark's post-hold sequence
 (``sim2real/px4/sitl_test.py``) instead: hold, a switch to stock Position mode, a re-engage
@@ -48,6 +53,16 @@ largest true displacement along the wall normal, ``eval.metrics``) at most
 ``toward_wall_slack_m`` above the reference's, crashes no more than ``max_crash_increase``
 above. Gazebo seed 1's 1.8 m jump along the wall drew v12 0.27 to 0.31 m toward the wall and
 v10 0.03 to 0.07 m (PR #52); the pooled p95 had passed v12 because it chases jumps less.
+Each replayed seed's p95 must also not be worse than the reference's (``p95_not_worse``: the
+paired ratio's interval reaches 1 or below): v18's Gazebo win over v10 was seed 1 alone, with
+seeds 2 and 3 1 to 25 % looser (PR #58), and the pooled cells draw random fault timelines.
+A cell with ``bridge`` (``{seed, profile, engage_s}``) replays the flight's whole fault stream
+instead (``bridge_stream``): the bridge's corruptor run offline with that seed gives the
+position offset it added at every step of the hold (its slow bias walk as well as the jumps),
+its dropouts and its delay; the env's own bias walk, jumps and dropouts are off and its delay is
+the bridge's. The jumps alone left out seed 3's bias, 0.05 to 0.10 m toward the wall all hold,
+which stands every controller back before the jumps: v10's replayed p95 there was 0.36 m
+against Gazebo's 0.26, and 0.26 with the stream.
 
 Outputs: ``metrics.jsonl`` (one row per episode), ``report.json``, ``report.md``,
 ``summary.json``.
@@ -77,8 +92,12 @@ DEFAULT_RULES = {
     "max_crash_increase": 0.01,
     "clean_p95_slack_m": 0.02,
     "ring_slack": 0.05,  # median 1.2-2.2 Hz roll rms at most 5 % above the reference's
+    "fast_ring_slack": 0.25,  # median 2.2-6 Hz roll/pitch rate rms at most 25 % above
     "toward_wall_slack_m": 0.05,  # replay cells: mean worst toward the wall
 }
+
+
+FAST_RING_HZ = (2.2, 6.0)  # band of ``fast_ring_rms``, above the wobble's 1.2 to 2.2 Hz
 
 
 def band_rms(x: np.ndarray, dt: float, lo: float = 1.2, hi: float = 2.2) -> np.ndarray:
@@ -105,11 +124,62 @@ def apply_event(env: StructureHoldEnv, event: dict[str, Any]) -> None:
                                               device=est.dropout_bias.device)
 
 
+def bridge_stream(spec: dict[str, Any], episode_s: float, dt: float) -> dict[str, Any]:
+    """One Gazebo flight's estimate faults from the bridge's corruptor, run offline with the
+    flight's seed and profile (``sim2real.estimate_bridge``), engaged ``engage_s`` after the
+    bridge's first sample as the benchmark engages (28 s: the hold runner's anchor in all 24
+    v19 flights of PR #62, 27.98 to 28.01 s). With the profile's ``bias_from_anchor`` (the
+    shipped ``vio_at_engage`` sets it, PR #65) the bias walk starts at the engage, so the
+    stream from there does not depend on ``engage_s``; ``bias_from_anchor: false`` in the spec
+    replays flights flown before it, whose walk ran from the first sample and so carried the
+    takeoff's bias into the hold. Returns ``offsets`` (steps, 3), the position offset (bias walk
+    plus jump offsets, ENU) at each env step of the hold; ``events``, its dropouts as
+    ``apply_event`` takes them; ``delay_s``. The corruption does not depend on where the drone
+    is, so every controller flown on that seed got this stream."""
+    from sim2real.estimate_bridge.bridge import EstimateBridge
+    from sim2real.estimate_bridge.config import load_profile
+
+    prof = load_profile(spec.get("profile", "vio_at_engage"))
+    engage_s = float(spec.get("engage_s", 28.0))
+    b = EstimateBridge(prof.estimate, prof.dt, int(spec["seed"]), prof.divisor,
+                       prof.fault_anchor, prof.fault_anchor_s,
+                       bias_from_anchor=bool(spec.get("bias_from_anchor", prof.bias_from_anchor)))
+    pos = np.zeros(3)
+    ts: list[float] = []
+    off: list[np.ndarray] = []
+    events: list[dict[str, Any]] = []
+    for k in range(int(round((engage_s + episode_s + 1.0) / prof.dt))):
+        t = k * prof.dt
+        s = b.update(t, pos, engaged=t >= engage_s)
+        if s is None or t < engage_s:
+            continue
+        c = b.corruptor
+        ts.append(t - engage_s)
+        off.append(np.asarray(c.bias[0]) + np.asarray(c.jump_offset[0]))
+        if s.dropout_started:
+            events.append({"t_s": t - engage_s, "dropout_s": (int(c.dropout_left[0]) + 1) * c.dt,
+                           "accel_bias": np.asarray(c.dropout_bias[0]).tolist()})
+    # Each env step takes the bridge's last sample at or before it (a jump stays a step).
+    k = np.searchsorted(ts, np.arange(int(round(episode_s / dt))) * dt + 1e-9, side="right") - 1
+    return {"offsets": np.asarray(off)[np.clip(k, 0, len(off) - 1)], "events": events,
+            "delay_s": float(b.corruptor.delay_steps[0]) * b.corruptor.dt}
+
+
+def bridge_env(stream: dict[str, Any]) -> dict[str, Any]:
+    """Env overrides for a ``bridge_stream`` replay: no faults of the env's own (the offsets
+    carry the bias walk), the bridge's delay, room for a jump in the bias."""
+    d = stream["delay_s"]
+    return {"estimate": {"bias_walk_std_m_per_sqrt_s": 0.0, "bias_max_m": 10.0,
+                         "jump_rate_hz": 0.0, "dropout_rate_hz": 0.0,
+                         "delay_min_s": d, "delay_max_s": d}}
+
+
 def fly(env: StructureHoldEnv, controller: Any, window_s: float,
-        wobble_threshold: float, events: list[dict[str, Any]] | None = None
-        ) -> list[dict[str, Any]]:
+        wobble_threshold: float, events: list[dict[str, Any]] | None = None,
+        offsets: np.ndarray | None = None) -> list[dict[str, Any]]:
     """Fly each env's first episode; one row per env. ``events`` start scripted estimate
-    faults (``apply_event``) at their ``t_s``, the same moment in every env."""
+    faults (``apply_event``) at their ``t_s``, the same moment in every env; ``offsets``
+    (steps, 3) set the estimate's position bias at every step (``bridge_stream``)."""
     cfg, n, steps, dt = env.cfg, env.num_envs, env.max_episode_length, env.dt
     at: dict[int, list[dict[str, Any]]] = {}
     for e in events or []:
@@ -124,6 +194,10 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     reason = np.full(n, TIMEOUT, dtype=np.int64)
     obs, _ = env.get_observations()
     for k in range(steps):
+        if offsets is not None:  # the corruptor replaces its bias tensor every step
+            bias = env.estimator.bias
+            bias[:] = torch.as_tensor(offsets[min(k, len(offsets) - 1)], dtype=bias.dtype,
+                                      device=bias.device)
         for e in at.get(k, []):
             apply_event(env, e)
         a = controller(obs)
@@ -144,9 +218,13 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
     w0 = max(0, steps - int(round(window_s / dt)))
     full = end == steps
     wob = np.full(n, np.nan)
+    fast = np.full(n, np.nan)
     lift = np.full(n, np.nan)
     if full.any():
         wob[full] = band_rms(act[w0:, full, 0].astype(np.float64), dt)
+        rates = act[w0:, full, :2].astype(np.float64) * cfg.max_rate_rad_s
+        fast[full] = np.maximum(band_rms(rates[:, :, 0], dt, *FAST_RING_HZ),
+                                band_rms(rates[:, :, 1], dt, *FAST_RING_HZ))
         lift[full] = est_z[w0:, full].mean(0)
     surface = Surface(point=np.zeros(3), normal=np.array([1.0, 0.0, 0.0]))
     rows = []
@@ -157,7 +235,8 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
                                "reason": TERM_REASONS[int(reason[i])]}
         if full[i]:
             row.update({"lift_m": float(lift[i]), "wobble_rms": float(wob[i]),
-                        "wobble": bool(wob[i] > wobble_threshold)})
+                        "wobble": bool(wob[i] > wobble_threshold),
+                        "fast_ring_rms": float(fast[i])})
         if length >= 2:
             t = np.arange(length + 1) * dt
             trace = Trace(t=t, pos=pos[: length + 1, i].astype(np.float64), pos_sp=hold[i],
@@ -322,6 +401,8 @@ def describe(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "lift_m_mean": float(np.mean(_col(full, "lift_m"))) if full else float("nan"),
         "wobble_rate": float(np.mean(_col(full, "wobble"))) if full else float("nan"),
         "wobble_rms_median": float(np.median(_col(full, "wobble_rms"))) if full else float("nan"),
+        "fast_ring_median": (float(np.median(_col(full, "fast_ring_rms"))) if full
+                             else float("nan")),
     }
 
 
@@ -370,13 +451,20 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             report["reengage"].append(run_reengage_cell(p, cell, names, factories, seeds,
                                                         num_envs, scale, device, writer))
             continue
-        env_cfg = StructureHoldConfig.from_dict(merge(p.get("base_env") or {}, cell.get("env")))
+        env_over = merge(p.get("base_env") or {}, cell.get("env"))
+        events, offsets = list(cell.get("events") or []), None
+        if cell.get("bridge"):
+            c0 = StructureHoldConfig.from_dict(env_over)
+            stream = bridge_stream(cell["bridge"], c0.episode_length_s, c0.dt)
+            env_over = merge(env_over, bridge_env(stream))
+            events, offsets = events + stream["events"], stream["offsets"]
+        env_cfg = StructureHoldConfig.from_dict(env_over)
         rows: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
         for seed in seeds:
             for name in names:
                 env = StructureHoldEnv(env_cfg, num_envs, seed=seed, device=device)
                 t0 = time.perf_counter()
-                r = fly(env, factories[name](env), window_s, thr, cell.get("events"))
+                r = fly(env, factories[name](env), window_s, thr, events, offsets)
                 for row in r:
                     writer.metric(seed, cell=cell["name"], controller=name, **row)
                 rows[name].extend(r)
@@ -390,7 +478,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
         report["cells"].append({
             "name": cell["name"], "label": cell.get("label", cell["name"]),
             "rough": bool(cell.get("rough", True)), "env": cell.get("env") or {},
-            "replay": bool(cell.get("events")), "scored": bool(cell.get("scored", True)),
+            "replay": bool(cell.get("events") or cell.get("bridge")),
+            "scored": bool(cell.get("scored", True)),
             "controllers": {name: describe(rows[name]) for name in names},
             "vs_reference": {name: paired_p95_ratio(rows[name], rows[ref], rng, n_boot)
                              for name in names if name != ref},
@@ -415,6 +504,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             "wobble_not_higher": pa["wobble_rate"] <= pr["wobble_rate"],
             "ring_not_higher": (pa["wobble_rms_median"]
                                 <= pr["wobble_rms_median"] * (1.0 + rules["ring_slack"])),
+            "fast_ring_not_higher": (pa["fast_ring_median"]
+                                     <= pr["fast_ring_median"] * (1.0 + rules["fast_ring_slack"])),
             "crash_ok": pa["crash_rate"] <= pr["crash_rate"] + rules["max_crash_increase"],
         }
         for c in [c for c in report["reengage"] if c["scored"]]:
@@ -435,6 +526,7 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
             checks[f"{c['name']}_crash_ok"] = (d[name]["crash_rate"]
                                                <= d[ref]["crash_rate"]
                                                + rules["max_crash_increase"])
+            checks[f"{c['name']}_p95_not_worse"] = c["vs_reference"][name]["ci"][0] <= 1.0
         verdicts[name] = {"p95_ratio": cmp, "checks": checks, "beats": all(checks.values())}
     report["verdicts"] = verdicts
     report["elapsed_s"] = time.perf_counter() - t_start
@@ -506,15 +598,17 @@ def markdown(report: dict[str, Any]) -> str:
              f"lift and wobble over the last {report['window_s']:.0f} s; wobble = roll action "
              f"1.2-2.2 Hz rms > {report['wobble_threshold']}.", "",
              "| cell | controller | crash | p95 (m) | lift (m) | wobble | toward the wall (m) "
-             "| Gazebo p95 / lift / wobble / toward the wall |",
+             "| Gazebo p95 / lift / wobble / toward the wall / fast ring |",
              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for c in report["cells"]:
         for name in names:
             d = c["controllers"][name]
             g = (gz.get(name) or {}).get(c["name"])
             toward = f"{g['toward_m']:.2f}" if g and "toward_m" in g else "-"
-            gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {g.get('lift_m', float('nan')):+.2f} / "
-                    f"{g.get('wobble', '-')} / {toward}" if g else "-")
+            fast = f"{g['fast_ring']:.3f}" if g and "fast_ring" in g else "-"
+            lift = f"{g['lift_m']:+.2f}" if g and "lift_m" in g else "-"
+            gtxt = (f"{g.get('p95_m', float('nan')):.2f} / {lift} / "
+                    f"{g.get('wobble', '-')} / {toward} / {fast}" if g else "-")
             lines.append(f"| {c['label']} | {name} | {d['crash_rate']:.1%} | "
                          f"{d['p95_m_mean']:.3f} | {d['lift_m_mean']:+.3f} | "
                          f"{d['wobble_rate']:.0%} | {d['toward_wall_m_mean']:.3f} | {gtxt} |")
@@ -522,8 +616,8 @@ def markdown(report: dict[str, Any]) -> str:
         lines += ["", f"Gazebo, stock PX4: {report['gazebo_baseline']}"]
     lines += ["", "Rough-estimate cells pooled (replay cells apart):", "",
               "| controller | crash | p95 (m) | lift (m) | wobble | ring (median rms) "
-              "| toward the wall (m) | verdict |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "| fast ring (median, rad/s) | toward the wall (m) | verdict |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name in names:
         d = report["pooled_rough"][name]
         v = report["verdicts"].get(name)
@@ -534,7 +628,8 @@ def markdown(report: dict[str, Any]) -> str:
             f"{', '.join(k for k, ok in v['checks'].items() if not ok) or 'none'})")
         lines.append(f"| {name} | {d['crash_rate']:.1%} | {d['p95_m_mean']:.3f} | "
                      f"{d['lift_m_mean']:+.3f} | {d['wobble_rate']:.0%} | "
-                     f"{d['wobble_rms_median']:.4f} | {d['toward_wall_m_mean']:.3f} | {vtxt} |")
+                     f"{d['wobble_rms_median']:.4f} | {d['fast_ring_median']:.3f} | "
+                     f"{d['toward_wall_m_mean']:.3f} | {vtxt} |")
     if report.get("reengage"):
         lines += ["", "Hold, stock Position mode, re-engage (crash = any after the switch; "
                   "re-engage failure = a crash after a re-engage whose hold point was a sane "

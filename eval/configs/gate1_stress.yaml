@@ -63,11 +63,14 @@ params:
     # Motor (thrust and torque) lag, nominal 20 ms.
     - {name: motor_50ms, label: "motor lag 50 ms", env: {airframe_rand: {motor_tau_s: 0.05}}}
     - {name: motor_80ms, label: "motor lag 80 ms", envelope: false, env: {airframe_rand: {motor_tau_s: 0.08}}}
-    # Estimate: delay beyond the 50 to 150 ms the policy trained on, and long dropouts (5 s is
-    # EKF2's no-aiding limit, after which the watchdog hands back to PX4 anyway).
+    # Estimate: delay beyond the 50 to 150 ms the policy trained on, and long dropouts. The
+    # judged dropout cell stops at 3 s (docs/decisions.md, Decided 2026-10-24); 3 to 5 s is
+    # reported outside the envelope (5 s is EKF2's no-aiding limit, after which the watchdog
+    # hands back to PX4 anyway). Run 20261022-161518 judged the 3 to 5 s cell.
     - {name: delay_250, label: "estimate delay 150-250 ms", env: {estimate: {delay_min_s: 0.15, delay_max_s: 0.25}}}
     - {name: delay_350, label: "estimate delay 250-350 ms", envelope: false, env: {estimate: {delay_min_s: 0.25, delay_max_s: 0.35}}}
-    - {name: dropout_5s, label: "dropouts 3-5 s, 0.05 Hz", env: {estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
+    - {name: dropout_3s, label: "dropouts 2-3 s, 0.05 Hz", env: {estimate: {dropout_min_s: 2.0, dropout_max_s: 3.0, dropout_rate_hz: 0.05}}}
+    - {name: dropout_5s, label: "dropouts 3-5 s, 0.05 Hz", envelope: false, env: {estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
     # Near-wall yaw moment (placeholder model, envs/structure_hold/config.py WallYawTorque),
     # as a share of the 0.05 N m yaw authority, at the wall in a 10 m/s wind.
     - {name: yaw_25, label: "wall yaw moment 25 %", env: {wall_yaw_torque: {peak_nm: [0.0, 0.0125]}}}

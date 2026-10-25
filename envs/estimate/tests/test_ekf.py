@@ -130,3 +130,32 @@ def test_short_gaps_do_not_reset_and_height_waits_five_seconds():
     t = torch.arange(len(z)) * DT
     assert z[t < 6.0].abs().max() < 0.05  # no restart, and the height gate holds for 5 s
     assert z[t > 6.6].min() > 0.55  # then the height resets onto the fix
+
+
+def test_imu_bias_hides_under_the_fix_and_drifts_in_a_dropout():
+    # A dropout from 5 s to 8 s while hovering: without the bias the filter dead-reckons on
+    # the true acceleration and barely moves; with it the estimate drifts by about
+    # bias x t^2 / 2 (0.45 m per 0.1 m/s^2 after 3 s), and the fix had kept it near truth.
+    still = lambda t: torch.zeros(1, 3)  # noqa: E731
+    gap = lambda t: torch.tensor([not 5.0 <= t < 8.0] * 64)  # noqa: E731
+    frozen = {}
+
+    def fix(t, p):
+        if not 5.0 <= t < 8.0:
+            frozen["p"] = p.clone()
+        return frozen["p"]
+
+    def drift(bias: float) -> tuple[float, float]:
+        cfg = FusionConfig(enabled=True, imu_noise_mps2=0.0, imu_bias_mps2=bias)
+        out = fly(cfg, still, int(8.0 / DT), fix, gap, n=64)
+        before = (out[int(5.0 / DT) - 1][2] - out[int(5.0 / DT) - 1][0]).norm(dim=-1).max()
+        after = (out[-1][2] - out[-1][0])[:, 0].abs().mean()  # mean |x drift|
+        return float(before), float(after)
+
+    assert drift(0.0)[1] < 0.01
+    before, after = drift(0.1)
+    assert before < 0.01
+    # E|N(0, 0.1)| x 3^2 / 2 = 0.08 x 4.5 = 0.36 m, give or take the 64-draw spread
+    assert 0.25 < after < 0.5
+    with pytest.raises(ValueError):
+        FusionConfig(imu_bias_mps2=-0.1)
