@@ -11,6 +11,18 @@ set -euo pipefail
 BUILD_DIR="${PX4_DIR}/build/px4_sitl_default"
 OUT_DIR="${OUT_DIR:-/out}"
 
+# WATCH=1 (watch image, Dockerfile.watch): Gazebo's GUI on a virtual display, served to a
+# browser on port 6080. Must start before PX4, which reads DISPLAY and HEADLESS.
+if [[ "${WATCH:-0}" == "1" ]]; then
+    if [[ ! -f /opt/sitl/watch.sh ]]; then
+        echo "WATCH=1 needs the watch image (sim2real/docker/run.sh build-watch)" >&2
+        exit 2
+    fi
+    # shellcheck source=watch.sh
+    source /opt/sitl/watch.sh
+    start_viewer
+fi
+
 start_px4_background() {
     mkdir -p "${OUT_DIR}"
     # -d: no interactive shell. PX4 starts gz sim (server only, HEADLESS=1) itself.
@@ -32,6 +44,7 @@ stop_px4() {
     kill "${PX4_PID}" 2>/dev/null || true
     pkill -f "gz sim" 2>/dev/null || true
     wait "${PX4_PID}" 2>/dev/null || true
+    if declare -F stop_viewer >/dev/null; then stop_viewer; fi
 }
 
 copy_latest_ulog() {

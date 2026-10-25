@@ -1,0 +1,19 @@
+# Watch image: the SITL image plus a virtual display, so a flight can be watched live in a
+# browser (Gazebo's GUI on Xvfb, served by x11vnc and noVNC on port 6080). Built on top of
+# the SITL image, so it takes a minute and never recompiles PX4:
+#   ./run.sh build-watch
+# Flights opt in with --watch (sim2real.px4.run_gazebo, sim2real.estimate_bridge.run_estimate)
+# or ./run.sh watch; the container then has WATCH=1 and publishes 6080.
+ARG BASE_IMAGE=structure-hold/px4-sitl:v1.17.0
+FROM ${BASE_IMAGE}
+
+# Mesa's llvmpipe renders Gazebo's ogre2 scene on the CPU; no GPU is needed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        xvfb x11vnc novnc websockify libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/entrypoint.sh docker/watch.sh /opt/sitl/
+RUN chmod +x /opt/sitl/entrypoint.sh /opt/sitl/watch.sh
+
+EXPOSE 6080/tcp

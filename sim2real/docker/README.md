@@ -6,7 +6,8 @@ container. Runs natively on Apple Silicon (arm64) through Docker Desktop and on 
 - PX4 **v1.17.0**, pinned in `docs/decisions.md`. Moving the pin means re-tuning the
   baseline, so change the `PX4_TAG` build arg, the tag in `run.sh` and the decision row together.
 - MAVSDK-Python 3.17.4 inside the image for scripted flights.
-- Nothing graphical: Gazebo runs server-only (`HEADLESS=1`).
+- Nothing graphical by default: Gazebo runs server-only (`HEADLESS=1`). The watch image
+  below adds an opt-in browser view.
 
 ## Use
 
@@ -34,6 +35,23 @@ them and copies the ulog to `/out`; `eval/baselines/autotune.py` uses it with th
 Pass means altitude within 0.5 m of target and horizontal drift under 1 m for the whole
 hover, then touchdown and auto-disarm. Thresholds are flags on `hover_test.py`
 (`./run.sh hover-test --hover-s 60`, for example).
+
+## Watching a flight
+
+```bash
+./run.sh build-watch   # watch image on top of the SITL image, about a minute
+python -m sim2real.px4.run_gazebo wall1m_wind_4ms --watch            # Structure Hold flight
+python -m sim2real.estimate_bridge.run_estimate wall1m_wind_4ms --watch   # stock PX4 Hold
+```
+
+Then open http://localhost:6080/vnc.html?autoconnect=1&resize=scale. Gazebo's own GUI runs
+on a virtual display (Xvfb, CPU rendering) and noVNC serves it; the camera follows the drone
+from the side of the wall. Only `--watch` flights use it: they run on
+`structure-hold/px4-sitl:v1.17.0-watch` with `WATCH=1` and port 6080 published.
+
+PX4 runs in lockstep with Gazebo, so the flight itself is unchanged; the extra rendering
+makes it run slightly slower than real time (on the M4 Mac, real-time factor 0.95 mean and
+0.64 min against 0.97 and 0.85 without). Keep `--watch` off for benchmark batches.
 
 ## Talking to the simulator
 

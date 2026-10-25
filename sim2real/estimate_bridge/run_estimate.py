@@ -41,7 +41,15 @@ from sim2real.estimate_bridge.params import read_params, to_environment
 from sim2real.estimate_bridge.ulog_checks import analyse, hover_window, load_topics
 from sim2real.estimate_bridge.verify_trace import verify as verify_estimate
 from sim2real.gazebo.params_io import write_params
-from sim2real.gazebo.run_scenario import DEFAULT_IMAGE, WORLD, git_commit, params_summary
+from sim2real.gazebo.run_scenario import (
+    DEFAULT_IMAGE,
+    WATCH_IMAGE,
+    WORLD,
+    git_commit,
+    params_summary,
+    watch_options,
+    watch_url,
+)
 from sim2real.gazebo.scenario import load_scenario, sample_scenario
 from sim2real.gazebo.verify_trace import verify as verify_wind
 
@@ -51,7 +59,7 @@ DEFAULT_PARAMS = HERE / "ekf2_ev.params"
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
-                   name: str, env: dict[str, str]) -> list[str]:
+                   name: str, env: dict[str, str], watch: bool = False) -> list[str]:
     cmd = ["docker", "run", "--rm", "--name", name,
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
@@ -60,6 +68,8 @@ def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: f
            "-e", "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml"]
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
+    if watch:
+        cmd += watch_options()
     cmd += [image, "hover-test", "--altitude", str(altitude), "--hover-s", str(hover_s),
             "--local-position-only"]
     return cmd
@@ -87,11 +97,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, help="override the profile's seed")
     ap.add_argument("--scenario-seed", type=int, help="override the scenario's (wind) seed")
     ap.add_argument("--params", type=Path, default=DEFAULT_PARAMS, help="PX4 .params file")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", help=f"SITL image (default {DEFAULT_IMAGE}, or {WATCH_IMAGE} "
+                                     "with --watch)")
+    ap.add_argument("--watch", action="store_true",
+                    help="watch the flight live in a browser (needs run.sh build-watch)")
     ap.add_argument("--hover-s", type=float, help="override the scenario's hover time")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-estimate")
     args = ap.parse_args(argv)
+    if args.image is None:
+        args.image = WATCH_IMAGE if args.watch else DEFAULT_IMAGE
 
     sc = load_scenario(args.scenario)
     if args.scenario_seed is not None:
@@ -120,9 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
-                         args.container_name, to_environment(px4_params))
+                         args.container_name, to_environment(px4_params), watch=args.watch)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
+    if args.watch:
+        print("watch live:", watch_url(), "(the view appears once Gazebo is up)", flush=True)
     hover_status = subprocess.run(cmd).returncode
 
     report: dict[str, Any] = {
