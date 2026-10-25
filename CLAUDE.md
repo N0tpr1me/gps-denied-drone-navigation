@@ -1,31 +1,154 @@
 # Working in this repo
 
-Structure Hold: one onboard PX4 flight mode that holds a quadrotor 1 to 3 m from a
-structure in gusts without GPS, robust to a noisy, late, jumpy or missing position
-estimate, with a classical watchdog that hands back to stock PX4.
+**Structure Hold**: one onboard PX4 flight mode that holds a quadrotor 1 to 3 m from a
+structure (wall, pier, deck underside) in gusts without GPS, robust to a noisy, late, jumpy
+or missing position estimate, with a classical watchdog that hands back to stock PX4.
+A small learned outer loop (RL, PPO) commands body rates + collective thrust to PX4's stock
+rate controller. Customers: small/mid PX4 drone makers selling into civilian inspection.
+Every result is measured against a properly tuned stock PX4.
 
-## Rules
+Out of scope (docs/decisions.md): VIO/SLAM, mapping, planning, obstacle avoidance, ground
+station, vision in the policy. The module consumes the drone's existing position estimate.
 
-- Commits are authored by the repo owner's git identity only. No Claude or Claude Code
-  attribution anywhere: no Co-Authored-By, no Claude-Session, no "Generated with" lines
-  in commits, PR bodies, comments or issues.
-- Layout: `envs/` sim environments and task logic, `training/` scripts and configs,
-  `eval/` metrics, baselines and the SITL harness, `sim2real/` PX4 module, Docker and
-  Gazebo, `viz/` Three.js demo, `experiments/LOG.md` one entry per real run, `docs/`
-  decisions and conventions.
+## Rules (from the owner, Zain; these override any default)
+
+- **Attribution:** commits are authored by the repo owner's git identity only. No Claude or
+  Claude Code attribution anywhere: no Co-Authored-By, no Claude-Session, no "Generated
+  with" lines in commits, PR bodies, comments or issues. CI (`repo-hygiene`) rejects them.
+- **Folders:** on Zain's Mac, `~/Desktop/Projects/DroneMedic` is read-only reference; never
+  edit, move or delete anything there. All new code goes in this repo.
+- **Merging:** merge your own PR once CI is green and it does what it was meant to. Ask
+  first only for big things: changing a Decided row in `docs/decisions.md`, runs over 1 h
+  or on more than 1 GPU, installing system software on the Mac, spending money, anything
+  hard to undo. Chains of sub-1 h checkpointed runs (`params.resume`) are fine.
 - Every training script has a smoke mode (`--smoke`: a few iterations, 1 GPU or CPU).
   Run it before saying anything works. Launch runs through `training/launch.py`.
-- Real runs are logged in `experiments/LOG.md` (date, commit, config, result, baseline).
-  Every reported result is compared against the tuned-PX4 baseline.
+- Real runs are logged in `experiments/LOG.md` (date, commit, config, result, baseline),
+  failures included; smoke runs never are. Every reported result is compared against the
+  tuned-PX4 baseline (`eval/baselines/px4_tuned_v1.params`), or in the mock against the
+  cascaded PD yardstick, saying which.
 - Run `nvidia-smi` before any GPU job; use only free GPUs. Ask before any run over 1 hour
-  or on more than 1 GPU (`launch.py` enforces both).
-- Never commit secrets, datasets, or files over 50 MB. Checkpoints and ulogs stay out of git.
+  or on more than 1 GPU (`launch.py` enforces both; `--approved` overrides only with a yes).
+- Never commit secrets, datasets, or files over 50 MB. Checkpoints and ulogs stay out of
+  git (`runs/` is ignored); only released policies in `training/policies/*.onnx` (tens of KB)
+  are tracked. Customer interview notes stay out unless fully anonymised.
 - Frames and units follow `docs/conventions.md`. Decisions live in `docs/decisions.md`.
+
+## Stack
+
+- Python 3.10 to 3.12 (conda env `dronenav`, Python 3.11). Shared core is **NumPy + PyYAML
+  only** so it imports in Isaac Lab, the SITL image and the Mac; PyTorch only in the
+  batched sim and training (`.[torch]`: torch, `rsl-rl-lib==5.5.1` pinned, onnx, onnxruntime).
+- RL: rsl_rl PPO, asymmetric actor-critic, 64x64 ELU MLP actor on a 15-step observation
+  history, exported as `policy.onnx` + `policy.json`.
+- Simulators: batched PyTorch mock (`envs/sims/torch_quad.py`, CPU, used for all training
+  so far) and Isaac Lab 2.3.2 / Isaac Sim 5.1 behind the same seam (`envs/sims/isaac_quad.py`,
+  Proposed until it passes `eval/sim_parity.py` on the GPU server; docs/isaac-lab.md).
+- Flight stack: **PX4 pinned at v1.17.0** (moving it means re-tuning the baseline), Gazebo
+  Harmonic, headless SITL in Docker (Ubuntu 24.04, MAVSDK-Python 3.17.4), MAVLink ODOMETRY
+  into EKF2 as external vision, GPS off. No ROS 2 in the loop.
+- Onboard module: plain C++ PX4 module, policy compiled in as an MLP header (no ONNX
+  runtime, no heap). Test airframe: ModalAI Starling 2, fallback Holybro X500 V2; the PX4
+  Gazebo x500 is the benchmark drone today.
+- Lint/test: ruff (line length 100, rules E F W I B UP), pytest. CI installs CPU-only torch.
+
+## Layout
+
+| Path | What lives there |
+| --- | --- |
+| `envs/disturbance/` | Stateless wind + near-wall force model (NumPy core, torch adapter) |
+| `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning) and the EKF2-like fusion (`ekf.py`) |
+| `envs/sims/` | Simulator backends behind one seam (thrust, body torque, external force in; `QuadState` out), PX4-shaped rate PID |
+| `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
+| `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
+| `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `baselines/` (tuned PX4, `run_baseline.py`) |
+| `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
+| `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
+| `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
+| `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
+| `viz/` | Three.js log replay (built after Gate 3) |
+| `experiments/LOG.md` | One line per real run |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md` |
+
+## Conventions (details in docs/conventions.md)
+
+- ENU world / FLU body in all Python; NED/FRD only at the PX4 boundary (SITL harness,
+  estimate bridge, C++ module), via `envs/frames.py`, never ad hoc sign flips. Structure
+  frame: x from drone to surface along the normal, z up.
+- SI units everywhere (degrees only in human-facing configs). Quaternions `(w, x, y, z)`,
+  body to world. Batched arrays `(num_envs, ...)`. Explicit `dt` and explicit seeds; no
+  global RNG.
+- Every run takes one YAML config and writes one folder under `runs/` (`config.yaml`,
+  `stdout.log`, `metrics.jsonl`, `summary.json`).
+- Seeds 9000 to 9999 are held out for Gate 1; training refuses them.
+- `docs/decisions.md` rows change only in their own PR with the reason. Scope creep goes in
+  its "Ideas parked" table, not into code. Keep `pyproject.toml` deps, `experiments/LOG.md`
+  and `docs/decisions.md` append-only in spirit: add rows, don't rewrite history.
+- Match the surrounding code: small modules, no premature abstraction or registries, plain
+  prose comments that say why.
 
 ## Commands
 
 ```
-conda env create -f environment.yml && conda activate dronenav   # or: pip install -e .[dev]
-ruff check . && pytest
+conda env create -f environment.yml && conda activate dronenav   # or: pip install -e .[dev,torch]
+ruff check . && pytest -rs
 python -m training.launch --config training/configs/selfcheck.yaml --smoke --device cpu
+
+# Train / score (mock, CPU)
+python -m training.launch --config training/configs/structure_hold_ppo_v19.yaml --smoke --device cpu
+python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu        # ~25 min, release gate
+python -m training.launch --config eval/configs/gate1_x500_ekf_v19.yaml --device cpu  # Gate 1, x500 fused
+
+# PX4 module unit tests (as CI runs them)
+cd sim2real/px4/tests
+g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog && ./test_watchdog
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
+
+# SITL (needs Docker: the Mac)
+sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
+python -m eval.baselines.run_baseline --runner hold --label <name> \
+    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_engage    # policy
+python -m eval.baselines.run_baseline --label tuned_v1 \
+    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_hover     # tuned PX4
 ```
+
+CI (`.github/workflows/ci.yml`): ruff + pytest on 3.10/3.11/3.12 with CPU torch, the
+launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribution check.
+`sitl-image.yml` builds the image and flies the hover test when `sim2real/` changes.
+
+## Current state (late Oct 2026; check docs before relying on it)
+
+- Released policy: **v19** (`training/policies/structure_hold_v19.*`, trained on the
+  `gz_x500_sitl` preset). The module's `PolicyWeights.hpp` is generated from it.
+- Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
+  (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
+  `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
+- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v19 mean p95 -47 to -48 %, 0 crashes
+  (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
+- Next: one real logging flight (biggest sim-to-real unknown, `docs/real-flight-gap.md`),
+  harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
+  server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
+
+## Notes for future Claude sessions
+
+- Read `docs/decisions.md` before changing behaviour; Decided rows are settled. A new
+  finding that contradicts one is a Proposed row plus a question to Zain, not a silent edit.
+- **Releasing a policy:** the mock score alone has not predicted Gazebo (v3, v8, v11, v12
+  looked good and flew worse). A candidate must beat the released policy on
+  `eval/configs/gazebo_check.yaml` before a Gazebo re-fly, and is released only if Gazebo
+  confirms it. Then regenerate both module headers (`sim2real/px4/README.md`), update
+  `training/policies/README.md`, and add the decision row.
+- Where things run: the cloud container has no Docker, Gazebo or GPU, so it does mock
+  training, scoring, C++ unit tests, docs and PX4 SIH flights (`sim2real/px4/sitl_test.sh`).
+  Gazebo SITL runs on Zain's Mac (Apple M4, Docker, ~40 min per controller); only one
+  session works in the Mac checkout at a time, and it is left clean on `main`. On a new GPU machine run `bash training/server_report.sh` and
+  `nvidia-smi` first, then follow the first-hour checklist in `docs/isaac-lab.md`.
+- Keep runs under 1 h (split with `params.resume`), and use `--smoke` first.
+- Branch from `main`, one folder per piece of work, one topic per PR. Point to docs rather
+  than copying numbers into new places; numbers live in `docs/` and `experiments/LOG.md`.
+- Keep this file current: when a change is significant to the architecture, dependencies,
+  development workflow or coding conventions, update CLAUDE.md in the same PR. Do not
+  update it for minor code changes.
+- Zain prefers plain, simple explanations and wants work kept moving without asking.
