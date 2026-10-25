@@ -148,4 +148,7 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
 - Keep runs under 1 h (split with `params.resume`), and use `--smoke` first.
 - Branch from `main`, one folder per piece of work, one topic per PR. Point to docs rather
   than copying numbers into new places; numbers live in `docs/` and `experiments/LOG.md`.
+- Keep this file current: when a change is significant to the architecture, dependencies,
+  development workflow or coding conventions, update CLAUDE.md in the same PR. Do not
+  update it for minor code changes.
 - Zain prefers plain, simple explanations and wants work kept moving without asking.
