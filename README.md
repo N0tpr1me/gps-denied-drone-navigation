@@ -46,3 +46,8 @@ real (non-smoke) runs to `experiments/LOG.md`. On a new GPU machine, run
 ## Status
 
 Phase 0 (foundations and the tuned-PX4 baseline). See `docs/decisions.md`.
+
+## License
+
+Proprietary. Copyright (c) 2026 Zain Ali, all rights reserved. No use, copying or
+distribution without written permission; see `LICENSE`.

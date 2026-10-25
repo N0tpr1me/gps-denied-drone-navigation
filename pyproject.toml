@@ -7,6 +7,9 @@ name = "dronenav"
 version = "0.0.1"
 description = "Structure Hold: gust-robust, GPS-free station keeping near structures for PX4 quadrotors"
 requires-python = ">=3.10"
+# Proprietary, all rights reserved (see LICENSE).
+license = {file = "LICENSE"}
+classifiers = ["License :: Other/Proprietary License", "Private :: Do Not Upload"]
 # Core code depends on NumPy and PyYAML only, so it imports inside Isaac Lab's
 # Python, the PX4 SITL image's system Python, and the dronenav conda env.
 dependencies = [
