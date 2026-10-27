@@ -1,0 +1,132 @@
+/**
+ * Structure Hold wall guard: a measured floor under the hold point.
+ *
+ * The hold point is the engage point, captured on the position estimate. When the estimate
+ * is off toward the wall at that moment (a VIO jump that EKF2 reset onto, still decaying),
+ * the hold point lies on the wall face in the real world, and any controller that holds it
+ * flies into the wall: v11 struck the wall that way on Gazebo seed 3 and v10 met the same
+ * sequence in stock Position mode (docs/baseline.md, v11 section; docs/real-flight-gap.md).
+ * The policy only sees estimate minus hold point, so no retrain can see it coming.
+ *
+ * A forward rangefinder (PX4 distance_sensor, orientation forward) measures the wall
+ * directly. Each tick the guard turns the range into the distance from the hold point to
+ * the wall along the structure x axis (the heading at engage, which points at the surface):
+ *
+ *     clearance = range * (body x . n) - (hold - pos) . n
+ *
+ * The first term is the measured perpendicular distance from the vehicle to the wall, the
+ * second how far the hold point sits ahead of the vehicle along the normal n. Both are in
+ * the estimate's own frame, so an offset in the estimate cancels: the clearance is where
+ * the vehicle will end up once it reaches the hold point. When it is below the minimum
+ * standoff, the hold point moves straight back along -n by the shortfall. It only ever
+ * moves away from the wall (a ratchet): a longer range later never pulls the point in, so
+ * a spurious long reading or a lost sensor cannot walk the vehicle toward the surface.
+ *
+ * A sample counts only when it is fresh, inside the sensor's own min/max range, not
+ * flagged bad (signal_quality 0), and the body x axis points within max_off_axis_rad of
+ * the wall normal (otherwise the beam may be hitting something else). With no usable
+ * sample the guard does nothing and the hold flies as before; whether the mode may engage
+ * without a sensor is the module's choice (SH_WALL_REQ).
+ *
+ * Plain C++, no PX4 headers, so tests/test_wall_guard.cpp runs it in a bare g++ build.
+ */
+
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+
+namespace structure_hold
+{
+
+struct WallGuardLimits {
+	float min_standoff_m{0.f};            // SH_WALL_MIN; 0 = guard off
+	uint64_t max_age_us{200000};          // older range samples are ignored
+	float max_off_axis_rad{0.6109f};      // 35 deg between body x and the wall normal
+};
+
+/** One forward rangefinder reading, as PX4's distance_sensor carries it. */
+struct RangeSample {
+	uint64_t timestamp_us{0};
+	float distance_m{NAN};
+	float min_distance_m{0.f};
+	float max_distance_m{0.f};
+	int8_t signal_quality{-1};  // -1 unknown, 0 bad, 1..100
+};
+
+struct WallGuardOutput {
+	bool range_ok{false};      // a usable sample this tick
+	float wall_m{-1.f};        // perpendicular distance vehicle -> wall, -1 without a sample
+	float clearance_m{-1.f};   // hold point -> wall along n, -1 without a sample
+	float shift_m{0.f};        // hold point moved back this tick
+};
+
+class WallGuard
+{
+public:
+	void setLimits(const WallGuardLimits &limits) { _limits = limits; }
+	const WallGuardLimits &limits() const { return _limits; }
+	bool enabled() const { return _limits.min_standoff_m > 0.f; }
+
+	/** New hold: forget the shift of the previous one. */
+	void engage() { _total_shift_m = 0.f; }
+
+	/** Total distance the hold point has moved back since engage. */
+	float totalShift() const { return _total_shift_m; }
+
+	/** True when the sample may be used at now_us (freshness and the sensor's own flags). */
+	bool usable(const RangeSample &r, uint64_t now_us) const
+	{
+		if (r.timestamp_us == 0 || now_us < r.timestamp_us || now_us - r.timestamp_us > _limits.max_age_us) {
+			return false;
+		}
+
+		if (r.signal_quality == 0 || !std::isfinite(r.distance_m)) {
+			return false;
+		}
+
+		return r.distance_m >= r.min_distance_m && r.distance_m <= r.max_distance_m && r.distance_m > 0.f;
+	}
+
+	/**
+	 * One tick. ``normal_ned`` is the horizontal unit wall normal (structure x, NED),
+	 * ``body_x_ned`` the vehicle's body x axis in NED (first column of R). Moves
+	 * ``hold_ned`` back along the normal when its clearance is below the minimum.
+	 */
+	WallGuardOutput apply(const RangeSample &r, uint64_t now_us, const float pos_ned[3], const float normal_ned[2],
+			      const float body_x_ned[3], float hold_ned[3])
+	{
+		WallGuardOutput out{};
+
+		if (!usable(r, now_us)) {
+			return out;
+		}
+
+		const float cos_off = body_x_ned[0] * normal_ned[0] + body_x_ned[1] * normal_ned[1];
+
+		if (!(cos_off >= cosf(_limits.max_off_axis_rad))) {
+			return out;
+		}
+
+		out.range_ok = true;
+		out.wall_m = r.distance_m * cos_off;
+		const float ahead = (hold_ned[0] - pos_ned[0]) * normal_ned[0] + (hold_ned[1] - pos_ned[1]) * normal_ned[1];
+		out.clearance_m = out.wall_m - ahead;
+
+		if (enabled() && out.clearance_m < _limits.min_standoff_m) {
+			out.shift_m = _limits.min_standoff_m - out.clearance_m;
+			hold_ned[0] -= out.shift_m * normal_ned[0];
+			hold_ned[1] -= out.shift_m * normal_ned[1];
+			out.clearance_m = _limits.min_standoff_m;
+			_total_shift_m += out.shift_m;
+		}
+
+		return out;
+	}
+
+private:
+	WallGuardLimits _limits{};
+	float _total_shift_m{0.f};
+};
+
+} // namespace structure_hold

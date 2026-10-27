@@ -71,6 +71,23 @@ What it does today:
   the policy is trained on them. `structure_hold_status.reset_age_s` says how long ago the
   last reset was (−1 if none). `sitl_test.py` retries its scripted re-engage once a second
   for up to 14 s, and records the refusals and the wait in `summary.json`.
+- **Wall guard: a measured floor under the hold point** (`WallGuard.hpp`, plain C++,
+  unit-tested; `SH_WALL_MIN`, default 0.7 m, 0 = off; `SH_WALL_REQ`). With a forward-facing
+  rangefinder on `distance_sensor` (any instance, orientation forward; a downward one for
+  EKF2's height is skipped), each tick turns the range into the hold point's distance to
+  the wall along the engage heading, `range × cos(body x, normal) − (hold − pos)·normal`,
+  and moves the hold point straight back when that is under `SH_WALL_MIN`. The estimate's
+  own offset cancels in that sum, so it is the case the hold-off above cannot fix: a hold
+  point captured on a jumped estimate that lies on the wall face (Gazebo seed 3,
+  `docs/baseline.md` v11 section). The point only ever moves away from the wall during a
+  hold. Samples count only when under 0.2 s old, inside the sensor's own range, not flagged
+  bad, and with the body x axis within 35 deg of the wall normal; without one the guard
+  does nothing, so the Gazebo x500 (no rangefinder) flies exactly as before. The policy sees
+  the move as a step in its position error, like an estimate jump. `SH_WALL_REQ 1` makes
+  the mode unavailable while no usable forward range comes in. Stock Position mode
+  between two engages is not covered: that is PX4's Collision Prevention (`CP_DIST`) on
+  the same rangefinder. `structure_hold_status` gains `wall_distance_m`,
+  `hold_clearance_m` and `standoff_shift_m`.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -78,18 +95,19 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the test hook `SH_TEST_FAULT`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, the test hook `SH_TEST_FAULT`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
-Not here yet: the standoff logic (the hold point is still the engage point), passes along
-the surface, the fault injector that corrupts the estimate the policy sees.
+Not here yet: choosing the standoff (the hold point is the engage point, kept outside
+`SH_WALL_MIN` by the wall guard), passes along the surface, the fault injector that corrupts
+the estimate the policy sees.
 
 ## Layout
 
 ```
 sim2real/px4/
   structure_hold/        the module: CMakeLists.txt, Kconfig, StructureHold.{hpp,cpp},
-                         Watchdog.hpp, PolicyController.hpp, MlpPolicy.hpp,
+                         Watchdog.hpp, WallGuard.hpp, PolicyController.hpp, MlpPolicy.hpp,
                          PolicyWeights.hpp (generated), HoldController.hpp,
                          structure_hold_params.c
   msg/StructureHoldStatus.msg
@@ -99,7 +117,7 @@ sim2real/px4/
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
-  tests/                 test_watchdog.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
+  tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
                          test_policy_header.py
 ```
 
@@ -145,6 +163,11 @@ with `SH_TEST_FAULT`, confirm the handback and that a further engage is refused,
 `summary.json` has one boolean per check plus the numbers (drift while holding, handback
 latency from the ulog, status samples logged). Exit 0 means every check passed.
 
+`SITL_EXTRA_ARGS=--wall` adds the wall guard check: a forward rangefinder simulated over
+MAVLink (`DISTANCE_SENSOR` at 20 Hz) against a virtual wall 1 m ahead of the engage point;
+after the hold the wall jumps to 0.3 m ahead of the hold point, inside `SH_WALL_MIN` 0.7 m,
+and the vehicle must back off to at least 0.55 m and log a nonzero `standoff_shift_m`.
+
 From the PX4 shell: `commander mode ext1` engages, `commander mode posctl` disengages,
 `structure_hold status` prints the module state, `structure_hold trip` trips the watchdog.
 
@@ -170,10 +193,12 @@ cd sim2real/px4/tests
 g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog && ./test_watchdog
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
 python -m pytest sim2real/px4/tests
 ```
 
-CI runs all three; they need no PX4 tree. `test_policy.cpp` checks the compiled-in MLP
+CI runs all four; they need no PX4 tree. `test_policy.cpp` checks the compiled-in MLP
 against onnxruntime (within 1e-6), and the observation and fallback action against values
 recorded from the Python env (within 3e-7), plus the hand-back, the yaw guard, the
 action-to-setpoint mapping and the parameter resolution against the policy's defaults. The

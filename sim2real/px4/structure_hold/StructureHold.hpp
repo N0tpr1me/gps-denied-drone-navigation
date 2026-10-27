@@ -25,8 +25,10 @@
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
+#include <uORB/SubscriptionMultiArray.hpp>
 #include <uORB/topics/arming_check_reply.h>
 #include <uORB/topics/arming_check_request.h>
+#include <uORB/topics/distance_sensor.h>
 #include <uORB/topics/hover_thrust_estimate.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/register_ext_component_reply.h>
@@ -44,6 +46,7 @@
 
 #include "HoldController.hpp"
 #include "PolicyController.hpp"
+#include "WallGuard.hpp"
 #include "Watchdog.hpp"
 
 using namespace time_literals;
@@ -85,6 +88,9 @@ private:
 	void handbackStep(const hrt_abstime now);
 	void controlStep(const hrt_abstime now);
 	void updateFix(const hrt_abstime now);
+	void updateRange();
+	bool rangeFresh(const hrt_abstime now) const;
+	void applyWallGuard(const hrt_abstime now, const matrix::Vector3f &pos, const matrix::Dcmf &r);
 	bool useOdometryFix() const;
 	void publishStatus(const hrt_abstime now);
 	void updateParams() override;
@@ -99,6 +105,7 @@ private:
 	uORB::Subscription _attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _hover_thrust_sub{ORB_ID(hover_thrust_estimate)};
 	uORB::Subscription _visual_odometry_sub{ORB_ID(vehicle_visual_odometry)};
+	uORB::SubscriptionMultiArray<distance_sensor_s> _distance_sensor_subs{ORB_ID::distance_sensor};
 
 	// Publications
 	uORB::Publication<register_ext_component_request_s> _register_request_pub{ORB_ID(register_ext_component_request)};
@@ -135,6 +142,12 @@ private:
 	bool _fallback_active{false};
 	float _stale_s{0.f};
 	float _last_estimate_age_s{0.f};
+
+	// Forward rangefinder and the floor it puts under the hold point (WallGuard.hpp):
+	// the newest forward-facing distance_sensor sample from any instance.
+	structure_hold::RangeSample _range{};
+	structure_hold::WallGuard _wall_guard{};
+	structure_hold::WallGuardOutput _wall_out{};
 
 	// Position-fix tracking for the stale time (docs/fallback.md): a fix is a new
 	// vehicle_visual_odometry sample with a finite position (the VIO / estimate-bridge path),
@@ -178,6 +191,8 @@ private:
 		(ParamInt<px4::params::SH_YAW_GUARD>) _param_yaw_guard,
 		(ParamFloat<px4::params::SH_YAW_P>) _param_yaw_p,
 		(ParamFloat<px4::params::SH_RATE_MAX>) _param_rate_max,
+		(ParamFloat<px4::params::SH_WALL_MIN>) _param_wall_min,
+		(ParamInt<px4::params::SH_WALL_REQ>) _param_wall_req,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover
 	)
 };

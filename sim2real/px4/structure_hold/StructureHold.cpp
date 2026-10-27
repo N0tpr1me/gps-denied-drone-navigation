@@ -70,6 +70,10 @@ void StructureHold::updateParams()
 	limits_sp.thrust_max = _gains.thrust_max;
 	limits_sp.rate_max = resolveRateMax(_param_rate_max.get());
 	_policy.setLimits(limits_sp);
+
+	WallGuardLimits wall{};
+	wall.min_standoff_m = math::max(_param_wall_min.get(), 0.f);
+	_wall_guard.setLimits(wall);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -160,7 +164,10 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 	reply.num_events = 0;
 	// Commander refuses to switch into the mode while a trip is latched or for SH_RST_HOLD
 	// after an EKF position reset (Watchdog.hpp).
-	reply.can_arm_and_run = _watchdog.latched() == Trip::None && !_watchdog.inResetHoldoff(hrt_absolute_time());
+	// With SH_WALL_REQ set, also while no forward range is coming in (WallGuard.hpp).
+	const hrt_abstime now = hrt_absolute_time();
+	reply.can_arm_and_run = _watchdog.latched() == Trip::None && !_watchdog.inResetHoldoff(now)
+				&& (_param_wall_req.get() == 0 || rangeFresh(now));
 	reply.mode_req_angular_velocity = true;
 	reply.mode_req_attitude = true;
 	reply.mode_req_local_alt = true;
@@ -181,6 +188,9 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_fallback_active = false;
 
 	for (int i = 0; i < 4; i++) { _last_action[i] = 0.f; }
+
+	_wall_guard.engage();
+	_wall_out = WallGuardOutput{};
 
 	float hold[3];
 	_setpoint.pos.copyTo(hold);
@@ -315,6 +325,53 @@ void StructureHold::updateFix(const hrt_abstime now)
 	_last_estimate_age_s = now > _last_fix_sample_us ? (now - _last_fix_sample_us) * 1e-6f : 0.f;
 }
 
+void StructureHold::updateRange()
+{
+	// Newest forward-facing sample over all distance_sensor instances (a downward
+	// rangefinder for EKF2's height is common on the same vehicle and is skipped).
+	for (auto &sub : _distance_sensor_subs) {
+		distance_sensor_s ds;
+
+		while (sub.update(&ds)) {
+			if (ds.orientation != distance_sensor_s::ROTATION_FORWARD_FACING || ds.timestamp < _range.timestamp_us) {
+				continue;
+			}
+
+			_range.timestamp_us = ds.timestamp;
+			_range.distance_m = ds.current_distance;
+			_range.min_distance_m = ds.min_distance;
+			_range.max_distance_m = ds.max_distance;
+			_range.signal_quality = ds.signal_quality;
+		}
+	}
+}
+
+bool StructureHold::rangeFresh(const hrt_abstime now) const
+{
+	return _wall_guard.usable(_range, now);
+}
+
+void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, const Dcmf &r)
+{
+	float pos_ned[3], hold[3];
+	pos.copyTo(pos_ned);
+	_setpoint.pos.copyTo(hold);
+	const float normal[2] = {cosf(_setpoint.yaw), sinf(_setpoint.yaw)};
+	const float body_x[3] = {r(0, 0), r(1, 0), r(2, 0)};
+	const bool shifted_before = _wall_guard.totalShift() > 0.f;
+	_wall_out = _wall_guard.apply(_range, now, pos_ned, normal, body_x, hold);
+
+	if (_wall_out.shift_m > 0.f) {
+		_setpoint.pos = Vector3f(hold);
+		_policy.moveHold(hold);
+
+		if (!shifted_before) {
+			PX4_WARN("wall guard: hold point %.2f m from the wall, moving it back to %.2f m",
+				 (double)(_wall_out.clearance_m - _wall_out.shift_m), (double)_wall_out.clearance_m);
+		}
+	}
+}
+
 void StructureHold::controlStep(const hrt_abstime now)
 {
 	perf_begin(_loop_perf);
@@ -361,6 +418,10 @@ void StructureHold::controlStep(const hrt_abstime now)
 	}
 
 	const Vector3f pos(_local_position.x, _local_position.y, _local_position.z);
+
+	// Measured floor under the hold point before either controller reads it.
+	applyWallGuard(now, pos, r);
+
 	Vector3f vel(_local_position.vx, _local_position.vy, _local_position.vz);
 
 	if (_param_vel_src.get() == 1) {
@@ -470,6 +531,9 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.fallback_active = _fallback_active;
 	status.yaw_guarded = _param_ctrl.get() == 1 && _policy.yawGuard().enabled && !_fallback_active;
 	status.odometry_fix = useOdometryFix();
+	status.wall_distance_m = _wall_out.wall_m;
+	status.hold_clearance_m = _wall_out.clearance_m;
+	status.standoff_shift_m = _wall_guard.totalShift();
 
 	for (int i = 0; i < 4; i++) { status.action[i] = _last_action[i]; }
 	_last_output.rates.copyTo(status.rates_setpoint);
@@ -546,6 +610,7 @@ void StructureHold::Run()
 
 	_attitude_sub.update(&_attitude);
 	updateFix(now);
+	updateRange();
 
 	const bool mode_active = _vehicle_status.nav_state == _mode_id;
 
@@ -661,12 +726,19 @@ int StructureHold::print_status()
 		 (double)policy::MAX_RATE_RAD_S, _policy.yawGuard().enabled ? "on" : "off",
 		 _policy.rule().forced ? "forced" : (_policy.rule().enabled ? "on" : "off"),
 		 (double)resolveRateMax(_param_rate_max.get()));
+	const hrt_abstime now = hrt_absolute_time();
+	PX4_INFO("wall guard: %s (SH_WALL_MIN %.2f m, SH_WALL_REQ %d), forward range %s %.2f m, %.2f s old",
+		 _wall_guard.enabled() ? "on" : "off", (double)_param_wall_min.get(), (int)_param_wall_req.get(),
+		 rangeFresh(now) ? "fresh" : "none", (double)_range.distance_m,
+		 _range.timestamp_us > 0 && now >= _range.timestamp_us ? (double)((now - _range.timestamp_us) * 1e-6f) : -1.0);
 
 	if (_state == structure_hold_status_s::STATE_ENGAGED) {
 		PX4_INFO("setpoint NED: %.2f %.2f %.2f m, yaw %.1f deg", (double)_setpoint.pos(0), (double)_setpoint.pos(1),
 			 (double)_setpoint.pos(2), (double)math::degrees(_setpoint.yaw));
 		PX4_INFO("error NED: %.2f %.2f %.2f m, thrust %.2f", (double)_last_output.pos_err(0),
 			 (double)_last_output.pos_err(1), (double)_last_output.pos_err(2), (double)_last_output.thrust);
+		PX4_INFO("wall %.2f m, hold point clearance %.2f m, moved back %.2f m since engage",
+			 (double)_wall_out.wall_m, (double)_wall_out.clearance_m, (double)_wall_guard.totalShift());
 	}
 
 	perf_print_counter(_loop_perf);
@@ -686,6 +758,8 @@ Structure Hold flight mode. Registers "Structure Hold" as a named mode with comm
 holds the position and yaw it had when engaged by publishing body-rate and thrust setpoints
 to the stock rate controller: policy v2 (compiled-in MLP) with a classical brake-and-hover
 fallback once the position fix is stale (SH_CTRL 1), or a placeholder P cascade (SH_CTRL 0).
+With a forward rangefinder (distance_sensor, forward facing) the hold point is kept at least
+SH_WALL_MIN from the measured wall.
 The watchdog hands control back to Position mode (or Altitude mode) when it trips. Status
 is published on structure_hold_status.
 

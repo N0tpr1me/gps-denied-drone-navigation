@@ -35,6 +35,9 @@ uint8 controller
 bool fallback_active          # the brake-and-hover fallback flew this tick
 bool yaw_guarded              # the yaw action flown is the module's heading hold (SH_YAW_GUARD)
 bool odometry_fix             # fixes counted from vehicle_visual_odometry (else local position)
+float32 wall_distance_m       # [m] forward rangefinder, perpendicular to the wall (WallGuard.hpp); -1 without a usable sample
+float32 hold_clearance_m      # [m] hold point to the measured wall along the structure x axis; -1 without a sample
+float32 standoff_shift_m      # [m] how far the wall guard has moved the hold point back since engage
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 
 float32[3] rates_setpoint     # [rad/s] FRD body rates commanded this tick

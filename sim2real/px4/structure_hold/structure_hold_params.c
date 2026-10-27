@@ -293,3 +293,38 @@ PARAM_DEFINE_FLOAT(SH_FB_K, 1.5f);
  * @group Structure Hold
  */
 PARAM_DEFINE_FLOAT(SH_FB_TILT, 4.0f);
+
+/**
+ * Wall guard: minimum standoff from the measured wall
+ *
+ * With a forward-facing rangefinder (distance_sensor, orientation forward), the hold point
+ * is kept at least this far from the wall it measures, along the heading at engage: when
+ * the range says the hold point is closer, the point moves straight back by the shortfall
+ * and never forward again during that hold (WallGuard.hpp). This is the floor for the
+ * Gazebo seed 3 strike, where a hold point captured on a jumped estimate lay on the wall
+ * face (docs/real-flight-gap.md). Without a usable range sample (stale over 0.2 s, out of
+ * the sensor's range, bad signal, or the vehicle yawed more than 35 deg off the wall
+ * normal) the guard does nothing. Set it above the prop reach plus margin (x500: 0.36 m
+ * reach). 0 turns the guard off; distances are still reported in structure_hold_status.
+ *
+ * @unit m
+ * @min 0.0
+ * @max 5.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WALL_MIN, 0.7f);
+
+/**
+ * Wall guard: require a forward range to engage
+ *
+ * When set, the mode reports itself unavailable to commander while no usable forward
+ * range sample is coming in, so it cannot be engaged without the floor of SH_WALL_MIN.
+ * A range lost during a hold does not trip the watchdog: the hold point keeps the shift
+ * it already has. Off by default so vehicles without a forward rangefinder (the Gazebo
+ * benchmark x500) fly as before.
+ *
+ * @boolean
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_WALL_REQ, 0);
