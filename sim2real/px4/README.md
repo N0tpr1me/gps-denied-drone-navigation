@@ -306,6 +306,21 @@ Known property: on seed 3 the big jump lands 67 s after the engage, 1.3 s after 
 scripted hold, so stock PX4 meets it between the two engages (`docs/baseline.md`, engage
 guard confirmation).
 
+**Wall guard in Gazebo.** The x500 model has no rangefinder, so the guard does nothing in
+the benchmark above. `--rangefinder` (after `--` for `run_baseline`) has the estimate
+bridge also send a forward DISTANCE_SENSOR, computed from the same Gazebo truth pose
+against the scenario's wall (`sim2real/estimate_bridge/README.md`), so the guard acts as it
+would on a drone with a forward rangefinder; no image change beyond the module itself:
+
+```bash
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v19_wallguard \
+    --params eval/baselines/px4_tuned_v1.params --seeds 3 -- --profile vio_at_engage --rangefinder
+```
+
+`hold.json` then has `wall_guard` (per engaged stretch: range share, closest wall and hold
+point clearance, how far the point moved back) and, for every flight, `after_hold` (the
+closest the truth came to the wall after the scored hold, where seed 3's strikes happen).
+
 ## Frames
 
 PX4 boundary: NED world, FRD body, quaternion body → world (`docs/conventions.md`).

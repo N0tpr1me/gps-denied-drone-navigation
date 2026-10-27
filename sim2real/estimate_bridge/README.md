@@ -103,6 +103,13 @@ series from it and the stream stays continuous. Batches flown before 2026-10-24 
 v18, v19 seeds 1–8 and the tuned 8-seed set) carried the takeoff bias; their run folders'
 `estimate_config.yaml` lacks the key, so `verify_trace` still replays them as flown.
 
+A profile can also carry a `rangefinder` entry (`bridge.Rangefinder`: wall point, normal
+toward the wall, rate 20 Hz, range 0.1 to 12 m), which `run_gazebo --rangefinder` fills from
+the scenario. The bridge then also sends a forward DISTANCE_SENSOR on its link, from the same
+truth pose (beam along body x to the wall plane, nothing sent when it misses), for the
+module's wall guard. It is not corruption: the estimate stream and `verify_trace` are the
+same with or without it.
+
 ## Notes
 
 - Why MAVLink ODOMETRY rather than uXRCE-DDS: see `docs/decisions.md`.

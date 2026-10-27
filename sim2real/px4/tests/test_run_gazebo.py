@@ -73,6 +73,23 @@ def test_hold_stats_counts_fallback_and_actions():
     assert empty == {"ticks": 0}
 
 
+def test_wall_guard_stats_per_engaged_stretch():
+    status = synthetic_status()
+    t = (status["timestamp"] - START) * 1e-6
+    wall = np.where(t < 5, 1.0, 0.6).astype(np.float32)
+    wall[(t >= 9) & (t < 10)] = -1.0  # no range for the first second of the re-engage
+    status["wall_distance_m"] = wall
+    status["hold_clearance_m"] = np.where(wall < 0, -1.0, np.maximum(wall, 0.7)).astype(np.float32)
+    status["standoff_shift_m"] = np.where((t >= 5) & (t < 8), 0.1, 0.0).astype(np.float32)
+    first, second = run_gazebo.wall_guard_stats(status, START)
+    assert abs(first["range_share"] - 1.0) < 1e-9
+    assert abs(first["wall_min_m"] - 0.6) < 1e-6 and abs(first["clearance_min_m"] - 0.7) < 1e-6
+    assert abs(first["shift_m"] - 0.1) < 1e-6
+    assert abs(second["range_share"] - 0.5) < 1e-9 and second["shift_m"] == 0.0
+    # A build without the guard's fields reports nothing.
+    assert run_gazebo.wall_guard_stats(synthetic_status(), START) == []
+
+
 def test_docker_command_forwards_module_params(tmp_path):
     cmd = run_gazebo.docker_command("img", tmp_path, "0,0,0,0,0,0", 2.5, 60.0, 5.0, 1.0,
                                     ["SH_FB_EN=1", "SH_CTRL=0"], "name",

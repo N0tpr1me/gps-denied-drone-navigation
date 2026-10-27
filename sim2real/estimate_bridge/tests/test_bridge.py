@@ -9,6 +9,7 @@ from envs.frames import enu_to_ned, flu_to_frd, ned_to_enu
 from sim2real.estimate_bridge.bridge import (
     TRACE_COLUMNS,
     EstimateBridge,
+    Rangefinder,
     TraceWriter,
     odometry_ned,
     read_trace,
@@ -167,6 +168,45 @@ def test_seed_override_keeps_the_fault_anchor():
     q = p.with_seed(3)
     assert q.seed == 3 and q.fault_anchor == "engage"
     assert q == dataclasses.replace(p, seed=3)
+
+
+def yaw_quat(yaw: float, pitch: float = 0.0) -> tuple[float, float, float, float]:
+    """(w, x, y, z) for yaw about z then pitch about the new y (FLU: positive pitch is nose
+    down)."""
+    cy, sy, cp, sp = math.cos(yaw / 2), math.sin(yaw / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    return (cy * cp, -sy * sp, cy * sp, sy * cp)
+
+
+def test_rangefinder_reads_the_wall_along_body_x():
+    # wall_slab: wall face at x = 0, normal toward it +x; the x500 spawns 1 m short, facing +x.
+    rf = Rangefinder((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    assert math.isclose(rf.range_m((-1.0, 0.3, 2.5), yaw_quat(0.0)), 1.0, rel_tol=1e-9)
+    # Yawed 30 deg: the beam is longer than the perpendicular distance.
+    a = math.radians(30)
+    assert math.isclose(rf.range_m((-1.0, 0.0, 2.5), yaw_quat(a)), 1 / math.cos(a), rel_tol=1e-9)
+    # Pitched 10 deg nose down: also 1 / cos.
+    b = math.radians(10)
+    assert math.isclose(rf.range_m((-0.5, 0.0, 2.5), yaw_quat(0.0, b)), 0.5 / math.cos(b),
+                        rel_tol=1e-9)
+    # Facing away, nearly parallel, out of range, or past the wall: no reading.
+    assert rf.range_m((-1.0, 0.0, 2.5), yaw_quat(math.pi)) is None
+    assert rf.range_m((-1.0, 0.0, 2.5), yaw_quat(math.radians(85))) is None
+    assert rf.range_m((-0.05, 0.0, 2.5), yaw_quat(0.0)) is None
+    assert rf.range_m((-13.0, 0.0, 2.5), yaw_quat(0.0)) is None
+    assert rf.range_m((0.2, 0.0, 2.5), yaw_quat(0.0)) is None
+    with pytest.raises(ValueError):
+        Rangefinder((0.0, 0.0, 0.0), (2.0, 0.0, 0.0))
+
+
+def test_profile_carries_the_rangefinder_through_its_yaml():
+    p = dataclasses.replace(load_profile("vio_at_engage"),
+                            rangefinder=Rangefinder((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)))
+    d = p.to_dict()
+    assert d["rangefinder"]["wall_point"] == [0.0, 0.0, 0.0]
+    assert EstimateProfile.from_dict(d) == p
+    # The corruption, and so verify_trace, does not depend on it.
+    assert p.bridge().update(0.0, (0.0, 0.0, 0.0)).publish
+    assert load_profile("vio_at_engage").rangefinder is None
 
 
 def test_profile_rejects_unknown_keys():
