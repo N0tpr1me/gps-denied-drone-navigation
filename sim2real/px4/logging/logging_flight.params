@@ -1,0 +1,18 @@
+# Logging flight (docs/logging-flight.md): what PX4 v1.17.0 logs on the first real flight.
+# QGroundControl plain-text format (vehicle_id, component_id, name, value, type 6 int / 9 float).
+# Load with QGC > Parameters > Tools > Load from file, then reboot. Logging only: estimator,
+# rate loop and position loop parameters stay whatever the drone flies on (stock or tuned),
+# because the point is to record that drone as it is.
+#
+# SDLOG_MODE 1: log from boot to disarm, so the VIO start-up and EKF2's first fusion are in it.
+# SDLOG_PROFILE 147 = bits 0 (default set) + 1 (estimator replay: sensor_combined, magnetometer,
+# vehicle_visual_odometry and distance_sensor at full rate, so EKF2 can be re-run offline with
+# another EKF2_EV_DELAY) + 4 (high rate: attitude, rates and setpoints) + 7 (computer vision:
+# vehicle_visual_odometry and vehicle_mocap_odometry, the truth when mocap streams it).
+# SDLOG_DIRS_MAX 0: keep every log on the card.
+# SH_EN 0: Structure Hold does not start; nobody engages a policy on this flight.
+1	1	SDLOG_MODE	1	6
+1	1	SDLOG_PROFILE	147	6
+1	1	SDLOG_DIRS_MAX	0	6
+1	1	SDLOG_UTC_OFFSET	0	6
+1	1	SH_EN	0	6

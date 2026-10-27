@@ -76,9 +76,9 @@ order:
 
 1. **A logging flight with no policy flying.** Fly by hand, or in Position mode on RTK, in
    front of a wall. Log VIO, IMU, magnetometer and truth. That one log fits rows 1, 3, 6 and
-   7, and gives the hover thrust for row 4.
+   7, and gives the hover thrust for row 4. Checklist and logger settings: `docs/logging-flight.md`.
 2. **A props-off bench test** of the module on the flight controller (row 9, and row 5's
-   tick).
+   tick). Procedure and script: `docs/bench-test.md`.
 3. **A tethered or mocap hover**: tuned PX4 first, then the released policy, with the
    watchdog armed.
 
