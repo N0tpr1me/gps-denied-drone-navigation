@@ -3,6 +3,7 @@ import numpy as np
 from sim2real.estimate_bridge import run_estimate
 from sim2real.estimate_bridge.ulog_checks import (
     ESTIMATE,
+    ESTIMATOR_STATUS,
     EV_POS,
     FLAGS,
     STATUS,
@@ -67,6 +68,23 @@ def test_aiding_reports_vision_and_no_gnss():
     a = aiding(synthetic_topics(), START)
     assert a["ev_pos_fraction"] == 1.0 and a["gnss_pos_fraction"] == 0.0
     assert a["gnss_ever_used"] is False
+
+
+def test_aiding_falls_back_to_the_control_mode_bitmask():
+    # Images built after PR #73 log no estimator_status_flags (PX4 logger format limit).
+    topics = synthetic_topics()
+    n = topics[FLAGS]["timestamp"].size
+    del topics[FLAGS]
+    bits = np.full(n, (1 << 12) | (1 << 24) | (1 << 9), dtype=np.uint64)  # ev_pos, ev_vel, baro
+    bits[n // 2:] |= np.uint64(1 << 29)  # dead-reckoning for the second half
+    topics[ESTIMATOR_STATUS] = {"timestamp": topics[TRUTH]["timestamp"], "control_mode_flags": bits}
+    a = aiding(topics, START)
+    assert a["source"] == "estimator_status.control_mode_flags"
+    assert a["ev_pos_fraction"] == 1.0 and a["ev_vel_fraction"] == 1.0
+    assert a["gnss_pos_fraction"] == 0.0 and a["gnss_ever_used"] is False
+    assert a["inertial_dead_reckoning_fraction"] == 0.5
+    bits[-1] |= np.uint64(1 << 2)  # one GNSS position sample
+    assert aiding(topics, START)["gnss_ever_used"] is True
 
 
 def test_vision_samples_find_the_gap_the_latency_and_the_fusion_stats():

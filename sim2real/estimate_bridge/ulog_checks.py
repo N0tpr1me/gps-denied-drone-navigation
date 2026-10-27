@@ -25,10 +25,19 @@ from envs.frames import ned_to_enu
 ESTIMATE = "vehicle_local_position"
 TRUTH = "vehicle_local_position_groundtruth"
 FLAGS = "estimator_status_flags"
+ESTIMATOR_STATUS = "estimator_status"
 VISION = "vehicle_visual_odometry"
 EV_POS = "estimator_aid_src_ev_pos"
 STATUS = "vehicle_status"
-TOPICS = [ESTIMATE, TRUTH, FLAGS, VISION, EV_POS, STATUS]
+TOPICS = [ESTIMATE, TRUTH, FLAGS, ESTIMATOR_STATUS, VISION, EV_POS, STATUS]
+# estimator_status.control_mode_flags bits (PX4 v1.17 EKF/common.h filter_control_status_u),
+# for logs without estimator_status_flags: PX4 v1.17's logger drops that topic ("Format
+# estimator_status_flags too long") when its expanded format lands past the 1600-byte buffer,
+# which depends on every other message definition in the build (the module's status message
+# grew in PR #73 and the images built since then lack it).
+CONTROL_MODE_BITS = {"cs_gnss_pos": 2, "cs_mag_hdg": 4, "cs_mag_3d": 5, "cs_baro_hgt": 9,
+                     "cs_gps_hgt": 11, "cs_ev_pos": 12, "cs_ev_yaw": 13, "cs_ev_hgt": 14,
+                     "cs_ev_vel": 24, "cs_inertial_dead_reckoning": 29, "cs_gnss_vel": 44}
 
 # nav_state values of PX4 v1.17 (vehicle_status.msg)
 NAV_STATE = {0: "Manual", 1: "Altitude", 2: "Position", 3: "Mission", 4: "Hold", 5: "Return",
@@ -97,12 +106,21 @@ def estimate_error(topics, start_us: int, window: tuple[float, float] | None) ->
 
 
 def aiding(topics, start_us: int) -> dict[str, Any]:
-    """Fraction of the log each EKF2 aiding source was active, from estimator_status_flags."""
-    if FLAGS not in topics:
-        return {"error": "log lacks estimator_status_flags"}
-    f = topics[FLAGS]
+    """Fraction of the log each EKF2 aiding source was active, from estimator_status_flags,
+    or from estimator_status.control_mode_flags when the log lacks it."""
+    if FLAGS in topics:
+        f, source = topics[FLAGS], FLAGS
+    elif ESTIMATOR_STATUS in topics and "control_mode_flags" in topics[ESTIMATOR_STATUS]:
+        es = topics[ESTIMATOR_STATUS]
+        bits = np.asarray(es["control_mode_flags"]).astype(np.uint64)
+        f = {"timestamp": es["timestamp"]}
+        for key, bit in CONTROL_MODE_BITS.items():
+            f[key] = ((bits >> np.uint64(bit)) & np.uint64(1)).astype(bool)
+        source = f"{ESTIMATOR_STATUS}.control_mode_flags"
+    else:
+        return {"error": "log lacks estimator_status_flags and estimator_status"}
     t = _seconds(f, start_us)
-    out: dict[str, Any] = {"samples": int(t.size)}
+    out: dict[str, Any] = {"samples": int(t.size), "source": source}
     for key, name in [("cs_ev_pos", "ev_pos"), ("cs_ev_vel", "ev_vel"), ("cs_ev_hgt", "ev_hgt"),
                       ("cs_ev_yaw", "ev_yaw"), ("cs_gnss_pos", "gnss_pos"),
                       ("cs_gnss_vel", "gnss_vel"), ("cs_gps", "gps"), ("cs_baro_hgt", "baro_hgt"),
@@ -111,7 +129,7 @@ def aiding(topics, start_us: int) -> dict[str, Any]:
         if key in f:
             out[f"{name}_fraction"] = float(np.mean(f[key]))
     out["gnss_ever_used"] = bool(any(
-        np.any(f[k]) for k in ("cs_gnss_pos", "cs_gnss_vel", "cs_gps") if k in f))
+        np.any(f[k]) for k in ("cs_gnss_pos", "cs_gnss_vel", "cs_gps", "cs_gps_hgt") if k in f))
     return out
 
 
