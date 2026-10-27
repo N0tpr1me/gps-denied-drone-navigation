@@ -3,6 +3,7 @@
 #include <commander/px4_custom_mode.h>
 #include <px4_platform_common/log.h>
 
+#include <cstdlib>
 #include <cstring>
 
 using namespace structure_hold;
@@ -692,8 +693,53 @@ int StructureHold::task_spawn(int argc, char *argv[])
 	return PX4_ERROR;
 }
 
+// Policy inference timing for the props-off bench test (docs/bench-test.md): a separate
+// controller on synthetic samples, so the module's own history is never touched. Static so
+// the observation history stays off the shell task's small stack.
+static int runPolicyBench(int iterations)
+{
+	static PolicyController bench{};
+	const float hold[3] = {0.f, 0.f, -2.5f};
+	bench.engage(hold, 0.f);
+
+	VehicleSample sample{};
+	uint64_t total_us = 0;
+	uint32_t worst_us = 0;
+	float sink = 0.f;
+
+	for (int i = 0; i < iterations; i++) {
+		// A slow sweep of position and rate so every tick sees a new observation.
+		sample.pos_ned[0] = 0.01f * static_cast<float>(i % 50);
+		sample.pos_ned[2] = -2.5f + 0.005f * static_cast<float>(i % 20);
+		sample.rates_frd[0] = 0.002f * static_cast<float>(i % 30);
+		const hrt_abstime start = hrt_absolute_time();
+		const PolicyOutput out = bench.step(sample, 0.f, 0.5f);
+		const uint32_t dt = static_cast<uint32_t>(hrt_absolute_time() - start);
+		total_us += dt;
+		worst_us = math::max(worst_us, dt);
+		sink += out.setpoint.thrust;
+	}
+
+	const float mean_us = static_cast<float>(total_us) / static_cast<float>(iterations);
+	// The budget is the 10 ms control tick; flag anything over a tenth of it. Short lines:
+	// PX4 cuts a log line at about 120 characters.
+	PX4_INFO("bench %s: %s, %d steps", worst_us < 1000 ? "ok" : "OVER 1 ms", policy::NAME, iterations);
+	PX4_INFO("bench: mean %.1f us, worst %u us (check %.1f)", (double)mean_us, worst_us, (double)sink);
+	return worst_us < 1000 ? 0 : 1;
+}
+
 int StructureHold::custom_command(int argc, char *argv[])
 {
+	if (argc > 0 && !strcmp(argv[0], "bench")) {
+		if (is_running() && get_instance()->_state == structure_hold_status_s::STATE_ENGAGED) {
+			PX4_ERR("refused while engaged");
+			return 1;
+		}
+
+		const int iterations = argc > 1 ? atoi(argv[1]) : 1000;
+		return runPolicyBench(math::constrain(iterations, 1, 100000));
+	}
+
 	if (argc > 0 && !strcmp(argv[0], "trip")) {
 		if (!is_running()) {
 			PX4_ERR("not running");
@@ -770,6 +816,8 @@ a ground station / MAVLink as the external mode named "Structure Hold".
 	PRINT_MODULE_USAGE_NAME("structure_hold", "controller");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("trip", "Trip the watchdog now (test hook, same as SH_TEST_FAULT 1)");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("bench", "Time the policy on synthetic samples (bench test; refused while engaged)");
+	PRINT_MODULE_USAGE_ARG("<iterations>", "Policy steps to time (default 1000)", true);
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

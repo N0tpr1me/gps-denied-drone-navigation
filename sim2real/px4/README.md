@@ -115,6 +115,7 @@ sim2real/px4/
                          make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
+  bench_test.py          props-off bench checks on a flight controller (docs/bench-test.md)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
   tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
@@ -169,7 +170,9 @@ after the hold the wall jumps to 0.3 m ahead of the hold point, inside `SH_WALL_
 and the vehicle must back off to at least 0.55 m and log a nonzero `standoff_shift_m`.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode posctl` disengages,
-`structure_hold status` prints the module state, `structure_hold trip` trips the watchdog.
+`structure_hold status` prints the module state, `structure_hold trip` trips the watchdog. `structure_hold bench [n]` times n policy
+steps on synthetic samples (refused while engaged); `bench_test.py` runs it and the other
+props-off checks on a flight controller over MAVLink (`docs/bench-test.md`).
 
 ### SIH and the velocity estimate
 
