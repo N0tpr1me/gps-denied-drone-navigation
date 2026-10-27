@@ -21,6 +21,13 @@ stock mode on disengage is Hold, and after the trip PX4 refuses Position mode an
 RC-loss failsafe (Return by default), which is the path a lost RC link takes.
 5. land and disarm.
 
+With ``--wall`` a forward rangefinder is simulated over MAVLink (DISTANCE_SENSOR at 20 Hz,
+forward facing) against a virtual wall placed ``--wall-m`` ahead of the first engage point
+along the engage heading. Mid-hold the wall jumps to ``--wall-close-m`` ahead of the hold
+point, which puts the hold point inside SH_WALL_MIN: the wall guard must move it back and
+the vehicle must end up at least SH_WALL_MIN (less ``--wall-tol``) from the wall
+(WallGuard.hpp). The ulog check then expects a nonzero standoff_shift_m.
+
 Afterwards the ulog is checked for the structure_hold_status topic (states standby,
 engaged and handback all logged, with the test-fault trip reason).
 
@@ -65,6 +72,28 @@ class Telemetry:
     sub_mode: int = 0
     armed: bool = False
     landed: bool = True
+    yaw: float = math.nan
+    pitch: float = 0.0
+
+
+@dataclass
+class VirtualWall:
+    """A flat wall ahead of ``origin`` along ``yaw`` (NED), seen by a forward rangefinder."""
+
+    origin: tuple[float, float]
+    yaw: float
+    ahead_m: float
+    max_m: float = 12.0
+
+    def range_m(self, tel: Telemetry) -> float | None:
+        n = (math.cos(self.yaw), math.sin(self.yaw))
+        moved = (tel.north - self.origin[0]) * n[0] + (tel.east - self.origin[1]) * n[1]
+        gap = self.ahead_m - moved
+        cos_p = math.cos(tel.pitch)
+        bx_n = cos_p * math.cos(tel.yaw) * n[0] + cos_p * math.sin(tel.yaw) * n[1]
+        if bx_n < 0.2 or gap <= 0:
+            return None
+        return min(gap / bx_n, self.max_m)
 
 
 @dataclass
@@ -81,6 +110,9 @@ class Vehicle:
         self.joystick = joystick
         self._last_joystick = 0.0
         self._last_heartbeat = 0.0
+        self._last_range = 0.0
+        self.wall: VirtualWall | None = None
+        self.ranges: list[float] = []  # every range sent, for the wall checks
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
@@ -88,6 +120,7 @@ class Vehicle:
         while True:
             self._send_heartbeat()
             self._send_joystick()
+            self._send_range()
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return
@@ -109,6 +142,22 @@ class Vehicle:
         self._last_joystick = time.monotonic()
         self.m.mav.manual_control_send(self.m.target_system, 0, 0, 500, 0, 0)
 
+    def _send_range(self) -> None:
+        """Forward rangefinder at 20 Hz against the virtual wall, when there is one."""
+        if self.wall is None or math.isnan(self.tel.yaw):
+            return
+        if time.monotonic() - self._last_range < 0.05:
+            return
+        self._last_range = time.monotonic()
+        r = self.wall.range_m(self.tel)
+        if r is None:
+            return
+        self.ranges.append(r)
+        boot_ms = int(time.monotonic() * 1000) & 0xFFFFFFFF
+        self.m.mav.distance_sensor_send(boot_ms, 10, int(self.wall.max_m * 100),
+                                        int(round(r * 100)), mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
+                                        mavlink.MAV_SENSOR_ROTATION_NONE, 0)
+
     def _handle(self, msg) -> None:
         t = msg.get_type()
         if t == "LOCAL_POSITION_NED":
@@ -117,6 +166,8 @@ class Vehicle:
             self.tel.main_mode = (msg.custom_mode >> 16) & 0xFF
             self.tel.sub_mode = (msg.custom_mode >> 24) & 0xFF
             self.tel.armed = bool(msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        elif t == "ATTITUDE":
+            self.tel.yaw, self.tel.pitch = msg.yaw, msg.pitch
         elif t == "EXTENDED_SYS_STATE":
             self.tel.landed = msg.landed_state == mavlink.MAV_LANDED_STATE_ON_GROUND
 
@@ -179,6 +230,14 @@ def parse_args() -> argparse.Namespace:
                    help="send no MANUAL_CONTROL: Position mode is then unavailable and the "
                         "stock mode on disengage and handback is Hold")
     p.add_argument("--ready-timeout-s", type=float, default=120.0)
+    p.add_argument("--wall", action="store_true",
+                   help="simulate a forward rangefinder against a virtual wall (wall guard check)")
+    p.add_argument("--wall-m", type=float, default=1.0, help="wall distance at engage, m")
+    p.add_argument("--wall-close-m", type=float, default=0.3,
+                   help="wall distance from the hold point after the jump, m")
+    p.add_argument("--wall-min", type=float, default=0.7, help="SH_WALL_MIN flown, m")
+    p.add_argument("--wall-tol", type=float, default=0.15, help="allowed shortfall, m")
+    p.add_argument("--wall-s", type=float, default=15.0, help="time after the wall jump, s")
     return p.parse_args()
 
 
@@ -232,6 +291,8 @@ def fly(args: argparse.Namespace) -> dict:
     for item in args.param:
         name, _, value = item.partition("=")
         v.set_param(name, int(value) if value.lstrip("-").isdigit() else float(value))
+    if args.wall:
+        v.set_param("SH_WALL_MIN", args.wall_min)
     result["params"] = args.param
     v.wait_for(try_arm, args.ready_timeout_s, "arming")
     result["ready_s"] = round(time.monotonic() - start, 1)
@@ -251,6 +312,8 @@ def fly(args: argparse.Namespace) -> dict:
     v.wait_for(lambda: in_structure_hold(v), 5, "Structure Hold in heartbeat")
     result["engage_sub_mode"] = v.tel.sub_mode
     engage_point = (v.tel.north, v.tel.east, v.tel.down)
+    if args.wall:
+        v.wall = VirtualWall((engage_point[0], engage_point[1]), v.tel.yaw, args.wall_m)
     record_hold(v, args.hold_s, engage_point, samples.hold_drift, samples.hold_alt_err)
     checks["still_engaged_after_hold"] = in_structure_hold(v)
     result["hold"] = {
@@ -261,6 +324,8 @@ def fly(args: argparse.Namespace) -> dict:
     }
     checks["position_held"] = max(samples.hold_drift) <= args.drift_tol
     checks["altitude_held"] = max(samples.hold_alt_err) <= args.drift_tol
+    if args.wall:
+        wall_guard_step(v, args, engage_point, result)
 
     # 3. Disengage to the stock mode and check PX4 keeps holding.
     ack = v.set_mode(stock[0], stock[1])
@@ -321,6 +386,32 @@ def fly(args: argparse.Namespace) -> dict:
     return result
 
 
+def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, float, float],
+                    result: dict) -> None:
+    """Jump the virtual wall to inside SH_WALL_MIN of the hold point; expect a back-off."""
+    checks = result["checks"]
+    assert v.wall is not None
+    before = list(v.ranges)
+    checks["wall_range_streamed"] = len(before) > 0
+    # At --wall-m (above SH_WALL_MIN) the guard leaves the hold point alone: the vehicle
+    # sits about --wall-m from the wall.
+    settled = before[len(before) // 2:] or [math.nan]
+    v.wall = VirtualWall((hold[0], hold[1]), v.wall.yaw, args.wall_close_m)
+    n0 = len(v.ranges)
+    v.pump(args.wall_s)
+    after = v.ranges[n0:]
+    tail = after[-int(3.0 / 0.05):] or [math.nan]
+    result["wall"] = {
+        "wall_min_m": args.wall_min,
+        "before_mean_m": round(sum(settled) / len(settled), 3),
+        "close_m": args.wall_close_m,
+        "after_min_m": round(min(after), 3) if after else None,
+        "after_last3s_mean_m": round(sum(tail) / len(tail), 3),
+    }
+    checks["wall_backed_off"] = sum(tail) / len(tail) >= args.wall_min - args.wall_tol
+    checks["still_engaged_after_wall"] = in_structure_hold(v)
+
+
 def check_ulog(path: Path, result: dict) -> None:
     """Confirm the status topic made it into the log with the expected transitions."""
     from pyulog import ULog
@@ -344,6 +435,10 @@ def check_ulog(path: Path, result: dict) -> None:
     }
     checks["status_states_logged"] = bool({STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK} <= states)
     checks["status_trip_logged"] = bool(TRIP_TEST_FAULT in trips)
+    if "wall" in result and "standoff_shift_m" in status.data:
+        shift = float(max(status.data["standoff_shift_m"]))
+        result["ulog"]["max_standoff_shift_m"] = round(shift, 3)
+        checks["wall_guard_shift_logged"] = shift > 0.0
 
     # Handback latency: first HANDBACK sample to commander's first nav_state change after it.
     vs = by_name.get("vehicle_status")

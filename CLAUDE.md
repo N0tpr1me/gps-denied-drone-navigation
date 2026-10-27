@@ -69,7 +69,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md` |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md` |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -105,6 +105,8 @@ cd sim2real/px4/tests
 g++ -std=c++17 -Wall -Wextra -Werror -I../structure_hold test_watchdog.cpp -o test_watchdog && ./test_watchdog
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
 
 # SITL (needs Docker: the Mac)
 sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
@@ -127,6 +129,11 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
 - Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v19 mean p95 -47 to -48 %, 0 crashes
   (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
+- Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
+  rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
+  test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`). The cloud container can build
+  PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
+  `sitl_test.py --wall` with a simulated rangefinder.
 - Next: one real logging flight (biggest sim-to-real unknown, `docs/real-flight-gap.md`),
   harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.

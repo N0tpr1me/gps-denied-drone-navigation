@@ -47,7 +47,11 @@ reset, put the next engage's hold point on the wall face, and the props struck i
 estimate recovered. Stock PX4 walks into the wall the same way, so neither the policy nor an
 engage guard on the estimate alone prevents it; a measured distance to the structure (a
 rangefinder feeding PX4's collision prevention, or the camera's depth to the wall) as a
-floor under the hold would. And the policy
+floor under the hold would. The module half of that floor exists since 2026-10-27
+(`SH_WALL_MIN`, the wall guard in `sim2real/px4/README.md`): with a forward rangefinder the
+hold point stays at least 0.7 m off the measured wall. The stock Position mode half is PX4
+Collision Prevention on the same sensor, so the test drone needs a forward rangefinder
+fitted. And the policy
 assumes a flat wall, while real structures include lattice towers and blades (both in
 `sim2real/px4/README.md`, "Not here yet"; mapping is out of scope in `docs/decisions.md`).
 

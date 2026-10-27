@@ -274,6 +274,13 @@ public:
 		for (int i = 0; i < 4; i++) { _last_action[i] = 0.f; }
 	}
 
+	/** Move the hold point (the wall guard's floor) keeping the heading and the history: the
+	 * policy sees a step in its position error, as it does after an estimate jump. */
+	void moveHold(const float hold_ned[3])
+	{
+		for (int i = 0; i < 3; i++) { _frame.hold_ned[i] = hold_ned[i]; }
+	}
+
 	/** One control tick. ``stale_s`` is the time since the last fresh position fix. */
 	PolicyOutput step(const VehicleSample &s, float stale_s, float hover_thrust)
 	{
