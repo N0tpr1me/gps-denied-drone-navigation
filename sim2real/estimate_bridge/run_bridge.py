@@ -31,6 +31,12 @@ SET_MESSAGE_INTERVAL, so an engage is seen within about 50 ms) and marks each sa
 whether Structure Hold (external mode 1 under the auto main mode, as sitl_test.py decodes
 it) is flying. A profile with ``fault_anchor: engage`` keys its fault schedule to the first
 such sample (``bridge.py``).
+
+Rangefinder: a profile with a ``rangefinder`` entry (``run_gazebo --rangefinder``) also
+gets a forward DISTANCE_SENSOR (MAV_SENSOR_ROTATION_NONE, i.e. forward facing) on the same
+link, computed from the same truth pose against the scenario's wall (``bridge.Rangefinder``),
+the input the module's wall guard reads. PX4 stamps it on arrival. Nothing is sent while
+the beam misses the wall or the reading is out of range, as a real sensor reports no fix.
 """
 
 from __future__ import annotations
@@ -67,12 +73,19 @@ class Bridge:
         self.trace = TraceWriter(args.trace)
         self.lock = threading.Lock()
         self.sent = self.dropped = self.received = 0
+        self.rangefinder = self.profile.rangefinder
+        self.ranges_sent = 0
+        self.last_range_t = -1e9
         self.last_log = time.monotonic()
         self.mav = mavutil.mavlink_connection(args.mavlink, source_system=args.sysid,
                                               source_component=VIO_COMPONENT_ID)
         print(f"bridge: profile {self.profile.name} seed {self.profile.seed} "
               f"{self.bridge.output_rate_hz:.0f} Hz, faults keyed to the "
               f"{self.profile.fault_anchor}; waiting for PX4 on {args.mavlink}", flush=True)
+        if self.rangefinder is not None:
+            print(f"bridge: forward rangefinder at {self.rangefinder.rate_hz:.0f} Hz against "
+                  f"the wall at {self.rangefinder.wall_point}, normal "
+                  f"{self.rangefinder.normal_toward}", flush=True)
         self.mav.wait_heartbeat(timeout=args.heartbeat_timeout_s)
         print(f"bridge: PX4 heartbeat from system {self.mav.target_system}", flush=True)
         # Heartbeats at 20 Hz on this link, so the engage is seen within about 50 ms.
@@ -101,6 +114,8 @@ class Bridge:
         t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         with self.lock:
             self.received += 1
+            if self.rangefinder is not None:
+                self.send_range(t, pose)
             was_anchored = self.bridge.anchored
             try:
                 sample = self.bridge.update(
@@ -126,7 +141,7 @@ class Bridge:
             if now - self.last_log > 10:
                 self.last_log = now
                 print(f"bridge: t={sample.t:.1f} s received {self.received} sent {self.sent} "
-                      f"withheld {self.dropped}", flush=True)
+                      f"withheld {self.dropped} ranges {self.ranges_sent}", flush=True)
 
     def on_mavlink(self, msg) -> None:
         """PX4's traffic on the bridge link; only the autopilot heartbeat matters."""
@@ -151,11 +166,27 @@ class Bridge:
             NAN21, NAN21, 0, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )
 
+    def send_range(self, t: float, pose) -> None:
+        """Forward range from the truth pose, at the rangefinder's rate in sim time."""
+        if t - self.last_range_t < 1.0 / self.rangefinder.rate_hz - 1e-6:
+            return
+        self.last_range_t = t
+        q = pose.orientation
+        r = self.rangefinder.range_m((pose.position.x, pose.position.y, pose.position.z),
+                                     (q.w, q.x, q.y, q.z))
+        if r is None:
+            return
+        self.mav.mav.distance_sensor_send(
+            int(t * 1000) & 0xFFFFFFFF, int(round(self.rangefinder.min_m * 100)),
+            int(round(self.rangefinder.max_m * 100)), int(round(r * 100)),
+            mavlink.MAV_DISTANCE_SENSOR_LASER, 0, mavlink.MAV_SENSOR_ROTATION_NONE, 0)
+        self.ranges_sent += 1
+
     def close(self) -> None:
         with self.lock:
             self.trace.close()
         print(f"bridge: done, received {self.received} sent {self.sent} withheld "
-              f"{self.dropped}", flush=True)
+              f"{self.dropped} ranges {self.ranges_sent}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

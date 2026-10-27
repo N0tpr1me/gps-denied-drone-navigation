@@ -12,6 +12,9 @@
     fault_anchor_alt_m: null  # or "altitude": keyed to reaching this height above the
                             #   first sample (null: the stock runner fills it from the
                             #   scenario's hover altitude)
+    rangefinder: null       # or bridge.Rangefinder keys: the bridge also sends a forward
+                            #   DISTANCE_SENSOR against the wall (``run_gazebo --rangefinder``
+                            #   fills it from the scenario); not part of the corruption
 
 Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference), ``vio_default``
 (the ``envs.estimate`` defaults, i.e. what training uses), ``vio_after_takeoff``
@@ -31,7 +34,7 @@ from typing import Any
 import yaml
 
 from envs.estimate import EstimateCorruptionConfig
-from sim2real.estimate_bridge.bridge import FAULT_ANCHORS, EstimateBridge
+from sim2real.estimate_bridge.bridge import FAULT_ANCHORS, EstimateBridge, Rangefinder
 
 PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SOURCE_RATE_HZ = 50.0  # Gazebo's /world/<w>/pose/info rate in the PX4 worlds
@@ -48,6 +51,7 @@ class EstimateProfile:
     fault_anchor_s: float = 25.0
     fault_anchor_alt_m: float | None = None  # "altitude" anchor; None until a runner sets it
     bias_from_anchor: bool = False  # bias walk starts at the anchor (bridge.py docstring)
+    rangefinder: Rangefinder | None = None  # forward range against the wall (run_bridge)
 
     def __post_init__(self) -> None:
         if self.fault_anchor not in FAULT_ANCHORS:
@@ -70,7 +74,8 @@ class EstimateProfile:
     def from_dict(cls, d: dict[str, Any]) -> EstimateProfile:
         d = dict(d)
         unknown = set(d) - {"name", "seed", "divisor", "estimate", "fault_anchor",
-                            "fault_anchor_s", "fault_anchor_alt_m", "bias_from_anchor"}
+                            "fault_anchor_s", "fault_anchor_alt_m", "bias_from_anchor",
+                            "rangefinder"}
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         if "name" not in d:
@@ -86,11 +91,13 @@ class EstimateProfile:
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
         alt = d.get("fault_anchor_alt_m")
+        rng = d.get("rangefinder")
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
                    fault_anchor_s=float(d.get("fault_anchor_s", 25.0)),
                    fault_anchor_alt_m=None if alt is None else float(alt),
-                   bias_from_anchor=bool(d.get("bias_from_anchor", False)))
+                   bias_from_anchor=bool(d.get("bias_from_anchor", False)),
+                   rangefinder=None if rng is None else Rangefinder.from_dict(rng))
 
     def with_seed(self, seed: int) -> EstimateProfile:
         """The same profile with another seed (fault anchor and everything else kept)."""
@@ -110,7 +117,8 @@ class EstimateProfile:
                 "estimate": {k: v for k, v in self.estimate.__dict__.items()},
                 "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s,
                 "fault_anchor_alt_m": self.fault_anchor_alt_m,
-                "bias_from_anchor": self.bias_from_anchor}
+                "bias_from_anchor": self.bias_from_anchor,
+                "rangefinder": None if self.rangefinder is None else self.rangefinder.to_dict()}
 
     def bridge(self, dt: float | None = None, divisor: int | None = None) -> EstimateBridge:
         """The bridge this profile describes (``dt`` / ``divisor`` overrides for replays)."""

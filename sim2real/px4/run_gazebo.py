@@ -11,6 +11,7 @@ latched refusal, land) run inside the SITL image. Needs Docker and the image fro
     python -m sim2real.px4.run_gazebo wind_8ms --profile vio_default --hold-s 60
     python -m sim2real.px4.run_gazebo wind_8ms --param SH_FB_EN=1        # fallback on
     python -m sim2real.px4.run_gazebo wind_8ms --param SH_CTRL=0         # cascade, regression
+    python -m sim2real.px4.run_gazebo calm_0ms --rangefinder             # wall guard on
 
 Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same files as
 ``sim2real.estimate_bridge.run_estimate`` (traces, their verification, ``ekf.json``) plus:
@@ -20,6 +21,12 @@ Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same fi
   position against the hold point the module captured, the share of ticks in the fallback
   and under the yaw guard, the stale time seen, EKF2's dead-reckoning share;
 - ``hold_summary.json``: every check and number in one place, for experiments/LOG.md.
+
+``--rangefinder`` has the bridge send a forward rangefinder against the scenario's wall
+(``bridge.Rangefinder``), which the x500 model lacks, so the module's wall guard
+(``SH_WALL_MIN``) acts; ``hold.json`` then reports what the guard did in each engaged
+stretch, and for every flight the closest the truth came to the wall after the scored hold
+(the re-engage, trip and Land, where seed 3's strikes happened).
 
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
 EKF2 fused the vision stream. For the benchmark, ``eval.baselines.run_baseline --runner
@@ -45,6 +52,7 @@ from envs.frames import ned_to_enu
 from eval.metrics import Surface, compute_metrics
 from eval.ulog import load_topics as load_trace_topics
 from eval.ulog import trace_from_topics
+from sim2real.estimate_bridge.bridge import Rangefinder
 from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.params import read_params, to_environment
 from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS
@@ -158,6 +166,36 @@ def hold_stats(status: dict[str, np.ndarray], start_us: int,
     }
 
 
+def engaged_stretches(status: dict[str, np.ndarray]) -> list[tuple[int, int]]:
+    """[start, end) indices of every engaged stretch in the status topic."""
+    engaged = np.asarray(status["state"]) == STATE_ENGAGED
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], engaged, [False])).astype(int)))
+    return list(zip(edges[0::2].tolist(), edges[1::2].tolist(), strict=True))
+
+
+def wall_guard_stats(status: dict[str, np.ndarray], start_us: int) -> list[dict[str, Any]]:
+    """Per engaged stretch: how often a forward range was used, the closest wall and hold
+    point clearance it saw, and how far the guard moved the hold point back. Empty for a
+    build without the guard's status fields."""
+    if "standoff_shift_m" not in status:
+        return []
+    t = (np.asarray(status["timestamp"], dtype=np.int64) - start_us) * 1e-6
+    wall = np.asarray(status["wall_distance_m"], dtype=float)
+    clear = np.asarray(status["hold_clearance_m"], dtype=float)
+    shift = np.asarray(status["standoff_shift_m"], dtype=float)
+    out = []
+    for a, b in engaged_stretches(status):
+        ok = wall[a:b] >= 0
+        out.append({
+            "t_s": [float(t[a]), float(t[b - 1])],
+            "range_share": float(ok.mean()),
+            "wall_min_m": float(wall[a:b][ok].min()) if ok.any() else None,
+            "clearance_min_m": float(clear[a:b][ok].min()) if ok.any() else None,
+            "shift_m": float(shift[a:b].max()),
+        })
+    return out
+
+
 def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
                ) -> tuple[dict[str, Any], dict[str, Any]]:
     """EKF report and eval.metrics on the TRUE position over the first hold."""
@@ -181,7 +219,13 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
         "gusts_s": gusts,
         "module": hold_stats(status, start_us, window),
         "metrics": metrics,
+        "wall_guard": wall_guard_stats(status, start_us),
     }
+    after = trace.t > window[1]
+    if after.any():
+        d = surface.distance(trace.pos[after])
+        i = int(np.argmin(d))
+        hold["after_hold"] = {"min_clearance_m": float(d[i]), "t_s": float(trace.t[after][i])}
     return ekf, hold
 
 
@@ -215,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--drift-tol", type=float, default=1.0,
                     help="sitl_test's hold tolerance on PX4's estimate (the truth score is "
                          "in hold.json)")
+    ap.add_argument("--rangefinder", action="store_true",
+                    help="bridge sends a forward rangefinder against the wall (wall guard)")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-hold")
     args = ap.parse_args(argv)
@@ -228,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.seed is not None:
         prof = prof.with_seed(args.seed)
     prof = prof.with_anchor_altitude(sc.hover.altitude)  # only an "altitude" anchor changes
+    if args.rangefinder:
+        prof = dataclasses.replace(prof, rangefinder=Rangefinder(sc.wall_point,
+                                                                 sc.wall_normal_toward))
     px4_params = read_params(args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

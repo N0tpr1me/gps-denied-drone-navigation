@@ -219,6 +219,55 @@ class EstimateBridge:
         self.anchor_step, self.anchor_t = self._steps, t
 
 
+@dataclass(frozen=True)
+class Rangefinder:
+    """A forward-facing rangefinder on the vehicle's body x axis, against the scenario's
+    flat wall, from Gazebo truth: the input of the module's wall guard (``SH_WALL_MIN``),
+    which the PX4 x500 model does not carry. ``normal_toward`` points from the vehicle's
+    side to the wall (``Scenario.wall_normal_toward``), ENU. No noise: the first real
+    flight logs the sensor's own (docs/logging-flight.md)."""
+
+    wall_point: tuple[float, float, float]
+    normal_toward: tuple[float, float, float]
+    rate_hz: float = 20.0
+    min_m: float = 0.1
+    max_m: float = 12.0
+    # Below this cosine between body x and the normal the beam is treated as missing the
+    # wall (about 78 deg); the module itself ignores readings beyond 35 deg off axis.
+    min_cos: float = 0.2
+
+    def __post_init__(self) -> None:
+        if not (self.rate_hz > 0 and 0 <= self.min_m < self.max_m):
+            raise ValueError("rangefinder needs rate_hz > 0 and 0 <= min_m < max_m")
+        if not np.isclose(np.linalg.norm(self.normal_toward), 1.0, atol=1e-6):
+            raise ValueError("rangefinder normal_toward must be a unit vector")
+
+    def range_m(self, pos_enu, quat_wxyz) -> float | None:
+        """Distance along body x to the wall plane, or None when the beam misses it or the
+        reading is outside the sensor's range."""
+        w, x, y, z = (float(v) for v in quat_wxyz)
+        body_x = np.array([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)])
+        n = np.asarray(self.normal_toward, dtype=float)
+        cos = float(body_x @ n)
+        if cos < self.min_cos:
+            return None
+        perp = float((np.asarray(self.wall_point, dtype=float) - np.asarray(pos_enu)) @ n)
+        r = perp / cos
+        return r if self.min_m <= r <= self.max_m else None
+
+    def to_dict(self) -> dict:
+        return {k: list(v) if isinstance(v, tuple) else v
+                for k, v in dataclasses.asdict(self).items()}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Rangefinder:
+        d = dict(d)
+        for k in ("wall_point", "normal_toward"):
+            if k in d:
+                d[k] = tuple(float(v) for v in d[k])
+        return cls(**d)
+
+
 def odometry_ned(sample: BridgeSample) -> tuple[np.ndarray, np.ndarray]:
     """Position and velocity of the estimate in NED, for the ODOMETRY message."""
     return enu_to_ned(sample.est_pos), enu_to_ned(sample.est_vel)
