@@ -1288,3 +1288,46 @@ re-engage stands against none for tuned PX4." This replaces the first-protocol t
 as the Gate 2 evidence for v19; the earlier tables stay as the record of how the protocol
 was corrected. Watch items for the next candidate: seed 3 drift (0.28 m) and the seed 3
 post-hold re-engage.
+
+## Wall guard on seed 3 (Gazebo, 2026-10-27)
+
+The x500 model has no rangefinder, so until now the module's wall guard (`SH_WALL_MIN`,
+PR #73) never acted in Gazebo. From PR #76 the estimate bridge can send a forward range
+computed from the Gazebo truth pose against the wall (`--rangefinder`). Seed 3 is the seed
+whose hold sits closest to the wall and whose post-hold sequence struck it. v19, image
+rebuilt at 7b0cfcb, `-- --profile vio_at_engage --rangefinder`, guard on (0.7 m) and off
+(`SH_WALL_MIN=0.0`), batches `20261027-153444` and `20261027-154216`:
+
+| seed 3, calm / 4 / 8 m/s | tuned PX4 (`20261024-120256`) | v19, guard off | v19, guard on |
+|---|---|---|---|
+| hold p95, m | 0.388 / 0.387 / 0.389 | 0.255 / 0.257 / 0.274 | 0.202 / 0.199 / 0.213 |
+| worst toward wall, m | 0.45-0.49 | 0.277 / 0.280 / 0.286 | 0.184 / 0.182 / 0.195 |
+| min clearance in the hold, m | 0.51 | 0.713 / 0.710 / 0.715 | 0.809 / 0.811 / 0.801 |
+| hold point moved back, m (hold / re-engage) | n/a | 0 | 0.09-0.10 / 0.04-0.20 |
+| closest after the hold (stock Land), m | not flown | 0.308 / 0.219 / 0.188 | 0.250 / 0.325 / 0.208 |
+
+**In the mode, the guard works.** The hold point never got closer than 0.70 m to the
+measured wall in the hold or at the re-engage. The truth stayed 0.80 m or more from the wall
+in the hold (0.71 m without the guard, 0.51 m for tuned PX4), and the hold p95 fell 21-23 %
+against the guard-off control. Part of that p95 gain is the moved hold point itself, so
+the clearance is the number to quote. The guard-off control reproduces the earlier seed 3
+batch (`20261024-111238`: 0.255 / 0.256 / 0.274), so neither the rebuild nor the range
+stream changed anything by itself.
+
+**After the hold, it cannot help.** The new `after_hold` number shows where the earlier
+seed 3 strike came from. Every flight, guard on or off, came closest to the wall under
+stock Land at the end of the scripted sequence, 2 of 3 each time inside the 0.25 m contact
+radius. Land descends holding x and y on the jumped estimate, so the truth walks toward the
+wall. That is stock PX4 flying, after the watchdog handed back, and PX4's Collision
+Prevention does not act in Land. `post_hold_fail` counts only a sequence that did not finish,
+so these near contacts were not visible before. It is not a hold result and tuned PX4's
+stock runner never flies this sequence, so there is no like-for-like stock number. What
+would cover it is outside the module: a stock-side rule (land only after climbing or backing
+off, or land in Position mode with Collision Prevention on the same rangefinder). Not done
+here: it changes how stock PX4 behaves after a handback, so it needs a decision first.
+
+Scoring note: images built since PR #73 log no `estimator_status_flags` (PX4 v1.17's logger
+drops a topic whose expanded format passes its 1600-byte buffer, and the module's status
+message grew). `ulog_checks.aiding` now reads `estimator_status.control_mode_flags` when that
+topic is missing. These six flights were scored before that fix, so their `ok` is false
+while the flights were clean (vision fused 99.4 % of the logged samples).

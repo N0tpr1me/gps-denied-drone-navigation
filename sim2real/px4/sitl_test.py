@@ -197,8 +197,26 @@ class Vehicle:
         return self.command(mavlink.MAV_CMD_DO_SET_MODE,
                             mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub)
 
+    def param_type(self, name: str, timeout_s: float = 2.0) -> int | None:
+        """The vehicle's MAV_PARAM_TYPE for ``name`` (PARAM_REQUEST_READ), None if no answer."""
+        self.m.mav.param_request_read_send(self.m.target_system, self.m.target_component,
+                                           name.encode(), -1)
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            msg = self.m.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
+            if msg is not None and msg.param_id.rstrip("\0") == name:
+                return int(msg.param_type)
+        return None
+
     def set_param(self, name: str, value: float | int) -> None:
-        """PARAM_SET; PX4 encodes INT32 params by value bytes inside the float field."""
+        """PARAM_SET; PX4 encodes INT32 params by value bytes inside the float field. The
+        type is the vehicle's own when it answers, so ``SH_WALL_MIN=0`` is sent as a float
+        (PX4 rejects a set whose type does not match)."""
+        ptype = self.param_type(name)
+        if ptype == mavlink.MAV_PARAM_TYPE_REAL32:
+            value = float(value)
+        elif ptype == mavlink.MAV_PARAM_TYPE_INT32:
+            value = int(round(value))
         if isinstance(value, int):
             encoded = struct.unpack("<f", struct.pack("<i", value))[0]
             ptype = mavlink.MAV_PARAM_TYPE_INT32
