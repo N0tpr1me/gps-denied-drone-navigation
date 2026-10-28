@@ -11,6 +11,13 @@
  * Controller (SH_CTRL): 1 = policy v2 with the brake-and-hover fallback
  * (PolicyController.hpp, docs/fallback.md), 0 = the placeholder P cascade of the skeleton
  * (HoldController.hpp). Both output FRD body rates and a normalised collective thrust.
+ *
+ * Structure Land (SH_LAND_EN), a second registered mode: a landing next to the structure
+ * that keeps the wall guard. PX4's own position controller flies it (xy held, descent at
+ * MPC_LAND_SPEED, its land detector and touchdown); the module only owns the xy setpoint,
+ * which the forward range keeps at least SH_WALL_MIN from the wall. Stock Land holds xy on
+ * the estimate alone, and after a handback on a jumped estimate that walks the vehicle into
+ * the wall (docs/baseline.md, wall guard on seed 3).
  */
 
 #pragma once
@@ -34,6 +41,7 @@
 #include <uORB/topics/register_ext_component_reply.h>
 #include <uORB/topics/register_ext_component_request.h>
 #include <uORB/topics/structure_hold_status.h>
+#include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/unregister_ext_component.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
@@ -66,6 +74,7 @@ public:
 	bool init();
 
 	static constexpr const char *MODE_NAME = "Structure Hold";
+	static constexpr const char *LAND_MODE_NAME = "Structure Land";
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
 	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Hold, then Land
@@ -74,10 +83,10 @@ private:
 	void Run() override;
 
 	// Mode registration with commander
-	void sendRegistration();
-	void sendUnregistration();
-	bool checkRegistrationReply();
-	void sendControlModeConfig();
+	void sendRegistration(const char *name, uint64_t &request_id);
+	void sendUnregistration(const char *name, int8_t mode_id, int8_t arming_check_id);
+	void checkRegistrationReplies();
+	void sendControlModeConfig(int8_t mode_id, bool position_control);
 	void replyToArmingCheck(uint8_t request_id);
 
 	// Flight
@@ -86,7 +95,11 @@ private:
 	void handBack(structure_hold::Trip trip, bool xy_valid, bool latch = true);
 	void requestHandbackMode();
 	void handbackStep(const hrt_abstime now);
+	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m);
 	void controlStep(const hrt_abstime now);
+	void engageLand(const vehicle_local_position_s &lpos);
+	void landStep(const hrt_abstime now);
+	void publishTrajectorySetpoint(const matrix::Vector3f &velocity_ned);
 	void updateFix(const hrt_abstime now);
 	void updateRange();
 	bool rangeFresh(const hrt_abstime now) const;
@@ -113,6 +126,7 @@ private:
 	uORB::Publication<vehicle_control_mode_s> _config_control_setpoints_pub{ORB_ID(config_control_setpoints)};
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<vehicle_rates_setpoint_s> _rates_setpoint_pub{ORB_ID(vehicle_rates_setpoint)};
+	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
 	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
 	uORB::Publication<structure_hold_status_s> _status_pub{ORB_ID(structure_hold_status)};
 
@@ -121,6 +135,10 @@ private:
 	uint64_t _request_id{0};
 	int8_t _mode_id{-1};
 	int8_t _arming_check_id{-1};
+	bool _land_registration_sent{false};
+	uint64_t _land_request_id{0};
+	int8_t _land_mode_id{-1};      // Structure Land; stays -1 with SH_LAND_EN 0
+	int8_t _land_arming_check_id{-1};
 
 	// Vehicle state cache
 	vehicle_status_s _vehicle_status{};
@@ -133,6 +151,8 @@ private:
 
 	// Mode state
 	uint8_t _state{structure_hold_status_s::STATE_UNREGISTERED};
+	int8_t _active_mode_id{-1};    // the mode that is flying (or handing back): hold or land
+	uint8_t _land_xy_reset_counter{0};
 	structure_hold::Watchdog _watchdog{};
 	structure_hold::HoldGains _gains{};
 	structure_hold::HoldSetpoint _setpoint{};
@@ -193,6 +213,8 @@ private:
 		(ParamFloat<px4::params::SH_RATE_MAX>) _param_rate_max,
 		(ParamFloat<px4::params::SH_WALL_MIN>) _param_wall_min,
 		(ParamInt<px4::params::SH_WALL_REQ>) _param_wall_req,
-		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover
+		(ParamInt<px4::params::SH_LAND_EN>) _param_land_en,
+		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
+		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)
 };

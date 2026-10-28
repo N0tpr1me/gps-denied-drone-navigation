@@ -131,7 +131,10 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
-  test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`). The cloud container can build
+  test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second
+  module mode, ext2, `SH_LAND_EN`: PX4's position controller lands on an xy point the wall
+  guard keeps off the wall; the scripted sequence lands through it, `--land stock` for the
+  old ending). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
   `sitl_test.py --wall` with a simulated rangefinder.
 - Next: one real logging flight (biggest sim-to-real unknown, `docs/real-flight-gap.md`),

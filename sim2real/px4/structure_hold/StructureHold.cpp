@@ -80,74 +80,89 @@ void StructureHold::updateParams()
 // ---------------------------------------------------------------------------------------
 // Mode registration (PX4 external-component handshake, driven from inside the firmware)
 
-void StructureHold::sendRegistration()
+void StructureHold::sendRegistration(const char *name, uint64_t &request_id)
 {
 	register_ext_component_request_s request{};
 	request.timestamp = hrt_absolute_time();
-	_request_id = request.timestamp ^ 0x5348u;  // "SH": any value unique among registrations
-	request.request_id = _request_id;
-	strncpy(request.name, MODE_NAME, sizeof(request.name) - 1);
+	request_id = request.timestamp ^ 0x5348u;  // "SH": any value unique among registrations
+	request.request_id = request_id;
+	strncpy(request.name, name, sizeof(request.name) - 1);
 	request.px4_ros2_api_version = register_ext_component_request_s::LATEST_PX4_ROS2_API_VERSION;
 	request.register_arming_check = true;  // required for a mode
 	request.register_mode = true;
 	request.register_mode_executor = false;
 	_register_request_pub.publish(request);
-	_registration_sent = true;
 }
 
-void StructureHold::sendUnregistration()
+void StructureHold::sendUnregistration(const char *name, int8_t mode_id, int8_t arming_check_id)
 {
 	unregister_ext_component_s request{};
 	request.timestamp = hrt_absolute_time();
-	strncpy(request.name, MODE_NAME, sizeof(request.name) - 1);
-	request.arming_check_id = _arming_check_id;
-	request.mode_id = _mode_id;
+	strncpy(request.name, name, sizeof(request.name) - 1);
+	request.arming_check_id = arming_check_id;
+	request.mode_id = mode_id;
 	request.mode_executor_id = -1;
 	_unregister_pub.publish(request);
 }
 
-bool StructureHold::checkRegistrationReply()
+void StructureHold::checkRegistrationReplies()
 {
+	// Structure Hold registers first (so it stays the first external mode, ext1), then
+	// Structure Land once Hold's reply is in.
 	register_ext_component_reply_s reply;
 	int tries = register_ext_component_reply_s::ORB_QUEUE_LENGTH;
 
 	while (_register_reply_sub.update(&reply) && --tries >= 0) {
-		if (reply.request_id != _request_id) {
-			continue;
-		}
+		if (_mode_id == -1 && reply.request_id == _request_id) {
+			if (!reply.success) {
+				PX4_ERR("mode registration rejected by commander");
+				continue;
+			}
 
-		if (!reply.success) {
-			PX4_ERR("mode registration rejected by commander");
-			return false;
-		}
+			_mode_id = reply.mode_id;
+			_arming_check_id = reply.arming_check_id;
+			_state = structure_hold_status_s::STATE_STANDBY;
+			PX4_INFO("mode registered: mode_id %d, arming_check_id %d", _mode_id, _arming_check_id);
+			sendControlModeConfig(_mode_id, false);
 
-		_mode_id = reply.mode_id;
-		_arming_check_id = reply.arming_check_id;
-		_state = structure_hold_status_s::STATE_STANDBY;
-		PX4_INFO("mode registered: mode_id %d, arming_check_id %d", _mode_id, _arming_check_id);
-		sendControlModeConfig();
-		return true;
+		} else if (_land_mode_id == -1 && _land_registration_sent && reply.request_id == _land_request_id) {
+			if (!reply.success) {
+				PX4_ERR("Structure Land registration rejected by commander");
+				continue;
+			}
+
+			_land_mode_id = reply.mode_id;
+			_land_arming_check_id = reply.arming_check_id;
+			PX4_INFO("Structure Land registered: mode_id %d, arming_check_id %d", _land_mode_id,
+				 _land_arming_check_id);
+			sendControlModeConfig(_land_mode_id, true);
+		}
 	}
 
-	return false;
+	if (_mode_id != -1 && !_land_registration_sent && _param_land_en.get() != 0) {
+		sendRegistration(LAND_MODE_NAME, _land_request_id);
+		_land_registration_sent = true;
+	}
 }
 
-void StructureHold::sendControlModeConfig()
+void StructureHold::sendControlModeConfig(int8_t mode_id, bool position_control)
 {
-	// What commander enables while our nav_state is active: only the rate loop and
-	// control allocation. Attitude and position controllers stay idle so our
-	// vehicle_rates_setpoint is the one mc_rate_control follows.
+	// What commander enables while the mode's nav_state is active. Structure Hold: only
+	// the rate loop and control allocation, so our vehicle_rates_setpoint is the one
+	// mc_rate_control follows. Structure Land: PX4's whole position-to-rate cascade, fed
+	// by our trajectory_setpoint, as in its own position modes (the land detector reads
+	// the climb-rate flag and the commanded descent to find touchdown).
 	vehicle_control_mode_s config{};
 	config.timestamp = hrt_absolute_time();
-	config.source_id = _mode_id;
+	config.source_id = mode_id;
 	config.flag_control_rates_enabled = true;
 	config.flag_control_allocation_enabled = true;
-	config.flag_control_attitude_enabled = false;
-	config.flag_control_position_enabled = false;
-	config.flag_control_velocity_enabled = false;
-	config.flag_control_altitude_enabled = false;
-	config.flag_control_climb_rate_enabled = false;
-	config.flag_control_acceleration_enabled = false;
+	config.flag_control_attitude_enabled = position_control;
+	config.flag_control_position_enabled = position_control;
+	config.flag_control_velocity_enabled = position_control;
+	config.flag_control_altitude_enabled = position_control;
+	config.flag_control_climb_rate_enabled = position_control;
+	config.flag_control_acceleration_enabled = position_control;
 	config.flag_control_manual_enabled = false;
 	config.flag_control_auto_enabled = false;
 	config.flag_control_offboard_enabled = false;
@@ -174,6 +189,17 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 	reply.mode_req_local_alt = true;
 	reply.mode_req_local_position = true;
 	_arming_check_reply_pub.publish(reply);
+
+	if (_land_arming_check_id == -1) {
+		return;
+	}
+
+	// Structure Land is a landing, so only in flight. A latched trip does not block it:
+	// it is how the vehicle comes down next to the wall after a handback, and PX4's own
+	// position controller flies it, not the policy.
+	reply.registration_id = _land_arming_check_id;
+	reply.can_arm_and_run = _armed;
+	_arming_check_reply_pub.publish(reply);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -184,6 +210,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_setpoint.pos = Vector3f(lpos.x, lpos.y, lpos.z);
 	_setpoint.yaw = lpos.heading;
 	_state = structure_hold_status_s::STATE_ENGAGED;
+	_active_mode_id = _mode_id;
 	_last_control_us = 0;
 	_vel_fd_valid = false;
 	_fallback_active = false;
@@ -209,6 +236,28 @@ void StructureHold::disengage(const char *why)
 	}
 
 	_state = structure_hold_status_s::STATE_STANDBY;
+}
+
+void StructureHold::engageLand(const vehicle_local_position_s &lpos)
+{
+	// The xy setpoint is captured on the estimate like stock Land's; what differs is that
+	// the wall guard keeps measuring it against the wall all the way down.
+	_setpoint.pos = Vector3f(lpos.x, lpos.y, lpos.z);
+	_setpoint.yaw = lpos.heading;
+	_state = structure_hold_status_s::STATE_LANDING;
+	_active_mode_id = _land_mode_id;
+	_land_xy_reset_counter = lpos.xy_reset_counter;
+	_last_control_us = 0;
+	_fallback_active = false;
+	_last_output = HoldOutput{};
+
+	for (int i = 0; i < 4; i++) { _last_action[i] = 0.f; }
+
+	_wall_guard.engage();
+	_wall_out = WallGuardOutput{};
+	PX4_INFO("Structure Land: descending at %.2f m/s over N %.2f E %.2f, yaw %.0f deg",
+		 (double)_param_mpc_land_speed.get(), (double)_setpoint.pos(0), (double)_setpoint.pos(1),
+		 (double)math::degrees(_setpoint.yaw));
 }
 
 void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
@@ -281,14 +330,20 @@ void StructureHold::requestHandbackMode()
 void StructureHold::handbackStep(const hrt_abstime now)
 {
 	// Still the active mode: keep the vehicle level at hover thrust while commander
-	// switches, and escalate if the requested mode was refused.
-	vehicle_rates_setpoint_s sp{};
-	sp.timestamp = hrt_absolute_time();
-	sp.roll = 0.f;
-	sp.pitch = 0.f;
-	sp.yaw = 0.f;
-	sp.thrust_body[2] = -_hover_thrust;
-	_rates_setpoint_pub.publish(sp);
+	// switches, and escalate if the requested mode was refused. From Structure Land, whose
+	// rate setpoints come from PX4's own cascade, stop the descent there instead.
+	if (_active_mode_id == _land_mode_id) {
+		publishTrajectorySetpoint(Vector3f(0.f, 0.f, 0.f));
+
+	} else {
+		vehicle_rates_setpoint_s sp{};
+		sp.timestamp = hrt_absolute_time();
+		sp.roll = 0.f;
+		sp.pitch = 0.f;
+		sp.yaw = 0.f;
+		sp.thrust_body[2] = -_hover_thrust;
+		_rates_setpoint_pub.publish(sp);
+	}
 
 	if (now - _handback_request_us > HANDBACK_RETRY && _handback_step < 2) {
 		++_handback_step;
@@ -364,13 +419,45 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 
 	if (_wall_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);
-		_policy.moveHold(hold);
+
+		if (_state == structure_hold_status_s::STATE_ENGAGED) {
+			_policy.moveHold(hold);
+		}
 
 		if (!shifted_before) {
 			PX4_WARN("wall guard: hold point %.2f m from the wall, moving it back to %.2f m",
 				 (double)(_wall_out.clearance_m - _wall_out.shift_m), (double)_wall_out.clearance_m);
 		}
 	}
+}
+
+Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float position_error_m)
+{
+	// The stale trip counts from the last position fix (or the last local position update,
+	// whichever is older), so an EKF2 that stops publishing trips it too. A trip hands
+	// back to stock PX4.
+	WatchdogInputs in{};
+	in.now_us = now;
+	in.estimate_timestamp_us = math::min(_last_fix_us, static_cast<hrt_abstime>(_local_position.timestamp));
+	in.xy_valid = _local_position.xy_valid;
+	in.z_valid = _local_position.z_valid;
+	in.v_xy_valid = _local_position.v_xy_valid;
+	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
+	in.position_error_m = position_error_m;
+	in.test_fault = _param_test_fault.get() != 0;
+
+	const Trip trip = _watchdog.check(in);
+
+	if (trip != Trip::None) {
+		if (in.test_fault) {
+			_param_test_fault.set(0);  // one-shot test hook
+			_param_test_fault.commit_no_notification();
+		}
+
+		handBack(trip, in.xy_valid);
+	}
+
+	return trip;
 }
 
 void StructureHold::controlStep(const hrt_abstime now)
@@ -389,31 +476,13 @@ void StructureHold::controlStep(const hrt_abstime now)
 		_hover_thrust = _param_mpc_thr_hover.get();
 	}
 
-	// Watchdog first: it decides whether the controller runs at all this tick. The stale
-	// trip counts from the last position fix (or the last local position update, whichever
-	// is older), so an EKF2 that stops publishing trips it too.
+	// Watchdog first: it decides whether the controller runs at all this tick.
 	const Quatf q(_attitude.q);
 	const Dcmf r(q);
+	const float position_error_m = (_setpoint.pos - Vector3f(_local_position.x, _local_position.y,
+					_local_position.z)).norm();
 
-	WatchdogInputs in{};
-	in.now_us = now;
-	in.estimate_timestamp_us = math::min(_last_fix_us, static_cast<hrt_abstime>(_local_position.timestamp));
-	in.xy_valid = _local_position.xy_valid;
-	in.z_valid = _local_position.z_valid;
-	in.v_xy_valid = _local_position.v_xy_valid;
-	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
-	in.position_error_m = (_setpoint.pos - Vector3f(_local_position.x, _local_position.y, _local_position.z)).norm();
-	in.test_fault = _param_test_fault.get() != 0;
-
-	const Trip trip = _watchdog.check(in);
-
-	if (trip != Trip::None) {
-		if (in.test_fault) {
-			_param_test_fault.set(0);  // one-shot test hook
-			_param_test_fault.commit_no_notification();
-		}
-
-		handBack(trip, in.xy_valid);
+	if (checkWatchdog(now, r, position_error_m) != Trip::None) {
 		perf_end(_loop_perf);
 		return;
 	}
@@ -512,6 +581,60 @@ void StructureHold::controlStep(const hrt_abstime now)
 	perf_end(_loop_perf);
 }
 
+void StructureHold::landStep(const hrt_abstime now)
+{
+	const Quatf q(_attitude.q);
+	const Dcmf r(q);
+	const Vector3f pos(_local_position.x, _local_position.y, _local_position.z);
+
+	// An EKF2 xy reset moves the setpoint with the estimate, as PX4's own modes do, so the
+	// reset itself does not move the vehicle; the guard's range check is unaffected.
+	if (_local_position.xy_reset_counter != _land_xy_reset_counter) {
+		_land_xy_reset_counter = _local_position.xy_reset_counter;
+
+		if (PX4_ISFINITE(_local_position.delta_xy[0]) && PX4_ISFINITE(_local_position.delta_xy[1])) {
+			_setpoint.pos(0) += _local_position.delta_xy[0];
+			_setpoint.pos(1) += _local_position.delta_xy[1];
+		}
+	}
+
+	// Height is the descent's, not a setpoint to hold: only xy counts as hold error.
+	_setpoint.pos(2) = pos(2);
+
+	if (checkWatchdog(now, r, (_setpoint.pos - pos).norm()) != Trip::None) {
+		return;
+	}
+
+	applyWallGuard(now, pos, r);
+	publishTrajectorySetpoint(Vector3f(NAN, NAN, math::max(_param_mpc_land_speed.get(), 0.1f)));
+	_last_output = HoldOutput{};
+	_last_output.pos_err = _setpoint.pos - pos;
+}
+
+void StructureHold::publishTrajectorySetpoint(const Vector3f &velocity_ned)
+{
+	// xy on the (guarded) setpoint; z by velocity only, so mc_pos_control and the land
+	// detector see a commanded descent exactly as in stock Land. A finite vertical velocity
+	// of 0 is the handback's hover.
+	trajectory_setpoint_s sp{};
+	sp.timestamp = hrt_absolute_time();
+	sp.position[0] = _setpoint.pos(0);
+	sp.position[1] = _setpoint.pos(1);
+	sp.position[2] = NAN;
+	sp.velocity[0] = velocity_ned(0);
+	sp.velocity[1] = velocity_ned(1);
+	sp.velocity[2] = velocity_ned(2);
+
+	for (int i = 0; i < 3; i++) {
+		sp.acceleration[i] = NAN;
+		sp.jerk[i] = NAN;
+	}
+
+	sp.yaw = _setpoint.yaw;
+	sp.yawspeed = NAN;
+	_trajectory_setpoint_pub.publish(sp);
+}
+
 void StructureHold::publishStatus(const hrt_abstime now)
 {
 	structure_hold_status_s status{};
@@ -552,7 +675,11 @@ void StructureHold::Run()
 		_angular_velocity_sub.unregisterCallback();
 
 		if (_mode_id != -1) {
-			sendUnregistration();
+			sendUnregistration(MODE_NAME, _mode_id, _arming_check_id);
+		}
+
+		if (_land_mode_id != -1) {
+			sendUnregistration(LAND_MODE_NAME, _land_mode_id, _land_arming_check_id);
 		}
 
 		exit_and_cleanup();
@@ -565,13 +692,17 @@ void StructureHold::Run()
 	const hrt_abstime now = hrt_absolute_time();
 
 	if (!_registration_sent) {
-		sendRegistration();
+		sendRegistration(MODE_NAME, _request_id);
+		_registration_sent = true;
 		return;
 	}
 
-	if (_mode_id == -1) {
-		checkRegistrationReply();
-		return;
+	if (_mode_id == -1 || (_land_registration_sent && _land_mode_id == -1)) {
+		checkRegistrationReplies();
+
+		if (_mode_id == -1) {
+			return;
+		}
 	}
 
 	if (_parameter_update_sub.updated()) {
@@ -613,16 +744,23 @@ void StructureHold::Run()
 	updateFix(now);
 	updateRange();
 
-	const bool mode_active = _vehicle_status.nav_state == _mode_id;
+	const bool mode_active = _vehicle_status.nav_state == _active_mode_id;
+	const bool land_selected = _land_mode_id != -1 && _vehicle_status.nav_state == _land_mode_id;
 
 	switch (_state) {
 	case structure_hold_status_s::STATE_STANDBY:
-		if (mode_active) {
+		if (land_selected) {
+			if (_armed) {
+				engageLand(_local_position);
+			}
+
+		} else if (_vehicle_status.nav_state == _mode_id) {
 			if (_watchdog.inResetHoldoff(now)) {
 				// Commander normally refuses the switch (replyToArmingCheck), but its poll
 				// is 300 ms behind the reset: hand straight back, nothing latched.
 				PX4_WARN("engage refused: EKF reset its position %.1f s ago (SH_RST_HOLD %.1f s)",
 					 (double)_watchdog.resetAge(now), (double)_param_rst_hold.get());
+				_active_mode_id = _mode_id;
 				handBack(Trip::EstimateReset, _local_position.xy_valid, false);
 
 			} else {
@@ -643,10 +781,24 @@ void StructureHold::Run()
 
 		break;
 
+	case structure_hold_status_s::STATE_LANDING:
+		if (!mode_active || !_armed) {
+			PX4_INFO("Structure Land ended: %s", _armed ? "mode changed" : "disarmed");
+			_state = structure_hold_status_s::STATE_STANDBY;
+			_active_mode_id = -1;
+
+		} else if (now - _last_control_us >= CONTROL_INTERVAL) {
+			_last_control_us = now;
+			landStep(now);
+		}
+
+		break;
+
 	case structure_hold_status_s::STATE_HANDBACK:
 		if (!mode_active) {
 			PX4_INFO("handback complete: stock PX4 in charge");
 			_state = structure_hold_status_s::STATE_STANDBY;
+			_active_mode_id = -1;
 
 		} else if (now - _last_control_us >= CONTROL_INTERVAL) {
 			_last_control_us = now;
@@ -660,6 +812,7 @@ void StructureHold::Run()
 	}
 
 	const bool controlling = _state == structure_hold_status_s::STATE_ENGAGED
+				 || _state == structure_hold_status_s::STATE_LANDING
 				 || _state == structure_hold_status_s::STATE_HANDBACK;
 
 	if ((controlling && _last_control_us == now) || now - _last_status_us >= STANDBY_STATUS_INTERVAL) {
@@ -731,7 +884,8 @@ static int runPolicyBench(int iterations)
 int StructureHold::custom_command(int argc, char *argv[])
 {
 	if (argc > 0 && !strcmp(argv[0], "bench")) {
-		if (is_running() && get_instance()->_state == structure_hold_status_s::STATE_ENGAGED) {
+		if (is_running() && (get_instance()->_state == structure_hold_status_s::STATE_ENGAGED
+				     || get_instance()->_state == structure_hold_status_s::STATE_LANDING)) {
 			PX4_ERR("refused while engaged");
 			return 1;
 		}
@@ -757,9 +911,10 @@ int StructureHold::custom_command(int argc, char *argv[])
 
 int StructureHold::print_status()
 {
-	static const char *state_names[] = {"unregistered", "standby", "engaged", "handback"};
-	PX4_INFO("state: %s", state_names[_state < 4 ? _state : 0]);
-	PX4_INFO("mode_id %d, arming_check_id %d", _mode_id, _arming_check_id);
+	static const char *state_names[] = {"unregistered", "standby", "engaged", "handback", "landing"};
+	PX4_INFO("state: %s", state_names[_state < 5 ? _state : 0]);
+	PX4_INFO("mode_id %d, arming_check_id %d; Structure Land mode_id %d, arming_check_id %d", _mode_id,
+		 _arming_check_id, _land_mode_id, _land_arming_check_id);
 	PX4_INFO("latched trip: %s, last: %s, trips since boot: %u, EKF reset %.1f s ago (hold-off %.1f s)",
 		 Watchdog::name(_watchdog.latched()), Watchdog::name(_last_trip), _trip_count,
 		 (double)_watchdog.resetAge(hrt_absolute_time()), (double)_param_rst_hold.get());
@@ -778,7 +933,7 @@ int StructureHold::print_status()
 		 rangeFresh(now) ? "fresh" : "none", (double)_range.distance_m,
 		 _range.timestamp_us > 0 && now >= _range.timestamp_us ? (double)((now - _range.timestamp_us) * 1e-6f) : -1.0);
 
-	if (_state == structure_hold_status_s::STATE_ENGAGED) {
+	if (_state == structure_hold_status_s::STATE_ENGAGED || _state == structure_hold_status_s::STATE_LANDING) {
 		PX4_INFO("setpoint NED: %.2f %.2f %.2f m, yaw %.1f deg", (double)_setpoint.pos(0), (double)_setpoint.pos(1),
 			 (double)_setpoint.pos(2), (double)math::degrees(_setpoint.yaw));
 		PX4_INFO("error NED: %.2f %.2f %.2f m, thrust %.2f", (double)_last_output.pos_err(0),
@@ -809,8 +964,12 @@ SH_WALL_MIN from the measured wall.
 The watchdog hands control back to Position mode (or Altitude mode) when it trips. Status
 is published on structure_hold_status.
 
-Engage from the shell with `commander mode ext1` (first registered external mode) or from
-a ground station / MAVLink as the external mode named "Structure Hold".
+With SH_LAND_EN a second mode, "Structure Land", lands next to the structure: PX4's
+position controller descends at MPC_LAND_SPEED while the wall guard keeps the xy setpoint
+SH_WALL_MIN from the measured wall. It stays available after a latched trip.
+
+Engage from the shell with `commander mode ext1` (first registered external mode; Structure
+Land is ext2) or from a ground station / MAVLink as the external mode by name.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("structure_hold", "controller");

@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from sim2real.px4 import run_gazebo
-from sim2real.px4.run_gazebo import STATE_ENGAGED, STATE_HANDBACK, STATE_STANDBY
+from sim2real.px4.run_gazebo import STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_STANDBY
 
 START = 5_000_000
 
@@ -90,6 +90,18 @@ def test_wall_guard_stats_per_engaged_stretch():
     assert run_gazebo.wall_guard_stats(synthetic_status(), START) == []
 
 
+def test_landing_stretch_is_the_structure_land_stretch():
+    assert run_gazebo.landing_stretch(synthetic_status(), START) is None  # stock Land
+    status = synthetic_status()
+    t = np.arange(len(status["state"])) * 0.01
+    status["state"][t >= 11.5] = STATE_LANDING
+    status["standoff_shift_m"] = np.where(t >= 11.8, 0.3, 0.0).astype(np.float32)
+    landing = run_gazebo.landing_stretch(status, START)
+    assert landing is not None
+    assert abs(landing["t_s"][0] - 11.5) < 1e-6 and abs(landing["t_s"][1] - 11.99) < 1e-6
+    assert abs(landing["shift_m"] - 0.3) < 1e-6
+
+
 def test_docker_command_forwards_module_params(tmp_path):
     cmd = run_gazebo.docker_command("img", tmp_path, "0,0,0,0,0,0", 2.5, 60.0, 5.0, 1.0,
                                     ["SH_FB_EN=1", "SH_CTRL=0"], "name",
@@ -101,6 +113,7 @@ def test_docker_command_forwards_module_params(tmp_path):
     assert "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml" in cmd
     i = cmd.index("--hold-s")
     assert cmd[i + 1] == "60.0"
+    assert cmd[cmd.index("--land") + 1] == "structure"  # the guarded landing by default
 
 
 def test_pass_line_needs_every_check():

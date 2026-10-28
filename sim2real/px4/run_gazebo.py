@@ -26,7 +26,10 @@ Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same fi
 (``bridge.Rangefinder``), which the x500 model lacks, so the module's wall guard
 (``SH_WALL_MIN``) acts; ``hold.json`` then reports what the guard did in each engaged
 stretch, and for every flight the closest the truth came to the wall after the scored hold
-(the re-engage, trip and Land, where seed 3's strikes happened).
+(the re-engage, trip and landing, where seed 3's strikes happened) and over the landing
+itself. The sequence lands through the module's Structure Land mode (``--land structure``,
+the default, which keeps the wall guard down to touchdown) or stock Land (``--land stock``,
+the sequence before 2026-10-28).
 
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
 EKF2 fused the vision stream. For the benchmark, ``eval.baselines.run_baseline --runner
@@ -76,12 +79,13 @@ REPO_ROOT = HERE.parents[1]
 STATUS_TOPIC = "structure_hold_status"
 # structure_hold_status.state (msg/StructureHoldStatus.msg); sitl_test.py has the same
 # values but needs pymavlink, which the host and CI do not have.
-STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
+STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING = 1, 2, 3, 4
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
-                   env: dict[str, str], watch: bool = False) -> list[str]:
+                   env: dict[str, str], watch: bool = False, land: str = "structure"
+                   ) -> list[str]:
     cmd = ["docker", "run", "--rm", "--name", name,
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
@@ -93,7 +97,7 @@ def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: fl
     if watch:
         cmd += watch_options()
     cmd += [image, "hold-test", "--altitude", str(altitude), "--hold-s", str(hold_s),
-            "--settle-s", str(settle_s), "--drift-tol", str(drift_tol)]
+            "--settle-s", str(settle_s), "--drift-tol", str(drift_tol), "--land", land]
     for p in params:
         cmd += ["--param", p]
     return cmd
@@ -196,6 +200,19 @@ def wall_guard_stats(status: dict[str, np.ndarray], start_us: int) -> list[dict[
     return out
 
 
+def landing_stretch(status: dict[str, np.ndarray], start_us: int) -> dict[str, Any] | None:
+    """The Structure Land stretch (the last one): its window in log seconds and how far the
+    wall guard moved the xy setpoint back. None when the flight landed through stock Land."""
+    landing = np.asarray(status["state"]) == STATE_LANDING
+    if not landing.any():
+        return None
+    t = (np.asarray(status["timestamp"], dtype=np.int64) - start_us) * 1e-6
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], landing, [False])).astype(int)))
+    a, b = int(edges[-2]), int(edges[-1])
+    shift = np.asarray(status.get("standoff_shift_m", np.zeros(len(t))), dtype=float)
+    return {"t_s": [float(t[a]), float(t[b - 1])], "shift_m": float(shift[a:b].max())}
+
+
 def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
                ) -> tuple[dict[str, Any], dict[str, Any]]:
     """EKF report and eval.metrics on the TRUE position over the first hold."""
@@ -226,6 +243,12 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
         d = surface.distance(trace.pos[after])
         i = int(np.argmin(d))
         hold["after_hold"] = {"min_clearance_m": float(d[i]), "t_s": float(trace.t[after][i])}
+    landing = landing_stretch(status, start_us)
+    if landing is not None:
+        during = (trace.t >= landing["t_s"][0]) & (trace.t <= landing["t_s"][1])
+        if during.any():
+            landing["min_clearance_m"] = float(surface.distance(trace.pos[during]).min())
+        hold["landing"] = landing
     return ekf, hold
 
 
@@ -261,6 +284,9 @@ def main(argv: list[str] | None = None) -> int:
                          "in hold.json)")
     ap.add_argument("--rangefinder", action="store_true",
                     help="bridge sends a forward rangefinder against the wall (wall guard)")
+    ap.add_argument("--land", choices=("structure", "stock"), default="structure",
+                    help="end the sequence in Structure Land (wall guard to touchdown) or "
+                         "stock Land")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-hold")
     args = ap.parse_args(argv)
@@ -297,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
-                         to_environment(px4_params), watch=args.watch)
+                         to_environment(px4_params), watch=args.watch, land=args.land)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:
@@ -306,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report: dict[str, Any] = {
         "scenario": sc.name, "profile": prof.name, "seed": prof.seed, "commit": commit,
-        "module_params": args.param, "run": str(out.relative_to(REPO_ROOT)),
+        "module_params": args.param, "land": args.land, "run": str(out.relative_to(REPO_ROOT)),
         "flight_exit_code": flight_status,
     }
     ulog = out / "flight.ulg"
