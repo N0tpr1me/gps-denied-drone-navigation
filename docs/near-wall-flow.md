@@ -124,3 +124,14 @@ landing after the hold timed out (90 s waiting for touchdown). And in both seed 
 the flight script's own `position_held` check failed (about 1.5 m drift reported against a
 true p95 of 0.22 m); it probably reads the jumpy `vio_at_engage` estimate, not truth.
 Neither was looked into here.
+
+Followed up (2026-10-28): the seed 3 timeout is not Structure Land's. After the scripted
+watchdog trip, stock Position mode followed the recovering estimate jump into the wall
+(true gap 0.91 m at 93 s down to 0.28 m at 101 s) and struck it about 1 s before the land
+command; Structure Land engaged on a tumbling vehicle, tripped on tilt at once and handed
+back to Position mode, which hovered 0.12 m up and later flipped, so touchdown never
+registered. This batch flew without `--rangefinder`, so neither the wall guard nor
+Structure Hover could see the wall; the lee flight on the same seed walked in more slowly
+and landed 0.37 m off it. The seed 1 `position_held` failures were the injected mid-hold
+jump (1.5 m in the estimate, truth within 0.26 m); `run_gazebo.py` now judges the hold
+checks on truth and keeps the estimate's verdict under `estimate_checks`.

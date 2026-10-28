@@ -146,3 +146,20 @@ def test_docker_command_watch_publishes_the_browser_view(tmp_path):
     assert "WATCH=1" in watched and "6080:6080" in watched
     # options go before the image, so docker reads them rather than the entrypoint
     assert watched.index("6080:6080") < watched.index("img")
+
+
+def test_hold_checks_rejudged_on_truth():
+    # The estimate jumped (sitl_test saw 1.5 m) but the vehicle held: truth decides.
+    summary = {"checks": {"position_held": False, "altitude_held": True, "landed": True},
+               "passed": False}
+    run_gazebo.judge_hold_on_truth(summary, {"truth_drift": {"xy_max_m": 0.4, "z_max_m": 0.2}},
+                                   1.0)
+    assert summary["passed"] and summary["checks"]["position_held"]
+    assert summary["estimate_checks"] == {"position_held": False, "altitude_held": True}
+    # A real drift still fails, and a hold without a truth score is left as it was.
+    run_gazebo.judge_hold_on_truth(summary, {"truth_drift": {"xy_max_m": 1.2, "z_max_m": 0.2}},
+                                   1.0)
+    assert not summary["passed"]
+    untouched = {"checks": {"position_held": False}, "passed": False}
+    run_gazebo.judge_hold_on_truth(untouched, {}, 1.0)
+    assert untouched == {"checks": {"position_held": False}, "passed": False}
