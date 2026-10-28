@@ -134,7 +134,8 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second
   module mode, ext2, `SH_LAND_EN`: PX4's position controller lands on an xy point the wall
   guard keeps off the wall; the scripted sequence lands through it, `--land stock` for the
-  old ending). The cloud container can build
+  old ending) and Structure Hover (ext3, `SH_HB_GUARD`: a trip next to a measured wall
+  hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
   `sitl_test.py --wall` with a simulated rangefinder.
 - Next: one real logging flight (biggest sim-to-real unknown, `docs/real-flight-gap.md`),

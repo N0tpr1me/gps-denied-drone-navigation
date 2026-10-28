@@ -6,7 +6,13 @@ from __future__ import annotations
 import numpy as np
 
 from sim2real.px4 import run_gazebo
-from sim2real.px4.run_gazebo import STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_STANDBY
+from sim2real.px4.run_gazebo import (
+    STATE_ENGAGED,
+    STATE_HANDBACK,
+    STATE_HOVER,
+    STATE_LANDING,
+    STATE_STANDBY,
+)
 
 START = 5_000_000
 
@@ -100,6 +106,10 @@ def test_landing_stretch_is_the_structure_land_stretch():
     assert landing is not None
     assert abs(landing["t_s"][0] - 11.5) < 1e-6 and abs(landing["t_s"][1] - 11.99) < 1e-6
     assert abs(landing["shift_m"] - 0.3) < 1e-6
+    assert run_gazebo.landing_stretch(status, START, STATE_HOVER) is None
+    status["state"][(t >= 11.2) & (t < 11.5)] = STATE_HOVER
+    hover = run_gazebo.landing_stretch(status, START, STATE_HOVER)
+    assert hover is not None and abs(hover["t_s"][0] - 11.2) < 1e-6
 
 
 def test_docker_command_forwards_module_params(tmp_path):

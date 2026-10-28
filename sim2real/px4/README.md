@@ -105,7 +105,19 @@ What it does today:
   flight, and also while a trip is latched (that is when it is needed); its watchdog trips
   (stale or invalid estimate, tilt, xy error over `SH_WD_POS_ERR`) hand back like the
   hold's. Without a usable range it is a plain position-holding landing.
-  `structure_hold_status.state` is `landing` (4) while it flies.
+  `structure_hold_status.state` is `landing` (4) while it flies. The guard's push rate,
+  low-passed over 0.3 s, goes in as xy velocity feed-forward (position-only setpoints left
+  PX4's loop trailing the pushed point: 0.37 m closest on Gazebo seed 3 at 8 m/s), and the
+  descent slows from `MPC_LAND_SPEED` to 0.3 m/s while the vehicle is 0.15 to 0.4 m closer
+  to the wall than the point.
+- **Structure Hover: the guarded handback** (`SH_HB_GUARD`, default on; a third mode, ext3).
+  The same guarded setpoint without the descent, height held. A trip in Structure Hold hands
+  back into it first when a usable forward range sees the wall within 5 m, then falls
+  through to Position mode (then Hold, then Land) if commander refuses it. Stock Position
+  mode after a trip on a jumped estimate creeps toward the wall as the estimate recovers
+  (Gazebo seed 3: 0.59 to 0.31 m before the landing); here the range keeps the point off
+  the wall. The pilot leaves it for Position mode as usual. State `hover` (5). Chosen by
+  Zain over handing straight into Structure Land, or no change (2026-10-28).
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -113,7 +125,7 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, the test hook `SH_TEST_FAULT`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD`, the test hook `SH_TEST_FAULT`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside
@@ -187,13 +199,15 @@ latency from the ulog, status samples logged). Exit 0 means every check passed.
 MAVLink (`DISTANCE_SENSOR` at 20 Hz) against a virtual wall 1 m ahead of the engage point;
 after the hold the wall jumps to 0.3 m ahead of the hold point, inside `SH_WALL_MIN` 0.7 m,
 and the vehicle must back off to at least 0.55 m and log a nonzero `standoff_shift_m`.
-At the landing the wall is put 0.8 m ahead and creeps 0.6 m in at 0.2 m/s (the estimate
-recovering after a jump, seen from the estimate's side); Structure Land must stay at least
-0.55 m from it until touchdown. On 2026-10-28 it stayed 0.67 m or more; stock Land, flown
-with `--land stock` as the control, came to 0.15 m (`experiments/LOG.md`).
+After the trip the handback must go to Structure Hover, and the wall is put 0.8 m ahead and
+creeps 0.6 m in at 0.1 m/s (the estimate recovering after a jump, seen from the estimate's
+side); the hover must stay at least 0.55 m from it. The landing gets the same creep, but
+its clearance is reported, not checked: SIH's EKF velocity is unusable (below), so PX4's
+own xy loop, which flies Structure Land, tracks too poorly here to judge it (0.26 to 0.67 m
+over runs; stock Land 0.15 m). Gazebo judges the landing.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
-Structure Land, `commander mode posctl` disengages,
+Structure Land, `commander mode ext3` hovers in Structure Hover, `commander mode posctl` disengages,
 `structure_hold status` prints the module state, `structure_hold trip` trips the watchdog. `structure_hold bench [n]` times n policy
 steps on synthetic samples (refused while engaged); `bench_test.py` runs it and the other
 props-off checks on a flight controller over MAVLink (`docs/bench-test.md`).
