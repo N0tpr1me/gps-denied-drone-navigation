@@ -1339,6 +1339,30 @@ Structure Land stayed 0.67 m or more from the wall against 0.15 m for stock Land
 so the creep in Position mode before the landing (v19 calm seed 3: 0.59 to 0.31 m) is
 still stock PX4's. Gazebo seed 3 re-fly with `--rangefinder`: pending.
 
+**Gazebo seed 3 with Structure Land (2026-10-28).** v19, image rebuilt at 78b2a15, `-- --profile
+vio_at_engage --rangefinder`, guard on, batch `20261028-125545`: 3 of 3 flights ok. The closest
+the truth came to the wall after the hold, always in the landing, rose from 0.250 / 0.325 /
+0.208 m under stock Land (`20261027-153444`) to 0.478 / 0.462 / 0.368 m (calm / 4 / 8 m/s);
+the guard moved the landing point back 0.31 / 0.34 / 0.44 m. Hold unchanged (p95 0.203 /
+0.200 / 0.214 m, min clearance 0.80-0.81 m). Better, but still under `SH_WALL_MIN`: PX4's xy
+loop lags a setpoint that the guard keeps pushing. A correction to the SIH number above:
+over later SIH runs Structure Land's minimum ranged 0.26 to 0.67 m, because SIH's EKF
+velocity is unusable on v1.17.0 and PX4's own xy loop tracks poorly there; SIH cannot judge
+PX4-flown modes, Gazebo does.
+
+**Follow-up (2026-10-28): guarded hover after a handback, and a landing that keeps up.**
+Zain chose, on a decision card, that a trip next to a measured wall hands back to a guarded
+hover first, then Position mode. Structure Hover (`SH_HB_GUARD`, ext3) is Structure Land's
+setpoint without the descent. Both now feed the guard's push rate forward as velocity, so
+PX4's loop does not trail the point, and Structure Land descends more slowly (down to
+0.3 m/s) while the vehicle is still closer to the wall than the point. In SIH with the wall
+creeping 0.6 m in at 0.1 m/s (about twice Gazebo seed 3's creep) right after the trip,
+Structure Hover stayed 0.68 to 0.78 m from it over 4 runs. Gazebo seed 3 re-fly: pending.
+A latent bug went with it: `config_control_setpoints` has a queue of one, so a mode's
+control config sent at registration could be lost to the next mode's (Structure Land then
+flew without position control in one SIH run); the module now re-sends one config per
+commander poll.
+
 Scoring note: images built since PR #73 log no `estimator_status_flags` (PX4 v1.17's logger
 drops a topic whose expanded format passes its 1600-byte buffer, and the module's status
 message grew). `ulog_checks.aiding` now reads `estimator_status.control_mode_flags` when that

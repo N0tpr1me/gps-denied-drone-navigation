@@ -18,6 +18,11 @@
  * which the forward range keeps at least SH_WALL_MIN from the wall. Stock Land holds xy on
  * the estimate alone, and after a handback on a jumped estimate that walks the vehicle into
  * the wall (docs/baseline.md, wall guard on seed 3).
+ *
+ * Structure Hover (SH_HB_GUARD), a third mode, is the same guarded setpoint with no
+ * descent. A watchdog trip hands back into it first when a forward range sees the wall,
+ * so stock Position mode's creep after a handback on a jumped estimate cannot walk the
+ * vehicle into the wall; the pilot switches out of it to Position mode as usual.
  */
 
 #pragma once
@@ -75,9 +80,13 @@ public:
 
 	static constexpr const char *MODE_NAME = "Structure Hold";
 	static constexpr const char *LAND_MODE_NAME = "Structure Land";
+	static constexpr const char *HOVER_MODE_NAME = "Structure Hover";
+	static constexpr float HOVER_WALL_RANGE_M = 5.f;  // a trip hands back to Structure Hover inside this
+	static constexpr float GUARD_SPEED_TAU_S = 0.3f;  // low-pass on the guard's push rate (feed-forward)
+	static constexpr float LAND_SLOW_MPS = 0.3f;      // Structure Land's descent while it lags the guard
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
-	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Hold, then Land
+	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Position, Hold, Land
 
 private:
 	void Run() override;
@@ -97,9 +106,10 @@ private:
 	void handbackStep(const hrt_abstime now);
 	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m);
 	void controlStep(const hrt_abstime now);
-	void engageLand(const vehicle_local_position_s &lpos);
-	void landStep(const hrt_abstime now);
-	void publishTrajectorySetpoint(const matrix::Vector3f &velocity_ned);
+	void engageGuarded(const vehicle_local_position_s &lpos, bool descend);
+	void guardedStep(const hrt_abstime now);
+	void publishTrajectorySetpoint(float z_ned, const matrix::Vector3f &velocity_ned);
+	bool guardedHandbackAvailable(const hrt_abstime now) const;
 	void updateFix(const hrt_abstime now);
 	void updateRange();
 	bool rangeFresh(const hrt_abstime now) const;
@@ -139,6 +149,10 @@ private:
 	uint64_t _land_request_id{0};
 	int8_t _land_mode_id{-1};      // Structure Land; stays -1 with SH_LAND_EN 0
 	int8_t _land_arming_check_id{-1};
+	bool _hover_registration_sent{false};
+	uint64_t _hover_request_id{0};
+	int8_t _hover_mode_id{-1};     // Structure Hover; stays -1 with SH_HB_GUARD 0
+	int8_t _hover_arming_check_id{-1};
 
 	// Vehicle state cache
 	vehicle_status_s _vehicle_status{};
@@ -152,7 +166,10 @@ private:
 	// Mode state
 	uint8_t _state{structure_hold_status_s::STATE_UNREGISTERED};
 	int8_t _active_mode_id{-1};    // the mode that is flying (or handing back): hold or land
-	uint8_t _land_xy_reset_counter{0};
+	uint8_t _land_xy_reset_counter{0};  // Structure Land and Structure Hover
+	bool _handback_guarded{false};      // this handback tries Structure Hover first
+	float _guard_speed{0.f};            // [m/s] the guard's recent push rate, away from the wall
+	uint8_t _config_resend{0};          // which mode's control config the next poll re-sends
 	structure_hold::Watchdog _watchdog{};
 	structure_hold::HoldGains _gains{};
 	structure_hold::HoldSetpoint _setpoint{};
@@ -214,6 +231,7 @@ private:
 		(ParamFloat<px4::params::SH_WALL_MIN>) _param_wall_min,
 		(ParamInt<px4::params::SH_WALL_REQ>) _param_wall_req,
 		(ParamInt<px4::params::SH_LAND_EN>) _param_land_en,
+		(ParamInt<px4::params::SH_HB_GUARD>) _param_hb_guard,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

@@ -27,9 +27,10 @@ Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same fi
 (``SH_WALL_MIN``) acts; ``hold.json`` then reports what the guard did in each engaged
 stretch, and for every flight the closest the truth came to the wall after the scored hold
 (the re-engage, trip and landing, where seed 3's strikes happened) and over the landing
-itself. The sequence lands through the module's Structure Land mode (``--land structure``,
-the default, which keeps the wall guard down to touchdown) or stock Land (``--land stock``,
-the sequence before 2026-10-28).
+itself (``landing``), and over the guarded hover the trip hands back into (``hover``). The
+sequence lands through the module's Structure Land mode (``--land structure``, the default,
+which keeps the wall guard down to touchdown) or stock Land (``--land stock``, the sequence
+before 2026-10-28).
 
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
 EKF2 fused the vision stream. For the benchmark, ``eval.baselines.run_baseline --runner
@@ -79,7 +80,7 @@ REPO_ROOT = HERE.parents[1]
 STATUS_TOPIC = "structure_hold_status"
 # structure_hold_status.state (msg/StructureHoldStatus.msg); sitl_test.py has the same
 # values but needs pymavlink, which the host and CI do not have.
-STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING = 1, 2, 3, 4
+STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_HOVER = 1, 2, 3, 4, 5
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
@@ -200,10 +201,12 @@ def wall_guard_stats(status: dict[str, np.ndarray], start_us: int) -> list[dict[
     return out
 
 
-def landing_stretch(status: dict[str, np.ndarray], start_us: int) -> dict[str, Any] | None:
-    """The Structure Land stretch (the last one): its window in log seconds and how far the
-    wall guard moved the xy setpoint back. None when the flight landed through stock Land."""
-    landing = np.asarray(status["state"]) == STATE_LANDING
+def landing_stretch(status: dict[str, np.ndarray], start_us: int,
+                    state: int = STATE_LANDING) -> dict[str, Any] | None:
+    """The Structure Land stretch (the last one; ``state=STATE_HOVER`` for Structure Hover
+    after the trip): its window in log seconds and how far the wall guard moved the xy
+    setpoint back. None when the flight never entered that mode."""
+    landing = np.asarray(status["state"]) == state
     if not landing.any():
         return None
     t = (np.asarray(status["timestamp"], dtype=np.int64) - start_us) * 1e-6
@@ -243,12 +246,13 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
         d = surface.distance(trace.pos[after])
         i = int(np.argmin(d))
         hold["after_hold"] = {"min_clearance_m": float(d[i]), "t_s": float(trace.t[after][i])}
-    landing = landing_stretch(status, start_us)
-    if landing is not None:
-        during = (trace.t >= landing["t_s"][0]) & (trace.t <= landing["t_s"][1])
-        if during.any():
-            landing["min_clearance_m"] = float(surface.distance(trace.pos[during]).min())
-        hold["landing"] = landing
+    for key, state in (("hover", STATE_HOVER), ("landing", STATE_LANDING)):
+        stretch = landing_stretch(status, start_us, state)
+        if stretch is not None:
+            during = (trace.t >= stretch["t_s"][0]) & (trace.t <= stretch["t_s"][1])
+            if during.any():
+                stretch["min_clearance_m"] = float(surface.distance(trace.pos[during]).min())
+            hold[key] = stretch
     return ekf, hold
 
 

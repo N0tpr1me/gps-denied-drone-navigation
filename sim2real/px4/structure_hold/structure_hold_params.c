@@ -347,3 +347,22 @@ PARAM_DEFINE_INT32(SH_WALL_REQ, 0);
  * @group Structure Hold
  */
 PARAM_DEFINE_INT32(SH_LAND_EN, 1);
+
+/**
+ * Handback: guarded hover first when a wall is measured
+ *
+ * Registers a third external mode, "Structure Hover" (ext3): the Structure Land setpoint
+ * without the descent, so PX4's own position controller hovers on a point the wall guard
+ * keeps at least SH_WALL_MIN from the measured wall. A watchdog trip in Structure Hold
+ * hands back into it first when a usable forward range sees the wall within 5 m, then
+ * falls through to Position mode as before if commander refuses it. Stock Position mode
+ * holds the estimate alone, and after a trip on a jumped estimate it creeps toward the
+ * wall as the estimate recovers (Gazebo seed 3: 0.59 to 0.31 m clearance before the
+ * landing). The pilot leaves it for Position mode as usual. Available in flight only, also
+ * after a latched trip. 0: hand back to Position mode directly.
+ *
+ * @boolean
+ * @reboot_required true
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_HB_GUARD, 1);

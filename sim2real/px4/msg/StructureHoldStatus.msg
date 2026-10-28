@@ -8,6 +8,7 @@ uint8 STATE_STANDBY = 1       # registered, another mode is flying
 uint8 STATE_ENGAGED = 2       # Structure Hold is the active mode and commands rates
 uint8 STATE_HANDBACK = 3      # watchdog tripped, control handed back to stock PX4
 uint8 STATE_LANDING = 4       # Structure Land is the active mode: PX4 descends on the guarded xy setpoint
+uint8 STATE_HOVER = 5         # Structure Hover is the active mode: PX4 hovers on the guarded setpoint
 uint8 state
 
 uint8 TRIP_NONE = 0
