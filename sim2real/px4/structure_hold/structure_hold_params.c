@@ -339,8 +339,9 @@ PARAM_DEFINE_INT32(SH_WALL_REQ, 0);
  * Land holds xy on the estimate alone, so after a handback on a jumped estimate it walks
  * the vehicle into the wall as the estimate recovers (docs/baseline.md, wall guard on
  * Gazebo seed 3). Available in flight only, and also after a latched watchdog trip. Its
- * own watchdog trips (stale or invalid estimate, tilt, xy error) hand back like Structure
- * Hold's. Without a usable forward range it is a plain position-holding landing.
+ * own watchdog trips (stale or invalid estimate, tilt, xy error) hand back to stock Land
+ * first, since the landing was already asked for, then to Position mode, Hold and Land
+ * as Structure Hold's do. Without a usable forward range it is a plain position-holding landing.
  *
  * @boolean
  * @reboot_required true
