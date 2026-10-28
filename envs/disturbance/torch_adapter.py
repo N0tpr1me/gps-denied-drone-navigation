@@ -41,6 +41,10 @@ def shelter_factor(p: DisturbanceParams, pos: torch.Tensor) -> torch.Tensor:
     return core._shelter(torch, p, pos)
 
 
+def air_velocity(p: DisturbanceParams, t: Any, pos: torch.Tensor) -> torch.Tensor:
+    return core._air(torch, p, _like(t, p.mean_wind), pos)
+
+
 def drag_force(v_rel: torch.Tensor, k_lin: torch.Tensor, k_quad: torch.Tensor) -> torch.Tensor:
     return core._drag(torch, v_rel, k_lin, k_quad)
 

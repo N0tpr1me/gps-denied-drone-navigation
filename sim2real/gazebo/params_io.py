@@ -34,7 +34,23 @@ _FIELDS: dict[str, tuple[int, ...] | None] = {
     "has_wall": (),
     "wall_decay": (),
     "wall_floor": (),
+    "wall_deflect": (),
+    "wall_tangent": (3,),
+    "wall_recirc": (),
+    "wall_recirc_length": (),
+    "wake_amp": None,  # (3, M), or (3, 0) with the flow off
+    "wake_phase": None,  # (3, M), or (3, 0)
+    "wake_length": (),
+    "shed_amp": (),
+    "shed_omega": (),
+    "shed_phase": (),
+    "shed_dir": (3,),
 }
+# Fields added with the near-wall flow (docs/near-wall-flow.md). Files written before it
+# lack them; they read as the flow switched off.
+_OPTIONAL = {"wall_deflect": 0.0, "wall_tangent": 0.0, "wall_recirc": 0.0,
+             "wall_recirc_length": 1.0, "wake_length": 1.0,
+             "shed_amp": 0.0, "shed_omega": 0.0, "shed_phase": 0.0, "shed_dir": 0.0}
 
 
 def write_params(path: str | Path, p: DisturbanceParams, env: int = 0) -> None:
@@ -62,12 +78,15 @@ def read_params(path: str | Path) -> DisturbanceParams:
         if int(count) != len(values):
             raise ValueError(f"{path}: field '{name}' has {len(values)} values, not {count}")
         fields[name] = np.array([float(v) for v in values], dtype=np.float64)
-    missing = set(_FIELDS) - set(fields)
+    for name in ("wake_amp", "wake_phase"):
+        fields.setdefault(name, np.zeros(0))  # no wake sinusoids: the flow is off
+    missing = set(_FIELDS) - set(fields) - set(_OPTIONAL)
     if missing:
         raise ValueError(f"{path}: missing fields {sorted(missing)}")
 
     k = fields["gust_start"].size
     m = fields["turb_omega"].size
+    m_wake = fields["wake_amp"].size // 3  # 0 when the flow is off, else m
     shapes = {
         **{name: shape for name, shape in _FIELDS.items() if shape is not None},
         "gust_start": (k,),
@@ -76,9 +95,13 @@ def read_params(path: str | Path) -> DisturbanceParams:
         "turb_amp": (3, m),
         "turb_omega": (m,),
         "turb_phase": (3, m),
+        "wake_amp": (3, m_wake),
+        "wake_phase": (3, m_wake),
     }
     arrays = {}
     for name, shape in shapes.items():
+        if name not in fields:
+            fields[name] = np.full(shape, _OPTIONAL[name]).reshape(-1)
         if fields[name].size != int(np.prod(shape, dtype=int)):
             raise ValueError(f"{path}: field '{name}' does not have shape {shape}")
         arrays[name] = fields[name].reshape((1, *shape))

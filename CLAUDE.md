@@ -56,7 +56,7 @@ station, vision in the policy. The module consumes the drone's existing position
 
 | Path | What lives there |
 | --- | --- |
-| `envs/disturbance/` | Stateless wind + near-wall force model (NumPy core, torch adapter) |
+| `envs/disturbance/` | Stateless wind + near-wall force model (NumPy core, torch adapter); near-wall flow terms off by default (`docs/near-wall-flow.md`) |
 | `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning) and the EKF2-like fusion (`ekf.py`) |
 | `envs/sims/` | Simulator backends behind one seam (thrust, body torque, external force in; `QuadState` out), PX4-shaped rate PID |
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
@@ -69,7 +69,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md` |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md` |
 
 ## Conventions (details in docs/conventions.md)
 

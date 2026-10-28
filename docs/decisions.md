@@ -82,3 +82,4 @@ Full reasoning: the Structure Hold build plan and execution plan (project docs, 
 | Idea | Date | Note |
 | --- | --- | --- |
 | Replace stock Land (commander `replace_internal_mode`) with Structure Land, so failsafe and RC-loss landings next to a structure keep the wall guard too | 2026-10-28 | Commander falls back to the internal mode only if the external one stops answering, not when its arming check says it cannot run, so a vehicle without a range or position could be left with no Land; needs a failsafe review first |
+| Precomputed CFD wind fields around a wall, a pier and a deck, looked up in place of the closed-form near-wall profiles | 2026-10-28 | Needs a CFD set-up and a field lookup in torch and the Gazebo plugin; the literature-shaped terms in `docs/near-wall-flow.md` cover the same kinds of air now. Revisit with fan rig data. |

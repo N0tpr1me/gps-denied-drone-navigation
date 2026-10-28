@@ -1,0 +1,99 @@
+# v19 against the cascaded PD yardstick under the near-wall flow (envs/disturbance,
+# docs/near-wall-flow.md): windward deflection, leeward recirculation, wake turbulence and
+# vortex shedding, at literature-shaped ranges (not fitted; the fan rig fits them). The
+# Gate 1 x500 fused set (gate1_x500_ekf_v19.yaml) with the mean wind's direction fixed, so
+# the windward and leeward terms each get their own cells, and each flow cell paired with
+# the same wind without the flow. Not a gate: it measures how much the more realistic wall
+# air costs each controller. Seeds 9101 to 9103: inside the block training refuses, outside
+# Gate 1's three.
+#   python -m training.launch --config eval/configs/near_wall_flow_v19.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/near_wall_flow_v19.yaml --device cpu
+name: near_wall_flow_v19
+entrypoint: eval.gate1
+seed: 9101  # unused: the protocol seeds are params.seeds
+expected_hours: 0.7  # ten cells, two controllers, 512 episodes per seed
+gpus: 1
+params:
+  controllers:
+    - name: v19
+      policy: training/policies/structure_hold_v19.onnx  # released (PR #61)
+  gate_controller: v19
+  seeds: [9101, 9102, 9103]
+  num_envs: 512
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    # EKF2-like fusion as gz_x500_sitl has it (envs/structure_hold/airframes.py).
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
+    # The standard estimate corruption (eval rates, not the 5x training rates), stated in
+    # full so a later change of a default cannot silently move the test set.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Held-out gust schedule: both gusts start inside the 20 s episode (training draws
+      # starts up to 50 s). Gust speed and length stay inside the training ranges.
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  # Headings: 0 blows into the wall (windward side), 180 away from it (the drone in the lee).
+  # The flow block is the same in every flow cell; the ranges are in docs/near-wall-flow.md.
+  cells:
+    - {name: w8_d1_into, label: "8 m/s into the wall, 1 m, shelter only",
+       env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0}, hold_distance: 1.0}}
+    - {name: w8_d1_into_flow, label: "8 m/s into the wall, 1 m, near-wall flow",
+       env: {disturbance: &flow8in {mean_speed: 8.0, mean_heading_deg: 0.0,
+             wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+             shed_amp: [0.1, 0.4]}, hold_distance: 1.0}}
+    - {name: w8_d1_lee, label: "8 m/s away from the wall, 1 m, shelter only",
+       env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 180.0}, hold_distance: 1.0}}
+    - {name: w8_d1_lee_flow, label: "8 m/s away from the wall, 1 m, near-wall flow",
+       headline: true,
+       env: {disturbance: &flow8lee {mean_speed: 8.0, mean_heading_deg: 180.0,
+             wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+             shed_amp: [0.1, 0.4]}, hold_distance: 1.0}}
+    - {name: w8_d2_into_flow, label: "8 m/s into the wall, 2 m, near-wall flow",
+       env: {disturbance: *flow8in, hold_distance: 2.0}}
+    - {name: w8_d2_lee_flow, label: "8 m/s away from the wall, 2 m, near-wall flow",
+       env: {disturbance: *flow8lee, hold_distance: 2.0}}
+    - {name: w4_d1_into_flow, label: "4 m/s into the wall, 1 m, near-wall flow",
+       env: {disturbance: {mean_speed: 4.0, mean_heading_deg: 0.0, wall_deflect: [0.3, 0.8],
+             wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3], shed_amp: [0.1, 0.4]},
+             hold_distance: 1.0}}
+    - {name: w4_d1_lee_flow, label: "4 m/s away from the wall, 1 m, near-wall flow",
+       env: {disturbance: {mean_speed: 4.0, mean_heading_deg: 180.0, wall_deflect: [0.3, 0.8],
+             wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3], shed_amp: [0.1, 0.4]},
+             hold_distance: 1.0}}
+    - {name: w8_d1_any, label: "8 m/s any heading, 1 m, shelter only",
+       env: {disturbance: {mean_speed: 8.0}, hold_distance: 1.0}}
+    - {name: w8_d1_any_flow, label: "8 m/s any heading, 1 m, near-wall flow",
+       env: {disturbance: {mean_speed: 8.0, wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5],
+             wake_ti: [0.1, 0.3], shed_amp: [0.1, 0.4]}, hold_distance: 1.0}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9101]
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 2.0
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
