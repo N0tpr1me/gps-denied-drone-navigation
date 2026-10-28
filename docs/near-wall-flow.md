@@ -90,5 +90,37 @@ What it says:
   rig measures stronger near-wall forces than the fitted drag gives, these terms are where to
   turn them up (and the first thing to re-run is this config).
 
-This is the mock and the PD yardstick. The tuned-PX4 comparison lives in Gazebo: the two
-flow scenarios above are ready for a re-fly of v19 and tuned PX4 when the Mac is free.
+This is the mock and the PD yardstick. The tuned-PX4 comparison is in Gazebo, below.
+
+## Gazebo: v19 against tuned PX4 under the flow
+
+Flown on the Mac on 2026-10-28 at `6eb3c3d` (image built the same day from sources identical
+to main, so it carries the flow in the wind plugin; hover test passed). Scenarios
+`wall1m_wind_8ms_flow` (8 m/s into the wall) and `wall1m_lee_8ms_flow` (8 m/s away from it,
+the drone in the lee), seeds 1 to 3, 60 s hold 1 m from the wall. v19: hold runner,
+`vio_at_engage`, batch `runs/20261028-134426_px4_baseline_v19_flow_6eb3c3d`. Tuned PX4:
+`eval/baselines/px4_tuned_v1.params`, `vio_at_hover`, batch
+`runs/20261028-135808_px4_baseline_tuned_v1_flow_6eb3c3d`. The wind trace check passed in all
+12 flights: Gazebo applied the same force as the Python model with the flow on.
+
+Mean over seeds 1 to 3 (worst in brackets), tuned PX4 → v19:
+
+| Scenario | p95 (m) | Worst toward wall (m) | rms (m) | Crashes |
+| --- | --- | --- | --- | --- |
+| 8 m/s into the wall, flow | 0.533 (0.916) → 0.263 (0.286), -51 % | 0.255 (0.432) → 0.134 (0.291), -47 % | 0.216 → 0.127, -41 % | 0/3 → 0/3 |
+| 8 m/s in the lee, flow | 0.535 (0.918) → 0.258 (0.292), -52 % | 0.264 (0.484) → 0.107 (0.270), -60 % | 0.217 → 0.130, -40 % | 0/3 → 0/3 |
+
+Per seed (p95, m): into the wall v19 0.230 / 0.286 / 0.273, tuned 0.916 / 0.288 / 0.395; in
+the lee v19 0.218 / 0.292 / 0.263, tuned 0.918 / 0.282 / 0.405. Seed 2 is a tie, seeds 1 and 3
+are v19's. Seed 3 is still the closest approach to the wall for both (min clearance v19
+0.71 / 0.73 m, tuned 0.57 / 0.52 m); no contacts.
+
+The shelter-only benchmark (`docs/baseline.md`, 8 seeds, PR #67) had v19 at -47 % on
+`wall1m_wind_8ms`; with the flow it is -51 to -52 % on seeds 1 to 3. The seed sets differ,
+so this says the margin held, not that it grew.
+
+Not about the hold, noted for the module threads: in v19's into-the-wall seed 3 flight, the
+landing after the hold timed out (90 s waiting for touchdown). And in both seed 1 flights
+the flight script's own `position_held` check failed (about 1.5 m drift reported against a
+true p95 of 0.22 m); it probably reads the jumpy `vio_at_engage` estimate, not truth.
+Neither was looked into here.
