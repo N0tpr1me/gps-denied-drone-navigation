@@ -30,8 +30,15 @@ linear plus quadratic drag on the air velocity relative to the drone. The force 
 drag from the drone's own motion, so the simulator must not add translational drag of its
 own; Gazebo, which has its own, applies `disturbance_force(...) - drag_force(-vel, k_lin, k_quad)`.
 
+Near-wall flow (off by default; `docs/near-wall-flow.md`): windward deflection of the
+blocked wind along the surface, leeward recirculation back toward it, wake turbulence that
+scales with the mean wind, and vortex shedding at `St * U / D` in the lee. Turn the terms on
+with `wall_deflect`, `wall_recirc`, `wake_ti` and `shed_amp`; `air_velocity(p, t, pos)` gives
+the air the drone sits in.
+
 Nominal values reproduce the one published data point (2.14 kg drone, 10 m/s headwind:
 2.78 N at 5 m from a wall, 0.40 N at 0.5 m). Default ranges are wide until the Phase 3 fan
-rig fits them. Not modelled yet: near-wall yaw torque, ground effect, an overhead slab.
+rig fits them. Not modelled yet: near-wall yaw torque, ground effect, variation along the
+surface, two surfaces at once.
 
 Tests: `pytest envs/disturbance`.

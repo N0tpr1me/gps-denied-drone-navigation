@@ -14,7 +14,7 @@ degrees; ``wind_heading_deg`` is the direction the mean wind blows toward, 0 = +
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -107,9 +107,11 @@ def load_scenario(path: str | Path) -> Scenario:
 def sample_scenario(sc: Scenario) -> DisturbanceParams:
     """The scenario's episode disturbance for one env, as the training env would draw it."""
     normal = tuple(-v for v in sc.wall_normal_toward)
-    p = sample_params(sc.disturbance, 1, sc.seed, wall_point=sc.wall_point, wall_normal=normal)
+    cfg = sc.disturbance
     if sc.wind_heading_deg is not None:
-        speed = float(np.linalg.norm(p.mean_wind[0, :2]))
-        h = math.radians(sc.wind_heading_deg)
-        p.mean_wind[0] = (speed * math.cos(h), speed * math.sin(h), 0.0)
-    return p
+        # The heading fixed in the config rather than written over the drawn wind: the same
+        # draws and the same mean wind as before, and the near-wall flow, which depends on
+        # which side of the wall the wind blows from, sees the scenario's heading.
+        h = float(sc.wind_heading_deg)
+        cfg = replace(cfg, mean_heading_deg=(h, h))
+    return sample_params(cfg, 1, sc.seed, wall_point=sc.wall_point, wall_normal=normal)

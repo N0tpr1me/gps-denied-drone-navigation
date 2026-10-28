@@ -79,3 +79,4 @@ Full reasoning: the Structure Hold build plan and execution plan (project docs, 
 
 | Idea | Date | Note |
 | --- | --- | --- |
+| Precomputed CFD wind fields around a wall, a pier and a deck, looked up in place of the closed-form near-wall profiles | 2026-10-28 | Needs a CFD set-up and a field lookup in torch and the Gazebo plugin; the literature-shaped terms in `docs/near-wall-flow.md` cover the same kinds of air now. Revisit with fan rig data. |

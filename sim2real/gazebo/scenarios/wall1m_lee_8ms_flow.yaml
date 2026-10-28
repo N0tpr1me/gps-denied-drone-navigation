@@ -1,0 +1,21 @@
+# As wall1m_wind_8ms_flow with the wind blowing away from the wall, so the drone sits in
+# the structure's lee: reverse flow toward the wall in the separation bubble, vortex
+# shedding across it and wake turbulence (docs/near-wall-flow.md).
+name: wall1m_lee_8ms_flow
+seed: 1
+spawn: {x: -1.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 1 m from the wall (x = 0), nose toward it
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 180.0  # away from the wall: the drone in its lee
+disturbance:
+  mean_speed: 8.0
+  num_gusts: 2
+  gust_start: [40.0, 65.0]   # both inside the 60 s hover (it starts ~25 s sim time)
+  gust_duration: [1.0, 2.0]
+  gust_speed: [2.0, 4.0]
+  turb_sigma: 1.0
+  turb_tau: 1.0
+  wall_deflect: [0.3, 0.8]
+  wall_recirc: [0.2, 0.5]
+  wake_ti: [0.1, 0.3]
+  shed_amp: [0.1, 0.4]
+hover: {altitude: 2.5, hover_s: 60.0}
