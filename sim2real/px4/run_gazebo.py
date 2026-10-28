@@ -16,7 +16,8 @@ latched refusal, land) run inside the SITL image. Needs Docker and the image fro
 Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same files as
 ``sim2real.estimate_bridge.run_estimate`` (traces, their verification, ``ekf.json``) plus:
 
-- ``summary.json``: sitl_test.py's checks (drift numbers there are PX4's own estimate);
+- ``summary.json``: sitl_test.py's checks, with the hold checks re-judged on truth
+  (``estimate_checks`` keeps sitl_test's verdicts on PX4's estimate);
 - ``hold.json``: from the ulog, over the first engaged hold: ``eval.metrics`` on the TRUE
   position against the hold point the module captured, the share of ticks in the fallback
   and under the yaw guard, the stale time seen, EKF2's dead-reckoning share;
@@ -241,6 +242,13 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
         "metrics": metrics,
         "wall_guard": wall_guard_stats(status, start_us),
     }
+    # The hold checks on truth: sitl_test.py judges drift on PX4's estimate, which a
+    # corrupted profile (vio_at_engage) jumps by design.
+    held = (trace.t >= window[0]) & (trace.t <= window[1])
+    if held.any():
+        err = trace.pos[held] - hold_point
+        hold["truth_drift"] = {"xy_max_m": float(np.hypot(err[:, 0], err[:, 1]).max()),
+                               "z_max_m": float(np.abs(err[:, 2]).max())}
     after = trace.t > window[1]
     if after.any():
         d = surface.distance(trace.pos[after])
@@ -257,6 +265,20 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
 
 
 # ---------------------------------------------------------------------------------------
+
+
+def judge_hold_on_truth(summary: dict[str, Any], hold: dict[str, Any], drift_tol: float) -> None:
+    """Replace sitl_test.py's estimate-based hold checks with the same tolerance on truth.
+    The estimate's own verdicts stay in the summary under ``estimate_checks``."""
+    drift = hold.get("truth_drift")
+    checks = summary.get("checks")
+    if drift is None or checks is None:
+        return
+    keys = ("position_held", "altitude_held")
+    summary["estimate_checks"] = {k: checks[k] for k in keys if k in checks}
+    checks["position_held"] = drift["xy_max_m"] <= drift_tol
+    checks["altitude_held"] = drift["z_max_m"] <= drift_tol
+    summary["passed"] = all(checks.values())
 
 
 def assemble(report: dict[str, Any]) -> dict[str, Any]:
@@ -284,8 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hold-s", type=float, default=60.0, help="time in Structure Hold")
     ap.add_argument("--settle-s", type=float, default=5.0, help="stock-mode hover times")
     ap.add_argument("--drift-tol", type=float, default=1.0,
-                    help="sitl_test's hold tolerance on PX4's estimate (the truth score is "
-                         "in hold.json)")
+                    help="hold drift tolerance, judged on truth here (sitl_test applies it "
+                         "to PX4's estimate; that verdict stays in estimate_checks)")
     ap.add_argument("--rangefinder", action="store_true",
                     help="bridge sends a forward rangefinder against the wall (wall guard)")
     ap.add_argument("--land", choices=("structure", "stock"), default="structure",
@@ -381,6 +403,10 @@ def main(argv: list[str] | None = None) -> int:
             report["metrics"] = hold["metrics"]  # where run_baseline's rows read it
             report["gps_free"] = ekf["gps_free"]
             report["vision_fused"] = ekf["vision_fused"]
+            if "flight" in report:
+                judge_hold_on_truth(report["flight"], hold, args.drift_tol)
+                report["flight_ok"] = bool(report["flight"].get("passed"))
+                summary_path.write_text(json.dumps(report["flight"], indent=2) + "\n")
         except Exception as exc:  # the flight already happened; record why scoring failed
             report["ulog_error"] = f"{type(exc).__name__}: {exc}"
             report["gps_free"] = report["vision_fused"] = False
