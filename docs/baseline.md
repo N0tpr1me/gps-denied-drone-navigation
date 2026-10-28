@@ -1326,6 +1326,19 @@ would cover it is outside the module: a stock-side rule (land only after climbin
 off, or land in Position mode with Collision Prevention on the same rangefinder). Not done
 here: it changes how stock PX4 behaves after a handback, so it needs a decision first.
 
+**Follow-up (2026-10-28): Structure Land.** Zain agreed to fix it. Of the two stock-side
+rules above, Collision Prevention does not help: in PX4 v1.17 it only scales a deflected
+stick's acceleration, so it never acts against a position lock that follows a recovering
+estimate. The fix keeps stock PX4 flying but gives it a guarded setpoint: a second module
+mode, Structure Land, in which PX4's own position controller lands on an xy point that the
+wall guard keeps `SH_WALL_MIN` from the measured wall down to touchdown
+(`sim2real/px4/README.md`). The scripted sequence now lands through it (`--land stock`
+keeps the old ending). In SIH, with the virtual wall creeping 0.6 m in during the landing,
+Structure Land stayed 0.67 m or more from the wall against 0.15 m for stock Land
+(`experiments/LOG.md` 2026-10-28). The watchdog's handback to Position mode is unchanged,
+so the creep in Position mode before the landing (v19 calm seed 3: 0.59 to 0.31 m) is
+still stock PX4's. Gazebo seed 3 re-fly with `--rangefinder`: pending.
+
 Scoring note: images built since PR #73 log no `estimator_status_flags` (PX4 v1.17's logger
 drops a topic whose expanded format passes its 1600-byte buffer, and the module's status
 message grew). `ulog_checks.aiding` now reads `estimator_status.control_mode_flags` when that

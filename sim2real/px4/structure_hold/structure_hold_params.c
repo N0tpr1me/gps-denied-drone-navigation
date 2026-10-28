@@ -328,3 +328,22 @@ PARAM_DEFINE_FLOAT(SH_WALL_MIN, 0.7f);
  * @group Structure Hold
  */
 PARAM_DEFINE_INT32(SH_WALL_REQ, 0);
+
+/**
+ * Structure Land: register the guarded landing mode
+ *
+ * Registers a second external mode, "Structure Land" (after Structure Hold, so ext2), that
+ * lands next to the structure: PX4's own position controller descends at MPC_LAND_SPEED
+ * with its land detector and touchdown, and the module owns only the xy setpoint, which the
+ * wall guard keeps at least SH_WALL_MIN from the measured wall the whole way down. Stock
+ * Land holds xy on the estimate alone, so after a handback on a jumped estimate it walks
+ * the vehicle into the wall as the estimate recovers (docs/baseline.md, wall guard on
+ * Gazebo seed 3). Available in flight only, and also after a latched watchdog trip. Its
+ * own watchdog trips (stale or invalid estimate, tilt, xy error) hand back like Structure
+ * Hold's. Without a usable forward range it is a plain position-holding landing.
+ *
+ * @boolean
+ * @reboot_required true
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_LAND_EN, 1);

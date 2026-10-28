@@ -19,7 +19,8 @@ A centred joystick (MANUAL_CONTROL at 20 Hz) is streamed throughout, because PX4
 offers Position mode when it has a manual control source. With ``--no-joystick`` the
 stock mode on disengage is Hold, and after the trip PX4 refuses Position mode and runs its
 RC-loss failsafe (Return by default), which is the path a lost RC link takes.
-5. land and disarm.
+5. land and disarm, through the module's guarded landing mode "Structure Land" (ext2) by
+   default, or stock Land with ``--land stock``.
 
 With ``--wall`` a forward rangefinder is simulated over MAVLink (DISTANCE_SENSOR at 20 Hz,
 forward facing) against a virtual wall placed ``--wall-m`` ahead of the first engage point
@@ -27,6 +28,14 @@ along the engage heading. Mid-hold the wall jumps to ``--wall-close-m`` ahead of
 point, which puts the hold point inside SH_WALL_MIN: the wall guard must move it back and
 the vehicle must end up at least SH_WALL_MIN (less ``--wall-tol``) from the wall
 (WallGuard.hpp). The ulog check then expects a nonzero standoff_shift_m.
+
+With ``--wall`` the landing is checked against the wall too: at the land command the wall is
+placed ``--land-wall-m`` ahead and then creeps ``--land-creep-m`` closer at
+``--land-creep-mps``. That is the Gazebo seed 3 case seen from the estimate's side: after a
+handback on a jumped estimate the estimate recovers during the landing and the vehicle,
+holding it, walks toward the wall (docs/baseline.md). Structure Land must keep the vehicle
+at least SH_WALL_MIN (less ``--wall-tol``) from the wall until touchdown; stock Land is
+reported, not checked.
 
 Afterwards the ulog is checked for the structure_hold_status topic (states standby,
 engaged and handback all logged, with the test-fault trip reason).
@@ -53,10 +62,10 @@ MAVLINK_URL = "udpin:0.0.0.0:14540"
 
 # PX4 custom modes (src/modules/commander/px4_custom_mode.h)
 MAIN_ALTCTL, MAIN_POSCTL, MAIN_AUTO = 2, 3, 4
-SUB_AUTO_TAKEOFF, SUB_AUTO_LOITER, SUB_AUTO_LAND, SUB_EXTERNAL1 = 2, 3, 6, 11
+SUB_AUTO_TAKEOFF, SUB_AUTO_LOITER, SUB_AUTO_LAND, SUB_EXTERNAL1, SUB_EXTERNAL2 = 2, 3, 6, 11, 12
 
 # structure_hold_status.state
-STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK = 1, 2, 3
+STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING = 1, 2, 3, 4
 TRIP_TEST_FAULT, TRIP_ESTIMATE_RESET = 1, 6
 # With SH_RST_HOLD > 0 commander refuses the mode for that long after an EKF position
 # reset; a re-engage that lands in the window is retried until accepted or this runs out.
@@ -84,11 +93,20 @@ class VirtualWall:
     yaw: float
     ahead_m: float
     max_m: float = 12.0
+    creep_mps: float = 0.0       # the wall walks toward the origin from creep_t0 ...
+    creep_max_m: float = 0.0     # ... by at most this much
+    creep_t0: float = 0.0
 
-    def range_m(self, tel: Telemetry) -> float | None:
+    def gap_m(self, tel: Telemetry) -> float:
+        """Perpendicular distance vehicle -> wall (negative once through it)."""
         n = (math.cos(self.yaw), math.sin(self.yaw))
         moved = (tel.north - self.origin[0]) * n[0] + (tel.east - self.origin[1]) * n[1]
-        gap = self.ahead_m - moved
+        crept = min(self.creep_mps * max(time.monotonic() - self.creep_t0, 0.0), self.creep_max_m)
+        return self.ahead_m - crept - moved
+
+    def range_m(self, tel: Telemetry) -> float | None:
+        gap = self.gap_m(tel)
+        n = (math.cos(self.yaw), math.sin(self.yaw))
         cos_p = math.cos(tel.pitch)
         bx_n = cos_p * math.cos(tel.yaw) * n[0] + cos_p * math.sin(tel.yaw) * n[1]
         if bx_n < 0.2 or gap <= 0:
@@ -256,16 +274,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wall-min", type=float, default=0.7, help="SH_WALL_MIN flown, m")
     p.add_argument("--wall-tol", type=float, default=0.15, help="allowed shortfall, m")
     p.add_argument("--wall-s", type=float, default=15.0, help="time after the wall jump, s")
+    p.add_argument("--land", choices=("structure", "stock"), default="structure",
+                   help="land through Structure Land (ext2) or stock Land")
+    p.add_argument("--land-wall-m", type=float, default=0.8,
+                   help="with --wall: wall distance at the land command, m")
+    p.add_argument("--land-creep-m", type=float, default=0.6,
+                   help="with --wall: how far the wall creeps in during the landing, m")
+    p.add_argument("--land-creep-mps", type=float, default=0.2,
+                   help="with --wall: creep speed, m/s")
     return p.parse_args()
 
 
 def in_structure_hold(v: Vehicle) -> bool:
-    return v.tel.main_mode == MAIN_AUTO and v.tel.sub_mode >= SUB_EXTERNAL1
+    return v.tel.main_mode == MAIN_AUTO and v.tel.sub_mode == SUB_EXTERNAL1
+
+
+def in_structure_land(v: Vehicle) -> bool:
+    return v.tel.main_mode == MAIN_AUTO and v.tel.sub_mode == SUB_EXTERNAL2
 
 
 def mode_name(v: Vehicle) -> str:
     if in_structure_hold(v):
         return "Structure Hold"
+    if in_structure_land(v):
+        return "Structure Land"
     auto = {SUB_AUTO_TAKEOFF: "Takeoff", SUB_AUTO_LOITER: "Hold", SUB_AUTO_LAND: "Land",
             5: "Return"}
     if v.tel.main_mode == MAIN_AUTO:
@@ -396,10 +428,38 @@ def fly(args: argparse.Namespace) -> dict:
     result["latched_engage_ack"] = ack
 
     # 5. Land (a failsafe may already be landing the vehicle; then the command is moot).
-    result["land_ack"] = v.command(mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, nan, nan, nan, nan)
-    result["land_s"] = round(v.wait_for(lambda: v.tel.landed, 90, "touchdown"), 1)
+    if args.wall:
+        assert v.wall is not None
+        here = (v.tel.north, v.tel.east)
+        v.wall = VirtualWall(here, v.wall.yaw, args.land_wall_m, creep_mps=args.land_creep_mps,
+                             creep_max_m=args.land_creep_m, creep_t0=time.monotonic())
+    gaps: list[float] = []
+    land_mode = "Land"
+    if args.land == "structure":
+        result["land_ack"] = v.set_mode(MAIN_AUTO, SUB_EXTERNAL2)
+        try:
+            v.wait_for(lambda: in_structure_land(v), 3, "Structure Land in heartbeat")
+            land_mode = "Structure Land"
+        except TimeoutError:
+            result["land_ack"] = v.command(mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, nan, nan, nan, nan)
+        checks["structure_land_engaged"] = land_mode == "Structure Land"
+    else:
+        result["land_ack"] = v.command(mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, nan, nan, nan, nan)
+    result["land_mode"] = land_mode
+
+    def landed() -> bool:
+        if v.wall is not None:
+            gaps.append(v.wall.gap_m(v.tel))
+        return v.tel.landed
+
+    result["land_s"] = round(v.wait_for(landed, 90, "touchdown"), 1)
     v.wait_for(lambda: not v.tel.armed, 30, "auto-disarm")
     checks["landed_and_disarmed"] = True
+    if v.wall is not None and gaps:
+        result["land_wall"] = {"start_m": round(gaps[0], 3), "min_m": round(min(gaps), 3),
+                               "end_m": round(gaps[-1], 3), "creep_m": args.land_creep_m}
+        if args.land == "structure":
+            checks["land_kept_off_wall"] = min(gaps) >= args.wall_min - args.wall_tol
     result["wall_s"] = round(time.monotonic() - start, 1)
     return result
 
@@ -451,7 +511,10 @@ def check_ulog(path: Path, result: dict) -> None:
         "rates_setpoint_samples": len(by_name["vehicle_rates_setpoint"].data["timestamp"])
         if "vehicle_rates_setpoint" in by_name else 0,
     }
-    checks["status_states_logged"] = bool({STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK} <= states)
+    expected = {STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK}
+    if result.get("land_mode") == "Structure Land":
+        expected.add(STATE_LANDING)
+    checks["status_states_logged"] = bool(expected <= states)
     checks["status_trip_logged"] = bool(TRIP_TEST_FAULT in trips)
     if "wall" in result and "standoff_shift_m" in status.data:
         shift = float(max(status.data["standoff_shift_m"]))
