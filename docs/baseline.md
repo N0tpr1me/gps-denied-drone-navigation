@@ -1357,7 +1357,14 @@ setpoint without the descent. Both now feed the guard's push rate forward as vel
 PX4's loop does not trail the point, and Structure Land descends more slowly (down to
 0.3 m/s) while the vehicle is still closer to the wall than the point. In SIH with the wall
 creeping 0.6 m in at 0.1 m/s (about twice Gazebo seed 3's creep) right after the trip,
-Structure Hover stayed 0.68 to 0.78 m from it over 4 runs. Gazebo seed 3 re-fly: pending.
+Structure Hover stayed 0.68 to 0.78 m from it over 4 runs. Gazebo seed 3 re-fly (batch
+`20261028-133356`, at 7f4ae4e, `--rangefinder`): 3 of 3 flights ok and every trip handed
+back to Structure Hover (about 4.5 s, then Structure Land). The closest approach after the
+hold went from 0.478 / 0.462 / 0.368 m (calm / 4 / 8 m/s, Structure Land without the
+feed-forward) to 0.689 / 0.688 / 0.653 m: hover 0.689 / 0.699 / 0.663 m, landing 0.692 /
+0.689 / 0.679 m, within 0.05 m of `SH_WALL_MIN`. The hold itself is unchanged: p95 0.201 /
+0.203 / 0.220 m against tuned PX4's 0.388 / 0.387 / 0.389 m on seed 3, min clearance 0.80 m
+or more.
 A latent bug went with it: `config_control_setpoints` has a queue of one, so a mode's
 control config sent at registration could be lost to the next mode's (Structure Land then
 flew without position control in one SIH run); the module now re-sends one config per
