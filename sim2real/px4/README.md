@@ -85,9 +85,27 @@ What it does today:
   does nothing, so the Gazebo x500 (no rangefinder) flies exactly as before. The policy sees
   the move as a step in its position error, like an estimate jump. `SH_WALL_REQ 1` makes
   the mode unavailable while no usable forward range comes in. Stock Position mode
-  between two engages is not covered: that is PX4's Collision Prevention (`CP_DIST`) on
-  the same rangefinder. `structure_hold_status` gains `wall_distance_m`,
-  `hold_clearance_m` and `standoff_shift_m`.
+  between two engages is not covered, and PX4's Collision Prevention (`CP_DIST`) does not
+  cover it either: in v1.17 it only scales a deflected stick's acceleration
+  (`CollisionPrevention::_calculateConstrainedSetpoint`), so with centred sticks the
+  position lock follows a recovering estimate into the wall. `structure_hold_status` gains
+  `wall_distance_m`, `hold_clearance_m` and `standoff_shift_m`.
+- **Structure Land: a landing that keeps the wall guard** (`SH_LAND_EN`, default on; a
+  second registered external mode, ext2, named "Structure Land"). After a handback on a
+  jumped estimate, stock Land holds xy on the estimate, and as the estimate recovers the
+  vehicle walks toward the wall: on Gazebo seed 3 every flight came closest to the wall
+  under stock Land, 2 of 3 inside the 0.25 m contact radius (`docs/baseline.md`, wall
+  guard section). Structure Land hands the flying to PX4's own position controller
+  (commander enables the whole cascade for it) and publishes only a `trajectory_setpoint`:
+  xy on the point captured at entry, descent at `MPC_LAND_SPEED`, the yaw at entry. The
+  wall guard runs on that xy point every tick as in the hold, so the forward range keeps it
+  `SH_WALL_MIN` from the wall down to touchdown. PX4's land detector and touchdown work as
+  in stock Land (they see the climb-rate flag and the commanded descent). An EKF2 xy
+  reset moves the point with the estimate, as PX4's own modes do. Available only in
+  flight, and also while a trip is latched (that is when it is needed); its watchdog trips
+  (stale or invalid estimate, tilt, xy error over `SH_WD_POS_ERR`) hand back like the
+  hold's. Without a usable range it is a plain position-holding landing.
+  `structure_hold_status.state` is `landing` (4) while it flies.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -95,7 +113,7 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, the test hook `SH_TEST_FAULT`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, the test hook `SH_TEST_FAULT`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside
@@ -160,7 +178,8 @@ sim2real/px4/sitl_test.sh /path/to/PX4-Autopilot          # writes runs/<time>_s
 
 The flight: take off to 2.5 m in stock PX4, engage Structure Hold over MAVLink (DO_SET_MODE,
 auto / external 1), hold 20 s, disengage to Position mode, re-engage, trip the watchdog
-with `SH_TEST_FAULT`, confirm the handback and that a further engage is refused, land.
+with `SH_TEST_FAULT`, confirm the handback and that a further engage is refused, land
+through Structure Land (`--land stock` for stock Land).
 `summary.json` has one boolean per check plus the numbers (drift while holding, handback
 latency from the ulog, status samples logged). Exit 0 means every check passed.
 
@@ -168,8 +187,13 @@ latency from the ulog, status samples logged). Exit 0 means every check passed.
 MAVLink (`DISTANCE_SENSOR` at 20 Hz) against a virtual wall 1 m ahead of the engage point;
 after the hold the wall jumps to 0.3 m ahead of the hold point, inside `SH_WALL_MIN` 0.7 m,
 and the vehicle must back off to at least 0.55 m and log a nonzero `standoff_shift_m`.
+At the landing the wall is put 0.8 m ahead and creeps 0.6 m in at 0.2 m/s (the estimate
+recovering after a jump, seen from the estimate's side); Structure Land must stay at least
+0.55 m from it until touchdown. On 2026-10-28 it stayed 0.67 m or more; stock Land, flown
+with `--land stock` as the control, came to 0.15 m (`experiments/LOG.md`).
 
-From the PX4 shell: `commander mode ext1` engages, `commander mode posctl` disengages,
+From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
+Structure Land, `commander mode posctl` disengages,
 `structure_hold status` prints the module state, `structure_hold trip` trips the watchdog. `structure_hold bench [n]` times n policy
 steps on synthetic samples (refused while engaged); `bench_test.py` runs it and the other
 props-off checks on a flight controller over MAVLink (`docs/bench-test.md`).
@@ -319,7 +343,10 @@ python -m eval.baselines.run_baseline --runner hold --label structure_hold_v19_w
 
 `hold.json` then has `wall_guard` (per engaged stretch: range share, closest wall and hold
 point clearance, how far the point moved back) and, for every flight, `after_hold` (the
-closest the truth came to the wall after the scored hold, where seed 3's strikes happen).
+closest the truth came to the wall after the scored hold, where seed 3's strikes happen)
+and `landing` (the Structure Land stretch: its window, how far the guard moved the point
+back, the closest the truth came to the wall). `--land stock` (after `--`) flies the
+sequence's old stock Land ending.
 
 ## Frames
 
