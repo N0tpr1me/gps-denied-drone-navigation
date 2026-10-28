@@ -308,10 +308,12 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 		++_trip_count;
 	}
 
-	// A trip in Structure Hold next to a measured wall goes to Structure Hover first; a trip
-	// in Land or Hover itself, or a refusal at entry, goes straight to the stock modes.
+	// A trip in Structure Hold next to a measured wall goes to Structure Hover first, and a
+	// trip in Structure Land to stock Land first, since the landing was already asked for;
+	// a trip in Hover, or a refusal at entry, goes straight to Position mode and on.
 	_handback_guarded = latch && xy_valid && _active_mode_id == _mode_id
 			    && guardedHandbackAvailable(hrt_absolute_time());
+	_handback_landing = latch && _land_mode_id != -1 && _active_mode_id == _land_mode_id;
 	_state = structure_hold_status_s::STATE_HANDBACK;
 	_handback_step = 0;
 	_handback_xy_valid = xy_valid;
@@ -333,14 +335,21 @@ void StructureHold::requestHandbackMode()
 	uint8_t sub_mode = 0;
 	const char *name = "Position mode";
 
+	const bool first_target = _handback_guarded || _handback_landing;
+
 	if (_handback_guarded && _handback_step == 0) {
 		// External modes' custom sub modes follow their nav_states (px4_custom_mode.h).
 		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
 		sub_mode = PX4_CUSTOM_SUB_MODE_EXTERNAL1 + (_hover_mode_id - vehicle_status_s::NAVIGATION_STATE_EXTERNAL1);
 		name = HOVER_MODE_NAME;
+
+	} else if (_handback_landing && _handback_step == 0) {
+		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
+		sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LAND;
+		name = "Land";
 	}
 
-	switch (_handback_step - (_handback_guarded ? 1 : 0)) {
+	switch (_handback_step - (first_target ? 1 : 0)) {
 	case -1:
 		break;
 
@@ -401,7 +410,7 @@ void StructureHold::handbackStep(const hrt_abstime now)
 		_rates_setpoint_pub.publish(sp);
 	}
 
-	if (now - _handback_request_us > HANDBACK_RETRY && _handback_step < (_handback_guarded ? 3 : 2)) {
+	if (now - _handback_request_us > HANDBACK_RETRY && _handback_step < (_handback_guarded || _handback_landing ? 3 : 2)) {
 		++_handback_step;
 		requestHandbackMode();
 	}

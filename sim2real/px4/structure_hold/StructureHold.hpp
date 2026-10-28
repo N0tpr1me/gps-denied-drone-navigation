@@ -168,6 +168,7 @@ private:
 	int8_t _active_mode_id{-1};    // the mode that is flying (or handing back): hold or land
 	uint8_t _land_xy_reset_counter{0};  // Structure Land and Structure Hover
 	bool _handback_guarded{false};      // this handback tries Structure Hover first
+	bool _handback_landing{false};      // this handback tries stock Land first (trip in Structure Land)
 	float _guard_speed{0.f};            // [m/s] the guard's recent push rate, away from the wall
 	uint8_t _config_resend{0};          // which mode's control config the next poll re-sends
 	structure_hold::Watchdog _watchdog{};

@@ -103,8 +103,10 @@ What it does today:
   in stock Land (they see the climb-rate flag and the commanded descent). An EKF2 xy
   reset moves the point with the estimate, as PX4's own modes do. Available only in
   flight, and also while a trip is latched (that is when it is needed); its watchdog trips
-  (stale or invalid estimate, tilt, xy error over `SH_WD_POS_ERR`) hand back like the
-  hold's. Without a usable range it is a plain position-holding landing.
+  (stale or invalid estimate, tilt, xy error over `SH_WD_POS_ERR`) hand back to stock Land
+  first, since the landing was already asked for, then Position mode, Hold and Land as for
+  the hold (Zain's call: on the near-wall-flow Gazebo batch a tilt trip at the start of the
+  landing left the vehicle hovering 0.12 m up in Position mode). Without a usable range it is a plain position-holding landing.
   `structure_hold_status.state` is `landing` (4) while it flies. The guard's push rate,
   low-passed over 0.3 s, goes in as xy velocity feed-forward (position-only setpoints left
   PX4's loop trailing the pushed point: 0.37 m closest on Gazebo seed 3 at 8 m/s), and the

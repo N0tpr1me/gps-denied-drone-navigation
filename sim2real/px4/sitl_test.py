@@ -266,6 +266,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--settle-s", type=float, default=5.0, help="stock-mode hover times, s")
     p.add_argument("--drift-tol", type=float, default=0.5, help="max drift while holding, m")
     p.add_argument("--handback-tol-s", type=float, default=1.0)
+    p.add_argument("--land-trip", action="store_true",
+                   help="trip the watchdog during Structure Land; expect a handback to stock Land")
+    p.add_argument("--land-trip-s", type=float, default=1.5,
+                   help="time in Structure Land before the --land-trip fault")
     p.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                    help="PX4 parameter to set before arming (repeatable); an integer value "
                         "sets an INT32 parameter, anything else a FLOAT")
@@ -476,6 +480,18 @@ def fly(args: argparse.Namespace) -> dict:
         except TimeoutError:
             result["land_ack"] = v.command(mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, nan, nan, nan, nan)
         checks["structure_land_engaged"] = land_mode == "Structure Land"
+        if args.land_trip and land_mode == "Structure Land":
+            # A trip in the landing hands back to stock Land, which finishes it.
+            v.pump(args.land_trip_s)
+            v.set_param("SH_TEST_FAULT", 1)
+            try:
+                result["land_trip_handback_s"] = round(v.wait_for(
+                    lambda: v.tel.main_mode == MAIN_AUTO and v.tel.sub_mode == SUB_AUTO_LAND,
+                    args.handback_tol_s + 1.0, "stock Land after the trip"), 2)
+                checks["land_trip_to_stock_land"] = True
+            except TimeoutError:
+                checks["land_trip_to_stock_land"] = False
+            result["land_trip_mode"] = mode_name(v)
     else:
         result["land_ack"] = v.command(mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, nan, nan, nan, nan)
     result["land_mode"] = land_mode
