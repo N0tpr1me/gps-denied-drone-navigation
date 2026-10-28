@@ -17,10 +17,20 @@ the sampled ``sigma``. Near a surface the wind is sheltered by a factor
 
     g(d) = 1 - (1 - g0) * exp(-d / L)
 
-where d is the distance from the surface along its normal. The force is drag on the air
-velocity relative to the drone:
+where d is the distance from the surface along its normal. On top of the shelter, four
+near-wall flow terms (all off by default; docs/near-wall-flow.md) shape the air the drone
+sits in, again as closed-form functions of time and distance:
 
-    v_rel = g(d) * wind(t) - velocity
+- windward deflection: wind blowing into the surface is blocked and turns along it (the
+  stagnation flow that becomes up- and downwash on a facade);
+- leeward recirculation: wind blowing away from the surface leaves a separation bubble with
+  reverse flow back toward it, strongest at a distance ``wall_recirc_length``;
+- wake turbulence: extra turbulence near the surface that scales with the mean wind;
+- vortex shedding: a periodic crossflow at f = St * U / D in the lee of a finite structure.
+
+The force is drag on the air velocity relative to the drone:
+
+    v_rel = air(t, pos) - velocity,   air = g(d) * wind(t) + near-wall flow
     F = k_lin * v_rel + k_quad * |v_rel| * v_rel
 
 The force includes the drag from the drone's own motion through still air, so a simulator
@@ -29,9 +39,10 @@ using it must not add its own translational drag. A simulator that already model
 
 Frames and units follow docs/conventions.md: world ENU, SI units, arrays ``(num_envs, ...)``.
 
-Not modelled yet: the yaw torque near the wall (the published case shows it changing sign,
-but one data point is not enough to fit it), ground effect, and an overhead slab. The fan rig
-in Phase 3 fits the parameters; until then the ranges are wide on purpose.
+Not modelled yet: variation along the surface (every term depends on distance only), the
+yaw torque near the wall (the published case shows it changing sign, but one data point is
+not enough to fit it), ground effect, and a second surface (a wall and a deck at once). The
+fan rig in Phase 3 fits the parameters; until then the ranges are wide on purpose.
 """
 
 from __future__ import annotations
@@ -90,6 +101,30 @@ class DisturbanceConfig:
     # Near-wall shelter.
     wall_decay: tuple[float, float] = (0.5 * NOMINAL_WALL_DECAY, 2.0 * NOMINAL_WALL_DECAY)
     wall_floor: tuple[float, float] = (0.0, 0.3)
+    # Near-wall flow beyond the shelter, off by default so every config written before it
+    # flies the same air. Ranges are literature-shaped, not fitted (docs/near-wall-flow.md).
+    # Windward deflection: the fraction of the blocked normal wind, (1 - g(d)) times the wind
+    # into the surface, that turns along it, in the direction wall_deflect_angle_deg (in the
+    # surface plane: 0 horizontal along it, 90 up; where on a facade the drone sits decides
+    # up- or downwash, so the default draws any direction).
+    wall_deflect: tuple[float, float] = (0.0, 0.0)
+    wall_deflect_angle_deg: tuple[float, float] = (0.0, 360.0)
+    # Leeward recirculation: reverse flow toward the surface, wall_recirc times the wind
+    # blowing away from it, with the profile (d / Lr) * exp(1 - d / Lr) that peaks at Lr.
+    wall_recirc: tuple[float, float] = (0.0, 0.0)
+    wall_recirc_length: tuple[float, float] = (0.5, 3.0)  # Lr, m
+    # Wake turbulence: standard deviation wake_ti * |mean wind| per axis at the surface,
+    # decaying as exp(-d / wake_length); the turbulence spectrum, its own phases.
+    wake_ti: tuple[float, float] = (0.0, 0.0)
+    wake_length: tuple[float, float] = (1.0, 4.0)  # m
+    # Vortex shedding: a sinusoidal crossflow of amplitude shed_amp times the mean wind
+    # blowing away from the surface (the drone in the lee), at 2 pi St |mean wind| / D rad/s,
+    # in the direction shed_angle_deg (as wall_deflect_angle_deg; 0 is a vertical pier's
+    # sideways shedding), decaying over wake_length.
+    shed_amp: tuple[float, float] = (0.0, 0.0)
+    shed_width: tuple[float, float] = (0.5, 5.0)  # D, m
+    shed_strouhal: tuple[float, float] = (0.1, 0.21)  # St: 0.2 a cylinder, 0.1 to 0.15 a deck
+    shed_angle_deg: tuple[float, float] = (0.0, 0.0)
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -99,6 +134,14 @@ class DisturbanceConfig:
             raise ValueError("num_gusts must be >= 0 and turb_components >= 1")
         if self.turb_omega[0] <= 0 or self.turb_tau[0] <= 0 or self.wall_decay[0] <= 0:
             raise ValueError("turb_omega, turb_tau and wall_decay must be positive")
+        if min(self.wall_recirc_length[0], self.wake_length[0], self.shed_width[0]) <= 0:
+            raise ValueError("wall_recirc_length, wake_length and shed_width must be positive")
+
+    @property
+    def near_wall_flow(self) -> bool:
+        """True when any near-wall flow term beyond the shelter can be non-zero."""
+        return max(self.wall_deflect[1], self.wall_recirc[1], self.wake_ti[1],
+                   self.shed_amp[1]) > 0.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> DisturbanceConfig:
@@ -139,6 +182,18 @@ class DisturbanceParams:
     has_wall: Any  # (N,) bool; False means free air
     wall_decay: Any  # (N,) m
     wall_floor: Any  # (N,)
+    # Near-wall flow (zeros when it is off or there is no wall).
+    wall_deflect: Any  # (N,)
+    wall_tangent: Any  # (N, 3) unit, in the surface plane: where the deflected wind goes
+    wall_recirc: Any  # (N,)
+    wall_recirc_length: Any  # (N,) m
+    wake_amp: Any  # (N, 3, M) m/s, on turb_omega; (N, 3, 0) when the flow is off
+    wake_phase: Any  # (N, 3, M) rad, as wake_amp
+    wake_length: Any  # (N,) m
+    shed_amp: Any  # (N,) m/s
+    shed_omega: Any  # (N,) rad/s
+    shed_phase: Any  # (N,) rad
+    shed_dir: Any  # (N, 3) unit, in the surface plane
 
     @property
     def num_envs(self) -> int:
@@ -198,6 +253,12 @@ def sample_params(
         (n, 3),
     )
 
+    k_lin, k_quad = u(cfg.k_lin), u(cfg.k_quad)
+    wall_decay, wall_floor = u(cfg.wall_decay), u(cfg.wall_floor)
+    # The near-wall flow draws last, so turning it on leaves every draw above unchanged.
+    unit_normal = normal / norm
+    flow = _near_wall_flow(cfg, rng if has_wall else None, mean_wind, shape, unit_normal)
+
     return DisturbanceParams(
         mean_wind=mean_wind,
         gust_start=gust_start,
@@ -206,19 +267,79 @@ def sample_params(
         turb_amp=turb_amp,
         turb_omega=omega,
         turb_phase=turb_phase,
-        k_lin=u(cfg.k_lin),
-        k_quad=u(cfg.k_quad),
+        k_lin=k_lin,
+        k_quad=k_quad,
         wall_point=point.copy(),
-        wall_normal=normal / norm,
+        wall_normal=unit_normal,
         has_wall=np.full(n, has_wall),
-        wall_decay=u(cfg.wall_decay),
-        wall_floor=u(cfg.wall_floor),
+        wall_decay=wall_decay,
+        wall_floor=wall_floor,
+        **flow,
+    )
+
+
+def _surface_direction(normal: np.ndarray, angle: np.ndarray) -> np.ndarray:
+    """Unit vectors (N, 3) in the plane of each surface: angle 0 is horizontal along it, 90
+    is up the surface (for a horizontal surface, such as a deck underside, 90 is world +x)."""
+    up = np.array([0.0, 0.0, 1.0])
+    e_up = up - (normal @ up)[:, None] * normal
+    flat = np.linalg.norm(e_up, axis=-1) < 1e-6
+    x = np.array([1.0, 0.0, 0.0])
+    e_up[flat] = x - (normal[flat] @ x)[:, None] * normal[flat]
+    e_up /= np.linalg.norm(e_up, axis=-1, keepdims=True)
+    e_side = np.cross(normal, e_up)
+    return np.cos(angle)[:, None] * e_side + np.sin(angle)[:, None] * e_up
+
+
+def _near_wall_flow(
+    cfg: DisturbanceConfig,
+    rng: np.random.Generator | None,
+    mean_wind: np.ndarray,
+    shape: np.ndarray,
+    normal: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """The near-wall flow fields. Draws nothing when the flow is off or there is no wall
+    (``rng`` None), so the random stream, and every env built after the wind, is the same
+    as before the flow existed."""
+    n, m = shape.shape
+    if rng is None or not cfg.near_wall_flow:
+        # No wake sinusoids at all (M = 0), so the switched-off flow costs nothing per step.
+        zero, one = np.zeros(n), np.ones(n)
+        return dict(
+            wall_deflect=zero, wall_tangent=np.zeros((n, 3)), wall_recirc=zero,
+            wall_recirc_length=one, wake_amp=np.zeros((n, 3, 0)),
+            wake_phase=np.zeros((n, 3, 0)), wake_length=one, shed_amp=zero,
+            shed_omega=zero, shed_phase=zero, shed_dir=np.zeros((n, 3)),
+        )
+
+    def u(r: tuple[float, float], *size: int) -> np.ndarray:
+        return rng.uniform(r[0], r[1], size=(n, *size))
+
+    speed = np.linalg.norm(mean_wind, axis=-1)
+    lee = (mean_wind * normal).sum(-1).clip(min=0.0)  # mean wind blowing away from the wall
+    wall_deflect = u(cfg.wall_deflect)
+    wall_tangent = _surface_direction(normal, np.radians(u(cfg.wall_deflect_angle_deg)))
+    wall_recirc = u(cfg.wall_recirc)
+    wall_recirc_length = u(cfg.wall_recirc_length)
+    wake_amp = (u(cfg.wake_ti) * speed)[:, None, None] * shape[:, None, :] * np.ones((1, 3, 1))
+    wake_phase = rng.uniform(0.0, 2.0 * math.pi, size=(n, 3, m))
+    wake_length = u(cfg.wake_length)
+    shed_amp = u(cfg.shed_amp) * lee
+    shed_omega = 2.0 * math.pi * u(cfg.shed_strouhal) * speed / u(cfg.shed_width)
+    shed_phase = rng.uniform(0.0, 2.0 * math.pi, size=n)
+    shed_dir = _surface_direction(normal, np.radians(u(cfg.shed_angle_deg)))
+    return dict(
+        wall_deflect=wall_deflect, wall_tangent=wall_tangent, wall_recirc=wall_recirc,
+        wall_recirc_length=wall_recirc_length, wake_amp=wake_amp, wake_phase=wake_phase,
+        wake_length=wake_length, shed_amp=shed_amp, shed_omega=shed_omega,
+        shed_phase=shed_phase, shed_dir=shed_dir,
     )
 
 
 # The functions below are written once for any array module ``xp`` (NumPy or torch): they
 # use only operators, broadcasting, ``.sum(dim)``, ``.clip(min=)`` and ``xp.cos``,
-# ``xp.exp``, ``xp.sqrt``. The torch adapter calls the same code, so the two cannot drift.
+# ``xp.sin``, ``xp.exp``, ``xp.sqrt``. The torch adapter calls the same code, so the two
+# cannot drift.
 
 
 def _time_column(t: Any, ndim: int) -> Any:
@@ -251,9 +372,28 @@ def _drag(xp: Any, v_rel: Any, k_lin: Any, k_quad: Any) -> Any:
     return (k_lin + k_quad * speed)[:, None] * v_rel
 
 
+def _air(xp: Any, p: DisturbanceParams, t: Any, pos: Any) -> Any:
+    wind = _wind(xp, p, t)
+    g = _shelter(xp, p, pos)
+    air = g[:, None] * wind
+    # Near-wall flow. Every term is zero when the flow is off, and adding exact zeros leaves
+    # the sheltered wind bit for bit as it was.
+    d = _wall_distance(p, pos).clip(min=0.0)
+    w_n = (wind * p.wall_normal).sum(-1)  # > 0 blows away from the surface
+    deflect = p.wall_deflect * (1.0 - g) * (-w_n).clip(min=0.0)
+    s = d / p.wall_recirc_length
+    recirc = p.wall_recirc * s * xp.exp(1.0 - s) * w_n.clip(min=0.0)
+    wake = xp.exp(-d / p.wake_length)
+    arg = p.turb_omega[:, None, : p.wake_phase.shape[-1]] * _time_column(t, 3) + p.wake_phase
+    gusty = (p.wake_amp * xp.cos(arg)).sum(-1)
+    shed = p.shed_amp * xp.sin(p.shed_omega * t + p.shed_phase)
+    near = (deflect[:, None] * p.wall_tangent - recirc[:, None] * p.wall_normal
+            + wake[:, None] * (gusty + shed[:, None] * p.shed_dir))
+    return air + near
+
+
 def _force(xp: Any, p: DisturbanceParams, t: Any, pos: Any, vel: Any) -> Any:
-    air = _shelter(xp, p, pos)[:, None] * _wind(xp, p, t)
-    return _drag(xp, air - vel, p.k_lin, p.k_quad)
+    return _drag(xp, _air(xp, p, t, pos) - vel, p.k_lin, p.k_quad)
 
 
 def _arr(x: Any) -> np.ndarray:
@@ -274,6 +414,12 @@ def wall_distance(p: DisturbanceParams, pos: Any) -> np.ndarray:
 def shelter_factor(p: DisturbanceParams, pos: Any) -> np.ndarray:
     """Fraction (N,) of the free-stream wind that reaches ``pos``: 1 in free air."""
     return _shelter(np, p, _arr(pos))
+
+
+def air_velocity(p: DisturbanceParams, t: Any, pos: Any) -> np.ndarray:
+    """Air velocity (N, 3) in m/s at ``pos`` (N, 3) m and time ``t``: the sheltered wind plus
+    the near-wall flow. The force is drag on this minus the drone's velocity."""
+    return _air(np, p, _arr(t), _arr(pos))
 
 
 def drag_force(v_rel: Any, k_lin: Any, k_quad: Any) -> np.ndarray:

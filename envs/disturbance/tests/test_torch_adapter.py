@@ -15,10 +15,15 @@ def random_state(n: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]
     return t, pos, vel
 
 
-@pytest.mark.parametrize("wall", [False, True])
-def test_numpy_and_torch_agree_to_1e6(wall):
+NEAR_WALL_FLOW = dict(wall_deflect=(0.3, 0.8), wall_recirc=(0.2, 0.5), wake_ti=(0.1, 0.3),
+                      shed_amp=(0.1, 0.4))
+
+
+@pytest.mark.parametrize("wall, flow", [(False, False), (True, False), (True, True)])
+def test_numpy_and_torch_agree_to_1e6(wall, flow):
     kwargs = dict(wall_point=(0, 0, 0), wall_normal=(1, 0.3, 0)) if wall else {}
-    p = sample_params(DisturbanceConfig(), 512, seed=11, **kwargs)
+    cfg = DisturbanceConfig(**(NEAR_WALL_FLOW if flow else {}))
+    p = sample_params(cfg, 512, seed=11, **kwargs)
     pt = ta.to_torch(p, dtype=torch.float64)
     for step in range(20):
         t, pos, vel = random_state(512, step)

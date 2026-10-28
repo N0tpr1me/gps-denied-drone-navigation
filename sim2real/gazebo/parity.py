@@ -55,8 +55,11 @@ def run_parity(exe: Path, seed: int = 0, samples: int = 256,
                work_dir: Path | None = None) -> dict[str, Any]:
     """Compare the C++ binary with the NumPy model on random params and states."""
     rng = np.random.default_rng(seed)
+    # The near-wall flow on, at the top of its eval ranges, so every term is checked.
     cfg = DisturbanceConfig(num_gusts=3, gust_start=(0.0, 10.0), gust_duration=(0.5, 3.0),
-                            k_lin=(0.0, 0.2))
+                            k_lin=(0.0, 0.2), mean_speed=(3.0, 12.0), wall_deflect=(0.2, 0.8),
+                            wall_recirc=(0.2, 0.6), wake_ti=(0.1, 0.3), shed_amp=(0.1, 0.4),
+                            shed_angle_deg=(0.0, 90.0))
     p = sample_params(cfg, 1, rng, wall_point=(0.3, -0.2, 0.0), wall_normal=(-1.0, 0.1, 0.0))
     work = Path(work_dir or tempfile.mkdtemp())
     params_path = work / "params.txt"
