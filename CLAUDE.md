@@ -48,8 +48,8 @@ station, vision in the policy. The module consumes the drone's existing position
   Harmonic, headless SITL in Docker (Ubuntu 24.04, MAVSDK-Python 3.17.4), MAVLink ODOMETRY
   into EKF2 as external vision, GPS off. No ROS 2 in the loop.
 - Onboard module: plain C++ PX4 module, policy compiled in as an MLP header (no ONNX
-  runtime, no heap). Test airframes: Holybro X500 V2 first, ModalAI Starling 2 second
-  (decided 2026-10-27); the PX4 Gazebo x500 is the benchmark drone today.
+  runtime, no heap). Software only (decided 2026-10-30): no drone of our own; the PX4
+  Gazebo x500 is the benchmark drone, and real flights go on a design partner's drone.
 - Lint/test: ruff (line length 100, rules E F W I B UP), pytest. CI installs CPU-only torch.
 
 ## Layout
@@ -138,8 +138,8 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
   `sitl_test.py --wall` with a simulated rangefinder.
-- Next: one real logging flight (biggest sim-to-real unknown, `docs/real-flight-gap.md`),
-  harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
+- Next: fit `envs/estimate` to real VIO error from public datasets (EuRoC, UZH-FPV, TUM-VI;
+  replaces our own logging flight, `docs/real-flight-gap.md`), harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
 
 ## Notes for future Claude sessions
