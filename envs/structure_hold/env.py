@@ -17,7 +17,7 @@ Frames: world ENU, the wall is the plane x = 0 and the drone flies at x < 0, so 
 structure frame (x toward the surface, z up) coincides with the world frame. Observations are
 written in that frame so a later wall placement changes one rotation, not the policy.
 
-Observation (``num_obs`` = 20), everything the onboard module can know:
+Observation (``num_obs`` = 21), everything the onboard module can know:
 
 | slice | what | units |
 | --- | --- | --- |
@@ -29,6 +29,12 @@ Observation (``num_obs`` = 20), everything the onboard module can know:
 | 14:18 | previous action | - |
 | 18 | estimate stale flag (1 while the estimator has dropped out) | - |
 | 19 | estimate age, capped at 1 s | s |
+| 20 | time since engage (episode start or re-engage) / ``engage_obs_cap_s``, capped at 1 | - |
+
+Policies up to v21 read the first 20 (``NUM_OBS_V1``); ``policy.json`` says how many a
+policy reads, and ``training/policy_io.py`` feeds it that many. The engage time is there
+because an offset at engage is real while one later is as likely an estimate jump, and the
+policy cannot tell them apart otherwise (``docs/hold-offset.md``).
 
 Action (``num_actions`` = 4), each in [-1, 1]: body rate setpoints (roll, pitch, yaw) as a
 fraction of ``max_rate_rad_s``, and thrust mapped linearly onto ``[0, max_thrust]`` newtons
@@ -71,8 +77,10 @@ OBS = {
     "last_action": slice(14, 18),
     "stale": slice(18, 19),
     "age": slice(19, 20),
+    "engage_time": slice(20, 21),
 }
-NUM_OBS = 20
+NUM_OBS = 21
+NUM_OBS_V1 = 20  # what v0 to v21 read
 NUM_ACTIONS = 4
 
 TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeout")
@@ -130,6 +138,7 @@ class StructureHoldEnv:
         self.hold_point = torch.zeros(n, 3, dtype=dt, device=dev)
         self.episode_step = torch.zeros(n, dtype=torch.long, device=dev)
         self.episode_time = torch.zeros(n, dtype=dt, device=dev)
+        self.engage_time = torch.zeros(n, dtype=dt, device=dev)
         self.last_action = torch.zeros(n, NUM_ACTIONS, dtype=dt, device=dev)
         # Rate commands through first-order filters at reward.action_band_hi_hz and lo_hz:
         # their difference is the band the action_band term charges.
@@ -274,6 +283,7 @@ class StructureHoldEnv:
 
         self.episode_step[env_ids] = 0
         self.episode_time[env_ids] = 0.0
+        self.engage_time[env_ids] = 0.0
         self.last_action[env_ids] = 0.0
         self.action_fast[env_ids] = 0.0
         self.action_slow[env_ids] = 0.0
@@ -389,6 +399,7 @@ class StructureHoldEnv:
                  else self.sim.step(thrust, torque, self.wind_force, tau_ext))
         self.episode_step += 1
         self.episode_time += cfg.dt
+        self.engage_time += cfg.dt
 
         # What the estimator reports.
         finite = state.finite()
@@ -510,6 +521,7 @@ class StructureHoldEnv:
         hold[:, 2] = hold[:, 2].clamp(min=cfg.min_height_m + 0.5)
         self.hold_point[ids] = hold
         self.last_action[ids] = 0.0
+        self.engage_time[ids] = 0.0
         self.reengage_count += int(ids.numel())
         return mask
 
@@ -536,6 +548,8 @@ class StructureHoldEnv:
         o[:, OBS["last_action"]] = self.last_action
         o[:, OBS["stale"]] = self.estimate_stale.to(self.dtype)[:, None]
         o[:, OBS["age"]] = self.estimate_age.clamp(max=1.0)[:, None]
+        o[:, OBS["engage_time"]] = (self.engage_time / cfg.engage_obs_cap_s).clamp(
+            max=1.0)[:, None]
         if cfg.sensor_noise.active:
             self._add_sensor_noise(o)
         torch.nan_to_num_(o)

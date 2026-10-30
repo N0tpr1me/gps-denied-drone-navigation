@@ -322,6 +322,9 @@ class StructureHoldConfig:
     max_tilt_deg: float = 80.0
     contact_radius_m: float = CONTACT_RADIUS_M
     obs_pos_clip_m: float = 5.0
+    # The engage-time input saturates here: long enough to cover the settle after an engage
+    # (about 4 s for v19, docs/hold-offset.md).
+    engage_obs_cap_s: float = 4.0
     quad: QuadParams = field(default_factory=QuadParams)
     rate_pid: RatePidGains = field(default_factory=RatePidGains)
     actuation: Actuation = field(default_factory=Actuation)
@@ -347,6 +350,8 @@ class StructureHoldConfig:
             raise ValueError("hold_distance must start outside the contact radius")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
+        if self.engage_obs_cap_s <= 0:
+            raise ValueError("engage_obs_cap_s must be positive")
         if self.reengage_rate_hz < 0 or self.reengage_min_s < 0:
             raise ValueError("reengage_rate_hz and reengage_min_s must be >= 0")
         r = self.reward

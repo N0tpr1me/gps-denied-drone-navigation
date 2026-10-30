@@ -92,8 +92,14 @@ class StructureHoldVecEnv:
     """
 
     def __init__(self, env: StructureHoldEnv, history: int = 3,
-                 curriculum: DropoutCurriculum | None = None, steps_per_iteration: int = 1):
+                 curriculum: DropoutCurriculum | None = None, steps_per_iteration: int = 1,
+                 num_obs: int = NUM_OBS):
         self.env = env
+        # The policy reads the first num_obs of the env's observation (NUM_OBS_V1 for the
+        # 20-input layout every policy up to v21 has).
+        self.num_obs = int(num_obs)
+        if not 0 < self.num_obs <= NUM_OBS:
+            raise ValueError(f"num_obs must be in 1..{NUM_OBS}")
         self.curriculum = curriculum
         self.steps_per_iteration = max(1, int(steps_per_iteration))
         self.env_steps = 0
@@ -105,12 +111,12 @@ class StructureHoldVecEnv:
         self.num_actions = env.num_actions
         self.max_episode_length = env.max_episode_length
         self.device = env.device
-        self.history = ObsHistory(env.num_envs, NUM_OBS, history, env.device)
+        self.history = ObsHistory(env.num_envs, self.num_obs, history, env.device)
         self.num_policy_obs = self.history.size
         self.num_privileged_obs = PRIVILEGED_OBS
         self._weight = env.cfg.quad.mass * GRAVITY
         obs, _ = env.get_observations()
-        self.history.fill(obs)
+        self.history.fill(obs[:, : self.num_obs])
 
     # rsl_rl's runner reads and (optionally) writes this to randomise episode phase.
     @property
@@ -121,6 +127,7 @@ class StructureHoldVecEnv:
     def episode_length_buf(self, value: torch.Tensor) -> None:
         self.env.episode_step[:] = value.to(self.env.episode_step.dtype)
         self.env.episode_time[:] = self.env.episode_step.to(self.env.dtype) * self.env.dt
+        self.env.engage_time[:] = self.env.episode_time
 
     def privileged(self) -> torch.Tensor:
         e = self.env
@@ -147,13 +154,13 @@ class StructureHoldVecEnv:
 
     def reset(self) -> TensorDict:
         obs, _ = self.env.reset()
-        self.history.fill(obs)
+        self.history.fill(obs[:, : self.num_obs])
         return self.observations()
 
     def step(self, actions: torch.Tensor):
         obs, reward, dones, extras = self.env.step(actions)
         # A re-engage (env cfg.reengage_rate_hz) refills the window as the module's engage does.
-        self.history.push(obs, dones | self.env.reengaged)
+        self.history.push(obs[:, : self.num_obs], dones | self.env.reengaged)
         self.env_steps += 1
         iteration = self.env_steps // self.steps_per_iteration
         if iteration != self.iteration:

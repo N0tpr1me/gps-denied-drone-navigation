@@ -27,23 +27,24 @@ from typing import Any
 import numpy as np
 import torch
 
-from envs.structure_hold.env import NUM_ACTIONS, NUM_OBS, OBS
+from envs.structure_hold.env import NUM_ACTIONS, NUM_OBS, NUM_OBS_V1, OBS
 from training.ppo_env import ObsHistory
 
 Controller = Callable[[torch.Tensor], torch.Tensor]
 
 
 def policy_metadata(env_cfg: Any, history: int, train_cfg: dict[str, Any],
-                    extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    layout = {name: [s.start, s.stop] for name, s in OBS.items()}
+                    extra: dict[str, Any] | None = None,
+                    num_obs: int = NUM_OBS) -> dict[str, Any]:
+    layout = {name: [s.start, s.stop] for name, s in OBS.items() if s.stop <= num_obs}
     return {
         "format": "structure_hold_policy/1",
         "input": {
             "name": "obs",
-            "size": history * NUM_OBS,
+            "size": history * num_obs,
             "history": history,
-            "order": "oldest first; the newest observation is the last NUM_OBS values",
-            "num_obs": NUM_OBS,
+            "order": "oldest first; the newest observation is the last num_obs values",
+            "num_obs": num_obs,
             "layout": layout,
             "obs_pos_clip_m": env_cfg.obs_pos_clip_m,
         },
@@ -156,6 +157,8 @@ def load_controller(policy_path: Path, num_envs: int, device: str = "cpu",
     policy_path = Path(policy_path)
     meta = read_metadata(policy_path) if meta is None else meta
     history = int(meta["input"]["history"])
+    # The policy reads the first num_obs values of the env's observation.
+    num_obs = int(meta["input"].get("num_obs", NUM_OBS_V1))
     actor: Any
     if policy_path.suffix == ".onnx":
         actor = _OnnxActor(policy_path)
@@ -163,15 +166,16 @@ def load_controller(policy_path: Path, num_envs: int, device: str = "cpu",
         actor = _TorchActor(policy_path, meta, device)
     else:
         raise ValueError(f"policy must be a .onnx or .pt file, got {policy_path.name}")
-    if actor.input_size != history * NUM_OBS:
+    if actor.input_size != history * num_obs:
         raise ValueError(
             f"{policy_path.name} takes {actor.input_size} inputs but policy.json says "
-            f"history {history} x {NUM_OBS} obs"
+            f"history {history} x {num_obs} obs"
         )
-    hist = ObsHistory(num_envs, NUM_OBS, history, device)
+    hist = ObsHistory(num_envs, num_obs, history, device)
     state = {"fresh": True}
 
     def controller(obs: torch.Tensor) -> torch.Tensor:
+        obs = obs[:, :num_obs]
         if state["fresh"]:
             hist.fill(obs)
             state["fresh"] = False
@@ -180,5 +184,8 @@ def load_controller(policy_path: Path, num_envs: int, device: str = "cpu",
             stacked = hist.push(obs)
         return actor(stacked).clamp(-1.0, 1.0)
 
-    controller.reset_history = hist.fill  # type: ignore[attr-defined]
+    def reset_history(obs: torch.Tensor, env_mask: torch.Tensor | None = None) -> None:
+        hist.fill(obs[:, :num_obs], env_mask)
+
+    controller.reset_history = reset_history  # type: ignore[attr-defined]
     return controller
