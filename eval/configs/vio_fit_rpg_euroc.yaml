@@ -1,0 +1,26 @@
+# Fit envs/estimate to real VIO error (eval/vio_fit.py, docs/vio-fit.md): the public example
+# results of the RPG trajectory evaluation toolbox (University of Zurich, MIT licence), one
+# monocular and one stereo VIO on six EuRoC MAV flights (MH_01/03/05, V2_01/02/03) with the
+# dataset's ground truth (Leica laser tracker in the machine hall, Vicon in the V2 room).
+# The repository is cloned at a pinned commit into runs/vio_data/ (ignored by git).
+#   python -m training.launch --config eval/configs/vio_fit_rpg_euroc.yaml --device cpu
+name: vio_fit_rpg_euroc
+entrypoint: eval.vio_fit
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.02
+gpus: 1
+params:
+  sources:
+    - name: rpg_euroc
+      git: https://github.com/uzh-rpg/rpg_trajectory_evaluation
+      commit: 8c8ceec55c5c5094a6494208cfc5f54afe0bbc4d
+      paths: [results/euroc_mono_stereo, LICENSE]
+      pattern: results/euroc_mono_stereo/laptop/*/*
+      estimate: stamped_traj_estimate.txt
+      truth: stamped_groundtruth.txt
+  fit:
+    skip_start_s: 10.0  # VIO initialisation and take-off; a hold engages long after
+    hover_speed_max_mps: 0.3
+    walk_match_s: 20.0
+    cap_horizon_s: 60.0
+smoke: {}
