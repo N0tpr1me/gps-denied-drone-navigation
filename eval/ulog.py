@@ -5,13 +5,27 @@ conversion to ENU / FLU happens here and nowhere else in ``eval/``.
 
 Topics used:
 
-- position: ``vehicle_local_position_groundtruth`` (logged by SITL) or, for real flights
-  with motion capture, whatever the caller maps in. The EKF's ``vehicle_local_position``
-  is used only with ``allow_estimate=True``, because scoring a corrupted-estimate run
-  against the estimate hides the error being measured.
+- position: ``vehicle_local_position_groundtruth`` (logged by SITL), else, for real flights,
+  ``vehicle_mocap_odometry`` (motion capture over MAVLink ``ODOMETRY`` with frame MOCAP, or
+  ``ATT_POS_MOCAP``; logged, never fused). The EKF's ``vehicle_local_position`` is used only
+  with ``allow_estimate=True``, because scoring a corrupted-estimate run against the
+  estimate hides the error being measured.
 - setpoint: ``vehicle_local_position_setpoint`` (x, y, z), held between samples, unless the
   caller gives a fixed ``hold_point``. Samples before the first finite setpoint, or where it
   is NaN (rate-only modes), are dropped.
+
+Mocap truth is in the mocap system's own frame, not in the EKF's local frame that the
+setpoint is in: the origins differ and so may the headings. So a mocap trace needs one of
+
+- ``hold_point``: the hold point in the mocap frame (ENU after this module's conversion),
+  for example the point measured 1 m off the rig's wall; or
+- ``align_window``: a stretch of the log (seconds) over which the EKF estimate is fitted to
+  mocap by a yaw rotation and an offset, which then carries the setpoint into the mocap
+  frame. Use the take-off and the move to the hold point, before engaging, so the estimate
+  error during the hold still counts. The window needs at least ``MIN_ALIGN_SPREAD_M`` of
+  horizontal motion, or the yaw is a guess.
+
+The wall for ``eval.metrics`` is then given in the mocap frame as well.
 - commands: ``vehicle_rates_setpoint`` (roll, pitch, yaw rates and ``thrust_body``).
 
 Times are seconds since the log's start timestamp.
@@ -19,6 +33,7 @@ Times are seconds since the log's start timestamp.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -26,10 +41,16 @@ import numpy as np
 from eval.metrics import Trace
 
 GROUNDTRUTH = "vehicle_local_position_groundtruth"
+MOCAP = "vehicle_mocap_odometry"
 ESTIMATE = "vehicle_local_position"
 SETPOINT = "vehicle_local_position_setpoint"
 RATES = "vehicle_rates_setpoint"
-TOPICS = [GROUNDTRUTH, ESTIMATE, SETPOINT, RATES]
+TOPICS = [GROUNDTRUTH, MOCAP, ESTIMATE, SETPOINT, RATES]
+
+# VehicleOdometry.pose_frame: 1 is NED, 2 is FRD (z down, arbitrary heading). Both are
+# right-handed z-down world frames, so the NED to ENU flip gives a z-up frame either way.
+POSE_FRAMES_Z_DOWN = (1, 2)
+MIN_ALIGN_SPREAD_M = 0.5  # horizontal RMS spread about the mean, over the align window
 
 Topics = dict[str, dict[str, np.ndarray]]
 
@@ -44,28 +65,63 @@ def frd_to_flu(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
     return np.stack([x, -y, -z], axis=1).astype(float)
 
 
+def fit_yaw_offset(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray]:
+    """Yaw ``psi`` and offset ``o`` with ``dst ~ Rz(psi) src + o``, by least squares (N, 3)."""
+    sc, dc = src - src.mean(axis=0), dst - dst.mean(axis=0)
+    psi = math.atan2(float(np.sum(sc[:, 0] * dc[:, 1] - sc[:, 1] * dc[:, 0])),
+                     float(np.sum(sc[:, 0] * dc[:, 0] + sc[:, 1] * dc[:, 1])))
+    offset = dst.mean(axis=0) - rotate_z(src.mean(axis=0)[None], psi)[0]
+    return psi, offset
+
+
+def rotate_z(v: np.ndarray, psi: float) -> np.ndarray:
+    """Rotate (N, 3) vectors by ``psi`` about +z (counter-clockwise from above)."""
+    c, s = math.cos(psi), math.sin(psi)
+    return np.stack([c * v[:, 0] - s * v[:, 1], s * v[:, 0] + c * v[:, 1], v[:, 2]], axis=1)
+
+
 def trace_from_topics(
     topics: Topics,
     start_us: int,
     hold_point: np.ndarray | None = None,
     allow_estimate: bool = False,
+    align_window: tuple[float, float] | None = None,
 ) -> Trace:
     """Build a Trace from PX4 topic arrays (field name -> array, as pyulog gives them)."""
     if GROUNDTRUTH in topics:
         source, pos_msg = GROUNDTRUTH, topics[GROUNDTRUTH]
+    elif MOCAP in topics:
+        source, pos_msg = MOCAP, topics[MOCAP]
     elif allow_estimate and ESTIMATE in topics:
         source, pos_msg = ESTIMATE, topics[ESTIMATE]
     else:
         raise ValueError(
-            f"log has no {GROUNDTRUTH}; pass allow_estimate=True to score against the EKF "
-            "estimate (only meaningful when the estimate is not corrupted)"
+            f"log has no {GROUNDTRUTH} or {MOCAP}; pass allow_estimate=True to score against "
+            "the EKF estimate (only meaningful when the estimate is not corrupted)"
         )
 
-    def seconds(msg: dict[str, np.ndarray]) -> np.ndarray:
-        return (np.asarray(msg["timestamp"], dtype=np.int64) - int(start_us)) * 1e-6
+    def seconds(msg: dict[str, np.ndarray], key: str = "timestamp") -> np.ndarray:
+        return (np.asarray(msg[key], dtype=np.int64) - int(start_us)) * 1e-6
 
-    t = seconds(pos_msg)
-    pos = ned_to_enu(pos_msg["x"], pos_msg["y"], pos_msg["z"])
+    meta: dict = {"position_source": source}
+    if source == MOCAP:
+        frames = np.unique(np.asarray(pos_msg.get("pose_frame", [1]), dtype=int))
+        if not set(frames.tolist()) <= set(POSE_FRAMES_Z_DOWN):
+            raise ValueError(f"{MOCAP} pose_frame {frames.tolist()} is not NED (1) or FRD (2)")
+        # timestamp_sample is when mocap saw the drone, on PX4's clock after timesync;
+        # timestamp is when PX4 published it, one link delay later.
+        stamp = "timestamp_sample" if np.all(np.asarray(
+            pos_msg.get("timestamp_sample", [0])) > 0) else "timestamp"
+        t = seconds(pos_msg, stamp)
+        pos = ned_to_enu(pos_msg["position[0]"], pos_msg["position[1]"], pos_msg["position[2]"])
+        if hold_point is None and align_window is None:
+            raise ValueError(
+                "mocap truth is in the mocap frame, not the setpoint's: pass hold_point (in the "
+                "mocap frame) or align_window (seconds, to fit the estimate to mocap)"
+            )
+    else:
+        t = seconds(pos_msg)
+        pos = ned_to_enu(pos_msg["x"], pos_msg["y"], pos_msg["z"])
     # Duplicate or out-of-order stamps break interpolation; keep the first of each.
     t, first = np.unique(t, return_index=True)
     pos = pos[first]
@@ -79,6 +135,12 @@ def trace_from_topics(
         idx = np.searchsorted(sp_t, t, side="right") - 1
         sp = np.full(pos.shape, np.nan)
         sp[idx >= 0] = sp_all[idx[idx >= 0]]
+        if source == MOCAP:
+            psi, offset, rms = align_estimate(topics, t, pos, seconds, align_window)
+            sp = rotate_z(sp, psi) + offset
+            meta.update(align_window_s=[float(v) for v in align_window],
+                        align_yaw_deg=math.degrees(psi), align_offset_m=offset.tolist(),
+                        align_rms_m=rms)
     else:
         raise ValueError(f"log has no {SETPOINT}; pass hold_point")
 
@@ -96,7 +158,29 @@ def trace_from_topics(
         thrust = -np.asarray(r["thrust_body[2]"], dtype=float)
 
     return Trace(t=t, pos=pos, pos_sp=sp, cmd_t=cmd_t, rates_cmd=rates, thrust_cmd=thrust,
-                 meta={"position_source": source})
+                 meta=meta)
+
+
+def align_estimate(topics: Topics, t: np.ndarray, pos: np.ndarray, seconds,
+                   window: tuple[float, float]) -> tuple[float, np.ndarray, float]:
+    """Fit the EKF estimate to mocap over ``window``: yaw, offset and the residual RMS."""
+    if ESTIMATE not in topics:
+        raise ValueError(f"align_window needs {ESTIMATE} in the log")
+    est = topics[ESTIMATE]
+    et, first = np.unique(seconds(est), return_index=True)
+    ep = ned_to_enu(est["x"], est["y"], est["z"])[first]
+    inside = (t >= window[0]) & (t <= window[1]) & (t >= et[0]) & (t <= et[-1])
+    if inside.sum() < 10:
+        raise ValueError(f"align window {window} holds {inside.sum()} mocap samples; need 10")
+    src = np.stack([np.interp(t[inside], et, ep[:, k]) for k in range(3)], axis=1)
+    dst = pos[inside]
+    spread = float(np.sqrt(np.mean(np.sum((src[:, :2] - src[:, :2].mean(axis=0)) ** 2, axis=1))))
+    if spread < MIN_ALIGN_SPREAD_M:
+        raise ValueError(f"align window moves {spread:.2f} m horizontally (RMS); the yaw fit "
+                         f"needs {MIN_ALIGN_SPREAD_M} m, so widen it or pass hold_point")
+    psi, offset = fit_yaw_offset(src, dst)
+    resid = dst - (rotate_z(src, psi) + offset)
+    return psi, offset, float(np.sqrt(np.mean(np.sum(resid ** 2, axis=1))))
 
 
 def load_topics(path: str | Path) -> tuple[Topics, int]:
@@ -114,9 +198,12 @@ def load_topics(path: str | Path) -> tuple[Topics, int]:
 
 
 def read_ulog(
-    path: str | Path, hold_point: np.ndarray | None = None, allow_estimate: bool = False
+    path: str | Path,
+    hold_point: np.ndarray | None = None,
+    allow_estimate: bool = False,
+    align_window: tuple[float, float] | None = None,
 ) -> Trace:
     topics, start_us = load_topics(path)
-    trace = trace_from_topics(topics, start_us, hold_point, allow_estimate)
+    trace = trace_from_topics(topics, start_us, hold_point, allow_estimate, align_window)
     trace.meta["ulog"] = str(path)
     return trace

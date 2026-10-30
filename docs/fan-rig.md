@@ -41,8 +41,11 @@ Gazebo by both controllers before the first rig session.
 - S3 0.3 m from the wall, for the shelter fit.
 - One clock: the logger sends each sensor's speed and the gust switch to PX4 as MAVLink
   `NAMED_VALUE_FLOAT`, which PX4 logs as `debug_key_value`. That needs the debug bit in the
-  logging profile (`SDLOG_PROFILE` 147 + 32 = 179); check on the bench that the topic is
-  in the ulog.
+  logging profile (`SDLOG_PROFILE` 147 + 32 = 179). Checked in SIH on v1.17.0
+  (`python -m sim2real.px4.rig_logging_check <PX4_DIR>`): `debug_key_value` has a queue of
+  one, so keys sent back to back are lost (all but the last); send them one at a time,
+  10 ms or more apart (100 % logged), or all values in one `DEBUG_FLOAT_ARRAY` per tick
+  (`debug_array`). Keys keep 9 characters. Mocap is logged at most every 30 ms (~33 Hz).
 
 ## Calibration, every session
 
@@ -60,8 +63,10 @@ Gazebo by both controllers before the first rig session.
 
 Before the first session: a real tuned-PX4 baseline (autotune on the real airframe, then the
 position-loop values of `eval/baselines/px4_tuned_v1.params`, saved as its own file), the
-logging flight done and the estimate model refitted (`docs/logging-flight.md`), and
-`eval/ulog.py` able to read the mocap topic as truth (today it reads SITL ground truth only).
+logging flight done and the estimate model refitted (`docs/logging-flight.md`). Ready in
+code: `eval/ulog.py` scores against `vehicle_mocap_odometry` (`docs/metrics.md`), and the
+1.5 m scenarios are `sim2real/gazebo/scenarios/rig_wall1m_*.yaml` (fly them with
+`run_baseline --scenarios rig_wall1m_calm_0ms rig_wall1m_wind_4ms rig_wall1m_wind_8ms`).
 
 Per session: calibrate, then calm, 4 m/s, 8 m/s. Within a case the two controllers alternate
 run by run, 8 runs each, as Gate 2's 8 seeds. Run i of both uses the gust schedule drawn

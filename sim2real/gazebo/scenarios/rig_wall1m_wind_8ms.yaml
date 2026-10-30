@@ -1,0 +1,19 @@
+# Fan rig height (docs/fan-rig.md): wall1m_wind_8ms with the hold at 1.5 m instead of 2.5 m, so
+# both controllers fly the rig's geometry in Gazebo before the first rig session. The wind
+# model does not depend on height, so only the altitude differs from wall1m_wind_8ms.
+# The T8 baseline scenario: as wind_8ms, 1 m from the wall, 60 s hover, gusts moved into the hover.
+# 8 m/s mean wind blowing into the wall, with two gusts and moderate turbulence.
+name: rig_wall1m_wind_8ms
+seed: 1
+spawn: {x: -1.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 1 m from the wall (x = 0), nose toward it
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0
+disturbance:
+  mean_speed: 8.0
+  num_gusts: 2
+  gust_start: [40.0, 65.0]   # both inside the 60 s hover (it starts ~25 s sim time)
+  gust_duration: [1.0, 2.0]
+  gust_speed: [2.0, 4.0]
+  turb_sigma: 1.0
+  turb_tau: 1.0
+hover: {altitude: 1.5, hover_s: 60.0}
