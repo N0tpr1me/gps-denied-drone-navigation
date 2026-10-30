@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -9,6 +10,9 @@ from sim2real.gazebo.scenario import SCENARIO_DIR, Scenario, load_scenario, samp
 NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
          "wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
          "wall1m_wind_8ms_flow", "wall1m_lee_8ms_flow"]
+RIG = ["wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
+       "wall1m_wind_8ms_flow", "wall1m_lee_8ms_flow"]
+NAMES += [f"rig_{n}" for n in RIG]
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -17,6 +21,17 @@ def test_shipped_scenarios_load_and_spawn_near_the_wall(name):
     assert sc.name == name
     assert 1.0 <= sc.wall_clearance <= 3.0
     assert (SCENARIO_DIR / f"{name}.yaml").exists()
+
+
+@pytest.mark.parametrize("name", RIG)
+def test_rig_copies_differ_only_in_name_and_height(name):
+    # docs/fan-rig.md: the rig holds at 1.5 m; everything else is the 2.5 m scenario's.
+    base, rig = load_scenario(name), load_scenario(f"rig_{name}")
+    assert rig.hover.altitude == 1.5 and base.hover.altitude == 2.5
+    assert replace(rig, name=base.name, hover=base.hover) == base
+    a, b = sample_scenario(base), sample_scenario(rig)
+    for f in a.__dataclass_fields__:
+        np.testing.assert_array_equal(np.asarray(getattr(a, f)), np.asarray(getattr(b, f)))
 
 
 def test_calm_scenario_is_exactly_still_air():

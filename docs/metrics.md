@@ -68,3 +68,11 @@ python -m eval.metrics flight.ulg --wall-point 0,1,0 --wall-normal 0,1,0 --gust 
 
 The ulog reader (`eval/ulog.py`) is the PX4 boundary for logs: it converts NED to ENU and
 FRD body rates to FLU, and takes upward thrust as `-thrust_body[2]`.
+
+Real flights: with no SITL ground truth the reader scores against `vehicle_mocap_odometry`
+(mocap over MAVLink `ODOMETRY`, estimator type MOCAP, logged with `SDLOG_PROFILE` bit 7 at up
+to ~33 Hz; never fused). Mocap is in its own frame, so give either `--hold` (the hold point
+in the mocap frame) or `--align T0 T1`: the EKF estimate is fitted to mocap over that stretch
+by a yaw and an offset (needs 0.5 m of horizontal motion, so use take-off and the move to the
+hold point), which carries the setpoint into the mocap frame. The wall is then given in the
+mocap frame too. The fit's yaw, offset and residual are printed with the metrics.

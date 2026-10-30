@@ -276,22 +276,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("ulog", help="path to a .ulg file")
     p.add_argument("--wall-point", type=_vec3, help="a point on the wall, ENU, m: x,y,z")
     p.add_argument("--wall-normal", type=_vec3, help="normal from drone toward wall: x,y,z")
-    p.add_argument("--hold", type=_vec3, help="hold point (ENU) if the log has no setpoint")
+    p.add_argument("--hold", type=_vec3,
+                   help="hold point (ENU; mocap frame for mocap logs) instead of the setpoint")
     p.add_argument("--gust", type=_gust, action="append", default=[],
                    help="gust START,END in seconds from log start (repeatable)")
     p.add_argument("--window", type=float, nargs=2, metavar=("T0", "T1"))
     p.add_argument("--allow-estimate", action="store_true",
                    help="score against the EKF estimate when the log has no ground truth")
+    p.add_argument("--align", type=float, nargs=2, metavar=("T0", "T1"),
+                   help="mocap logs: fit the estimate to mocap over T0..T1 s (eval/ulog.py)")
     args = p.parse_args(argv)
     if (args.wall_point is None) != (args.wall_normal is None):
         p.error("--wall-point and --wall-normal go together")
 
     from eval.ulog import read_ulog
 
-    trace = read_ulog(args.ulog, hold_point=args.hold, allow_estimate=args.allow_estimate)
+    trace = read_ulog(args.ulog, hold_point=args.hold, allow_estimate=args.allow_estimate,
+                      align_window=tuple(args.align) if args.align else None)
     surface = Surface(args.wall_point, args.wall_normal) if args.wall_point is not None else None
     result = compute_metrics(trace, surface, args.gust, tuple(args.window) if args.window else None)
     result["position_source"] = trace.meta.get("position_source")
+    for k in ("align_yaw_deg", "align_offset_m", "align_rms_m"):
+        if k in trace.meta:
+            result[k] = trace.meta[k]
     print(json.dumps(result, indent=2, default=str))
     return 0
 

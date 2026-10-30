@@ -122,3 +122,113 @@ def test_hold_point_and_nan_setpoints_without_pyulog():
     tr = trace_from_topics(topics, START_US, hold_point=[1.0, 0.0, 1.0])
     assert len(tr.t) == 5
     assert compute_metrics(tr)["max_m"] == pytest.approx(0.0)
+
+
+# Mocap: the mocap frame is the EKF's local frame turned 90 degrees about up and moved.
+MOCAP_YAW = math.pi / 2
+MOCAP_OFFSET = np.array([5.0, -2.0, 0.1])  # ENU, m
+
+
+def to_mocap_ned(enu):
+    """EKF-frame ENU (N, 3) to the mocap frame, written as NED like PX4 logs it."""
+    c, s = math.cos(MOCAP_YAW), math.sin(MOCAP_YAW)
+    m = np.stack([c * enu[:, 0] - s * enu[:, 1], s * enu[:, 0] + c * enu[:, 1], enu[:, 2]],
+                 axis=1) + MOCAP_OFFSET
+    return np.stack([m[:, 1], m[:, 0], -m[:, 2]], axis=1)
+
+
+def rig_like_log(path, pose_frame=1, link_delay_s=0.03):
+    """12 s at 50 Hz. 0-4 s: climb to 1.5 m and fly 2 m east to the hold point (EKF frame
+    ENU (2, 0, 1.5)); the estimate is right. From 5 s the hold: the estimate stays on the
+    setpoint while the truth drifts 0.3 m north for t in [7, 9) s (an estimate error that
+    only mocap sees). Mocap is published ``link_delay_s`` after it was sampled."""
+    ts = np.arange(0, 12, 0.02)
+    truth = np.zeros((len(ts), 3))
+    truth[:, 0] = np.clip(ts / 4, 0, 1) * 2.0
+    truth[:, 2] = np.clip(ts / 2, 0, 1) * 1.5
+    truth[(ts >= 7) & (ts < 9), 1] = 0.3
+    est = truth.copy()
+    est[:, 1] = 0.0
+    us = START_US + (ts * 1e6).astype(int)
+    mocap = to_mocap_ned(truth)
+    pub = us + int(link_delay_s * 1e6)
+    xyz = "float x;float y;float z;"
+    topics = {
+        "vehicle_local_position": (
+            xyz, "fff", [(u, e[1], e[0], -e[2]) for u, e in zip(us, est, strict=True)]),
+        "vehicle_local_position_setpoint": (xyz, "fff", [(u, 0.0, 2.0, -1.5) for u in us[::5]]),
+        "vehicle_mocap_odometry": (
+            "uint64_t timestamp_sample;uint8_t pose_frame;float[3] position;", "QBfff",
+            [(p, u, pose_frame, *m) for p, u, m in zip(pub, us, mocap, strict=True)]),
+    }
+    write_ulog(path, topics)
+
+
+def test_mocap_truth_with_aligned_setpoint(tmp_path):
+    pytest.importorskip("pyulog")
+    from eval.ulog import read_ulog
+
+    path = tmp_path / "rig.ulg"
+    rig_like_log(path)
+    with pytest.raises(ValueError, match="mocap frame"):
+        read_ulog(path)
+    tr = read_ulog(path, align_window=(0.0, 4.5))
+    assert tr.meta["position_source"] == "vehicle_mocap_odometry"
+    assert tr.meta["align_yaw_deg"] == pytest.approx(90.0, abs=0.01)
+    np.testing.assert_allclose(tr.meta["align_offset_m"], MOCAP_OFFSET, atol=1e-4)
+    assert tr.meta["align_rms_m"] < 1e-4
+    assert tr.t[0] == pytest.approx(0.0)  # timestamp_sample, not the later publish time
+    # The setpoint lands on the hold point's mocap position: EKF (2, 0, 1.5) -> (5, 0, 1.6).
+    np.testing.assert_allclose(tr.pos_sp[-1], [5.0, 0.0, 1.6], atol=1e-4)
+    # The drift the estimate hid shows against mocap; north in the EKF frame is mocap -x.
+    m = compute_metrics(tr, window=(5.0, 11.9))
+    assert m["max_m"] == pytest.approx(0.3, abs=1e-4)
+    wall = Surface(point=[4.0, 0.0, 0.0], normal=[-1.0, 0.0, 0.0])  # 1 m off, in mocap frame
+    m = compute_metrics(tr, wall, window=(5.0, 11.9))
+    assert m["worst_toward_surface_m"] == pytest.approx(0.3, abs=1e-4)
+    assert m["min_clearance_m"] == pytest.approx(0.7, abs=1e-4)
+
+
+def test_mocap_truth_with_hold_point_in_mocap_frame(tmp_path):
+    pytest.importorskip("pyulog")
+    from eval.ulog import read_ulog
+
+    path = tmp_path / "rig.ulg"
+    rig_like_log(path, pose_frame=2)
+    tr = read_ulog(path, hold_point=[5.0, 0.0, 1.6])
+    assert "align_yaw_deg" not in tr.meta
+    assert compute_metrics(tr, window=(5.0, 11.9))["max_m"] == pytest.approx(0.3, abs=1e-4)
+
+
+def test_mocap_refuses_unknown_frame_and_a_window_without_motion(tmp_path):
+    pytest.importorskip("pyulog")
+    from eval.ulog import read_ulog
+
+    path = tmp_path / "rig.ulg"
+    rig_like_log(path, pose_frame=0)
+    with pytest.raises(ValueError, match="pose_frame"):
+        read_ulog(path, hold_point=[5.0, 0.0, 1.6])
+    rig_like_log(path)
+    with pytest.raises(ValueError, match="horizontally"):
+        read_ulog(path, align_window=(5.0, 11.0))  # the hold: no motion to fix the yaw
+
+
+def test_cli_scores_mocap_with_align(tmp_path, capsys):
+    pytest.importorskip("pyulog")
+    path = tmp_path / "rig.ulg"
+    rig_like_log(path)
+    assert main([str(path), "--align", "0", "4.5", "--window", "5", "11.9"]) == 0
+    out = capsys.readouterr().out
+    assert '"position_source": "vehicle_mocap_odometry"' in out
+    assert '"align_yaw_deg"' in out
+
+
+def test_fit_yaw_offset_recovers_a_known_transform():
+    from eval.ulog import fit_yaw_offset, rotate_z
+
+    rng = np.random.default_rng(0)
+    src = rng.normal(size=(50, 3))
+    dst = rotate_z(src, -2.0) + [1.0, 2.0, 3.0]
+    psi, off = fit_yaw_offset(src, dst)
+    assert psi == pytest.approx(-2.0)
+    np.testing.assert_allclose(off, [1.0, 2.0, 3.0])
