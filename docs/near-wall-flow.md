@@ -135,3 +135,35 @@ Structure Hover could see the wall; the lee flight on the same seed walked in mo
 and landed 0.37 m off it. The seed 1 `position_held` failures were the injected mid-hold
 jump (1.5 m in the estimate, truth within 0.26 m); `run_gazebo.py` now judges the hold
 checks on truth and keeps the estimate's verdict under `estimate_checks`.
+
+## Gazebo: the same comparison with the rangefinder on
+
+Flown on the Mac on 2026-10-30 at `31417be` (image rebuilt from main the same day, so it
+carries Structure Hover and the Structure Land handback of PR #86; hover test passed). Same
+scenarios, seeds and profiles as above; v19 adds `--rangefinder`, so the wall guard,
+Structure Hover and Structure Land all see the wall. v19 batch
+`runs/20261030-170534_px4_baseline_v19_flow_rf_31417be`, tuned PX4 re-flown on the same image
+(stock PX4 has no use for the range) in `runs/20261030-171738_px4_baseline_tuned_v1_flow_31417be`.
+
+Mean over seeds 1 to 3 (worst in brackets), tuned PX4 → v19:
+
+| Scenario | p95 (m) | Worst toward wall (m) | rms (m) | Crashes |
+| --- | --- | --- | --- | --- |
+| 8 m/s into the wall, flow | 0.540 (0.922) → 0.247 (0.286), -54 % | 0.253 (0.444) → 0.116 (0.220), -54 % | 0.217 → 0.124, -43 % | 0/3 → 0/3 |
+| 8 m/s in the lee, flow | 0.533 (0.907) → 0.245 (0.292), -54 % | 0.260 (0.487) → 0.076 (0.161), -71 % | 0.216 → 0.130, -40 % | 0/3 → 0/3 |
+
+Per seed (p95, m): into the wall v19 0.225 / 0.286 / 0.232, tuned 0.922 / 0.289 / 0.408; in
+the lee v19 0.217 / 0.292 / 0.226, tuned 0.907 / 0.285 / 0.406. Tuned PX4 repeated its
+2026-10-28 numbers to within 0.015 m per flight. Seed 2 is again a tie.
+
+After the hold, every v19 flight passed every check of the sequence: the watchdog trip handed
+back to Structure Hover in 6/6 and the landing went through Structure Land in 6/6. Seed 3 into
+the wall, the flight that struck the wall without the rangefinder, now kept 0.65 m from it
+after the hold (Structure Hover moved the point back 0.30 m, Structure Land 0.08 m); the lee
+seed 3 kept 0.67 m. Seeds 1 and 2 never came closer than 0.91 m after the hold.
+
+The guard also acted inside the scored hold on seed 3 (both scenarios) and lee seed 1: the
+estimate jump pulled the hold point toward the wall and the guard held it at 0.70 m clearance
+(`SH_WALL_MIN`), moving it back 0.04 to 0.09 m. That is part of why seed 3's p95 dropped from
+0.273 to 0.232 m (into the wall) and 0.263 to 0.226 m (lee) against the run without the range;
+seeds 1 and 2 flew within 0.005 m of it.
