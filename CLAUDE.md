@@ -62,14 +62,14 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
 | `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `baselines/` (tuned PX4, `run_baseline.py`) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md` |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md` |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -138,8 +138,9 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
   `sitl_test.py --wall` with a simulated rangefinder.
-- Next: fit `envs/estimate` to real VIO error from public datasets (EuRoC, UZH-FPV, TUM-VI;
-  replaces our own logging flight, `docs/real-flight-gap.md`), harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
+- Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
+  12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
+  hosts allowed in the cloud environment), harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
 
 ## Notes for future Claude sessions

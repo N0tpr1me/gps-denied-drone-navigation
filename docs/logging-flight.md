@@ -1,5 +1,9 @@
 # The first real flight: a logging flight, no policy
 
+> On hold since 2026-10-30 (software only, `docs/decisions.md`): the estimate fit this flight
+> was for comes from public datasets now (`docs/vio-fit.md`). The checklist stays for the
+> first flight on a design partner's drone.
+
 The biggest unknown between the simulators and a real drone is the estimate: every
 robustness number so far is measured against a made-up VIO (`docs/real-flight-gap.md`,
 row 1). One log of a real drone hovering by hand in front of a wall, with its VIO and an
