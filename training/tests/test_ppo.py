@@ -156,6 +156,27 @@ def test_onnx_matches_torch_actor_and_takes_any_batch(trained):
     np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-5)
 
 
+def test_actor_initialised_from_onnx_acts_like_it_and_keeps_its_normaliser(trained, tmp_path):
+    from tensordict import TensorDict
+
+    p = smoke_params()
+    runner, *_ = train_ppo.make_runner(p, 1, "cpu", tmp_path / "tb", RunWriter(tmp_path))
+    train_ppo.init_actor_from_onnx(runner, trained["onnx"])
+    want = trained["runner"].get_inference_policy("cpu")
+    x = torch.randn(16, 3 * NUM_OBS)
+    td = TensorDict({"policy": x}, batch_size=[16])
+    with torch.no_grad():
+        np.testing.assert_allclose(runner.get_inference_policy("cpu")(td).numpy(),
+                                   want(td).numpy(), rtol=1e-4, atol=1e-5)
+    actor = runner.alg.get_policy()
+    for q in actor.parameters():
+        q.requires_grad_(False)
+    runner.learn(1)  # a critic warm-up step: the actor and its normaliser stay as loaded
+    with torch.no_grad():
+        np.testing.assert_allclose(runner.get_inference_policy("cpu")(td).numpy(),
+                                   want(td).numpy(), rtol=1e-4, atol=1e-5)
+
+
 def test_onnx_and_pt_controllers_agree_on_the_env(trained):
     env = StructureHoldEnv(trained["env_cfg"], num_envs=3, seed=1)
     onnx_ctl = load_controller(trained["onnx"], 3)

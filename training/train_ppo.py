@@ -13,7 +13,12 @@ optimiser and iteration counter are restored and training continues for ``iterat
 so two runs under the hour limit make one longer run), ``resume_std`` (with ``resume``: set
 the actor's exploration std to this value after loading; ``null`` keeps the loaded one. A
 std clamped at the floor of ``actor.std_range`` gets no gradient, so a resumed policy that
-reached the floor otherwise keeps that std for good), and ``eval``
+reached the floor otherwise keeps that std for good), ``init_actor_onnx`` (instead of
+``resume``: start the actor from a released ``.onnx``, weights and observation normaliser,
+the normaliser then frozen; the critic starts fresh, so ``critic_warmup`` iterations first
+train the critic alone with the actor frozen. A released policy's ``policy.pt`` lives only in
+the ephemeral run folder that trained it, so this is how a release is continued later), and
+``eval``
 (``num_envs``, ``episodes``, ``score_envs`` and ``env``: the post-training comparison with
 the PD yardstick; ``eval.env`` is merged over the training ``env``, so training can use
 harder estimate corruption than the standard condition the result is reported on;
@@ -79,6 +84,8 @@ DEFAULTS: dict[str, Any] = {
     "curriculum": {"dropout_max_s": None, "fraction": 0.6},
     "resume": None,
     "resume_std": None,
+    "init_actor_onnx": None,
+    "critic_warmup": 200,
     "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
              "select_every": 250, "select_envs": 128},
 }
@@ -174,6 +181,29 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
     return runner, vec, env_cfg, train_cfg
 
 
+def init_actor_from_onnx(runner: Any, path: Path) -> None:
+    """Load a released policy's actor (``export_onnx``'s graph: normaliser Sub and Div, then
+    the MLP's Gemm layers) into the runner's actor, and freeze the normaliser there."""
+    import onnx
+    from onnx import numpy_helper
+
+    init = {i.name: torch.as_tensor(numpy_helper.to_array(i).copy())
+            for i in onnx.load(str(path)).graph.initializer}
+    div = next(n for n in onnx.load(str(path)).graph.node if n.op_type == "Div")
+    actor = runner.alg.get_policy()
+    norm = actor.obs_normalizer
+    with torch.no_grad():
+        for name, q in actor.mlp.named_parameters():
+            q.copy_(init[f"mlp.{name}"])
+        std = init[div.input[1]] - norm.eps  # the graph stores std + eps
+        norm._mean.copy_(init["obs_normalizer._mean"])
+        norm._std.copy_(std)
+        norm._var.copy_(std**2)
+        norm.count.fill_(10**9)
+    norm.until = int(norm.count)
+    print(f"ppo: actor initialised from {path}", flush=True)
+
+
 def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: StructureHoldConfig,
                       p: dict[str, Any], seed: int, device: str, writer: RunWriter) -> int:
     """Score the final policy and the saved checkpoints every ``eval.select_every``
@@ -232,6 +262,27 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
             with torch.no_grad():
                 runner.alg.get_policy().distribution.std_param.fill_(float(p["resume_std"]))
             print(f"ppo: exploration std reset to {float(p['resume_std'])}", flush=True)
+    if p.get("init_actor_onnx"):
+        if p.get("resume"):
+            raise ValueError("give resume or init_actor_onnx, not both")
+        init_actor_from_onnx(runner, Path(p["init_actor_onnx"]))
+        if p.get("resume_std") is not None:
+            with torch.no_grad():
+                runner.alg.get_policy().distribution.std_param.fill_(float(p["resume_std"]))
+        warm = int(p.get("critic_warmup") or 0)
+        if warm > 0:
+            actor = runner.alg.get_policy()
+            for q in actor.parameters():
+                q.requires_grad_(False)
+            print(f"ppo: critic warm-up, {warm} iterations with the actor frozen", flush=True)
+            runner.learn(warm, init_at_random_ep_len=bool(p["init_at_random_ep_len"]))
+            runner.current_learning_iteration += 1
+            for q in actor.parameters():
+                q.requires_grad_(True)
+            # The adaptive schedule raised the rate while the frozen actor's KL was zero.
+            runner.alg.learning_rate = float(p["ppo"]["learning_rate"])
+            for g in runner.alg.optimizer.param_groups:
+                g["lr"] = runner.alg.learning_rate
     p["_start_iteration"] = int(runner.current_learning_iteration)
 
     t0 = time.perf_counter()
