@@ -62,14 +62,14 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
 | `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error), `baselines/` (tuned PX4, `run_baseline.py`) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error), `settle_split.py` (settle vs steady hold), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md` |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md` |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -157,7 +157,9 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   Gazebo SITL runs on Zain's Mac (Apple M4, Docker, ~40 min per controller); only one
   session works in the Mac checkout at a time, and it is left clean on `main`. On a new GPU machine run `bash training/server_report.sh` and
   `nvidia-smi` first, then follow the first-hour checklist in `docs/isaac-lab.md`.
-- Keep runs under 1 h (split with `params.resume`), and use `--smoke` first.
+- Keep runs under 1 h (split with `params.resume`), and use `--smoke` first. A release's
+  `policy.pt` is gone with its run folder; continue a release with `params.init_actor_onnx`
+  (actor from the ONNX, fresh critic warmed up first; `training/train_ppo.py`).
 - Branch from `main`, one folder per piece of work, one topic per PR. Point to docs rather
   than copying numbers into new places; numbers live in `docs/` and `experiments/LOG.md`.
 - Keep this file current: when a change is significant to the architecture, dependencies,

@@ -86,7 +86,8 @@ most of its error came from chasing the standard model's large jumps and 2 cm no
 the real data does not show. v19 barely moves (0.24 to 0.21 m): it sits on a floor of about
 0.2 m in every cell, calm or not. So v19's edge over a simple controller is robustness to a
 bad estimate and to strong wind; with a good estimate in calm or light wind the PD holds
-tighter. Two follow-ups come out of this: find what sets v19's 0.2 m floor (the next policy
+tighter. Two follow-ups come out of this: find what sets v19's 0.2 m floor (done: it is the settle
+after engage, not a standing offset, `docs/hold-offset.md`) (the next policy
 should hold tighter when the estimate is good, not only survive when it is bad), and train
 on a mix of the fitted and the standard corruption. Gate 2 (v19 against tuned PX4 in Gazebo,
 `docs/baseline.md`) is not touched by this: it ran on the standard corruption, and tuned
