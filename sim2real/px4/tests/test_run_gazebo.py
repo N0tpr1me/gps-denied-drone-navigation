@@ -163,3 +163,19 @@ def test_hold_checks_rejudged_on_truth():
     untouched = {"checks": {"position_held": False}, "passed": False}
     run_gazebo.judge_hold_on_truth(untouched, {}, 1.0)
     assert untouched == {"checks": {"position_held": False}, "passed": False}
+
+
+def test_reengage_entry_state_and_overrun():
+    # Re-engage at 9 s (synthetic_status): the truth closes on a wall at x = 0 from x = -1.0
+    # at 0.3 m/s until 9.2 s, then backs off; the first engage is not reported.
+    from eval.metrics import Surface
+
+    t = np.arange(0.0, 12.0, 0.01)
+    x = np.where(t < 9.2, -1.0 + 0.3 * np.clip(t - 8.0, 0, None), -0.64 - 0.1 * (t - 9.2))
+    pos = np.stack([x, np.zeros_like(t), np.full_like(t, 2.5)], axis=1)
+    wall = Surface(np.zeros(3), np.array([1.0, 0.0, 0.0]))
+    (r,) = run_gazebo.reengage_entries(t, pos, wall, synthetic_status(), START)
+    assert abs(r["t_s"] - 9.0) < 1e-6
+    assert abs(r["entry_clearance_m"] - 0.70) < 1e-3
+    assert abs(r["closing_mps"] - 0.3) < 1e-3
+    assert abs(r["closest_m"] - 0.64) < 2e-3 and abs(r["overrun_m"] - 0.06) < 2e-3
