@@ -6,11 +6,15 @@ Runs against a PX4 built with install.sh, started separately (see sitl_test.sh):
 
 Steps, each a check in the summary:
 
+0. on the ground: Structure Hold cannot be selected while disarmed, and once armed a switch
+   into it is refused (land detector) and handed back without lifting off;
 1. take off to ``--altitude`` in stock PX4 and hover ``--settle-s``;
 2. engage the external mode "Structure Hold" over MAVLink (DO_SET_MODE, auto/external),
    hold ``--hold-s``: drift from the engage point stays under ``--drift-tol``;
 3. disengage back to stock Position mode: the switch is accepted and the vehicle keeps
-   holding for ``--settle-s``;
+   holding for ``--settle-s``; with ``--moving-engage`` the sticks then push the vehicle
+   sideways and Structure Hold is engaged while it still moves (the re-engage mid-gust
+   case): it must stop and hold without a trip, then hand back to Position mode;
 4. re-engage, then trip the watchdog with the SH_TEST_FAULT hook: PX4 leaves Structure
    Hold within ``--handback-tol-s`` (measured from the ulog), the vehicle stays airborne in
    a stock mode (Structure Hover with ``--wall``), and a further engage request is refused
@@ -29,6 +33,11 @@ along the engage heading. Mid-hold the wall jumps to ``--wall-close-m`` ahead of
 point, which puts the hold point inside SH_WALL_MIN: the wall guard must move it back and
 the vehicle must end up at least SH_WALL_MIN (less ``--wall-tol``) from the wall
 (WallGuard.hpp). The ulog check then expects a nonzero standoff_shift_m.
+
+With ``--range-faults`` (needs ``--wall``) the rangefinder sends ``--range-faults-s`` of
+broken readings before the wall jump: 0 cm, 5 cm (below the sensor's minimum), beyond its
+maximum, 65535 cm, and a short 50 cm reading flagged invalid. Any of them taken at face
+value would move the hold point back by 0.2 to 0.65 m; the vehicle must not back off.
 
 With ``--wall`` the landing is checked against the wall too: at the land command the wall
 is placed ``--land-wall-m`` ahead and then creeps ``--land-creep-m`` closer at ``--land-
@@ -77,6 +86,10 @@ REENGAGE_RETRY_S = 14.0
 # The landing's wall clearance is scored above this height (the ground stops the vehicle,
 # not the wall).
 LAND_AIRBORNE_M = 0.3
+TRIP_LANDED = 7
+# Broken forward-range readings for --range-faults: (centimetres, MAVLink signal_quality,
+# where 0 = unknown and 1 = invalid). Min 10 cm, max 1200 cm as in the wall's own readings.
+RANGE_FAULTS = [(0, 0), (5, 0), (2000, 0), (65535, 0), (50, 1)]
 
 
 @dataclass
@@ -90,6 +103,8 @@ class Telemetry:
     landed: bool = True
     yaw: float = math.nan
     pitch: float = 0.0
+    vn: float = 0.0
+    ve: float = 0.0
 
 
 @dataclass
@@ -138,6 +153,9 @@ class Vehicle:
         self._last_range = 0.0
         self.wall: VirtualWall | None = None
         self.ranges: list[float] = []  # every range sent, for the wall checks
+        self.stick_y = 0                # MANUAL_CONTROL y (roll), -1000..1000
+        self.range_faults = False       # send RANGE_FAULTS instead of the wall's range
+        self._fault_i = 0
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
@@ -165,7 +183,7 @@ class Vehicle:
         if not self.joystick or time.monotonic() - self._last_joystick < 0.05:
             return
         self._last_joystick = time.monotonic()
-        self.m.mav.manual_control_send(self.m.target_system, 0, 0, 500, 0, 0)
+        self.m.mav.manual_control_send(self.m.target_system, 0, self.stick_y, 500, 0, 0)
 
     def _send_range(self) -> None:
         """Forward rangefinder at 20 Hz against the virtual wall, when there is one."""
@@ -174,11 +192,19 @@ class Vehicle:
         if time.monotonic() - self._last_range < 0.05:
             return
         self._last_range = time.monotonic()
+        boot_ms = int(time.monotonic() * 1000) & 0xFFFFFFFF
+        if self.range_faults:
+            cm, quality = RANGE_FAULTS[self._fault_i % len(RANGE_FAULTS)]
+            self._fault_i += 1
+            self.m.mav.distance_sensor_send(boot_ms, 10, int(self.wall.max_m * 100), cm,
+                                            mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
+                                            mavlink.MAV_SENSOR_ROTATION_NONE, 0,
+                                            signal_quality=quality)
+            return
         r = self.wall.range_m(self.tel)
         if r is None:
             return
         self.ranges.append(r)
-        boot_ms = int(time.monotonic() * 1000) & 0xFFFFFFFF
         self.m.mav.distance_sensor_send(boot_ms, 10, int(self.wall.max_m * 100),
                                         int(round(r * 100)), mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
                                         mavlink.MAV_SENSOR_ROTATION_NONE, 0)
@@ -187,6 +213,7 @@ class Vehicle:
         t = msg.get_type()
         if t == "LOCAL_POSITION_NED":
             self.tel.north, self.tel.east, self.tel.down = msg.x, msg.y, msg.z
+            self.tel.vn, self.tel.ve = msg.vx, msg.vy
         elif t == "HEARTBEAT" and msg.get_srcComponent() == mavlink.MAV_COMP_ID_AUTOPILOT1:
             self.tel.main_mode = (msg.custom_mode >> 16) & 0xFF
             self.tel.sub_mode = (msg.custom_mode >> 24) & 0xFF
@@ -293,6 +320,16 @@ def parse_args() -> argparse.Namespace:
                    help="with --wall: how far the wall creeps in during the landing, m")
     p.add_argument("--land-creep-mps", type=float, default=0.1,
                    help="with --wall: creep speed, m/s (Gazebo seed 3 crept 0.05-0.07 m/s)")
+    p.add_argument("--range-faults", action="store_true",
+                   help="with --wall: broken range readings before the wall jump; no back-off")
+    p.add_argument("--range-faults-s", type=float, default=6.0)
+    p.add_argument("--range-fault-tol", type=float, default=0.3,
+                   help="max back-off from the wall during the faults, m")
+    p.add_argument("--moving-engage", action="store_true",
+                   help="engage Structure Hold while the vehicle still moves sideways")
+    p.add_argument("--moving-stick", type=int, default=700,
+                   help="MANUAL_CONTROL roll stick before the moving engage (-1000..1000)")
+    p.add_argument("--moving-push-s", type=float, default=2.0)
     p.add_argument("--hover-s", type=float, default=8.0,
                    help="with --wall: time after the trip with the wall creeping in, s")
     return p.parse_args()
@@ -363,9 +400,43 @@ def fly(args: argparse.Namespace) -> dict:
     if args.wall:
         v.set_param("SH_WALL_MIN", args.wall_min)
     result["params"] = args.param
+
+    # 0. On the ground. First wait until the vehicle can arm at all (estimator, preflight),
+    # then disarm again: from here a refused arm can only be the mode's doing.
     v.wait_for(try_arm, args.ready_timeout_s, "arming")
     result["ready_s"] = round(time.monotonic() - start, 1)
+    v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
+    v.wait_for(lambda: not v.tel.armed, 5, "disarm before the ground checks")
+    # Disarmed, the mode reports itself unavailable: commander lets it be selected, but not
+    # armed into (a hold point on the ground; the policy never learned a take-off).
+    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    v.pump(1.0)
+    arm_ack = v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+    v.pump(1.0)
+    result["ground_arm_in_mode"] = {"selected": in_structure_hold(v), "arm_ack": arm_ack}
+    checks["arm_into_mode_refused"] = arm_ack != mavlink.MAV_RESULT_ACCEPTED and not v.tel.armed
+    if v.tel.armed:
+        v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
+        v.wait_for(lambda: not v.tel.armed, 5, "disarm")
+    v.set_mode(stock[0], stock[1])
+    v.wait_for(try_arm, 10, "arming in the stock mode")
     ground_down = v.tel.down
+    # Armed on the ground, after commander's next arming-check poll (300 ms): commander takes
+    # the switch, the module refuses it (land detector) and hands back at idle thrust; the
+    # vehicle must stay on the ground (land detector, not the estimate's height, which
+    # moves 0.1 to 0.2 m on the ground in SIH).
+    v.pump(1.0)
+    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    stayed_landed = True
+    end = time.monotonic() + 2.5
+    while time.monotonic() < end:
+        v.pump(0.1)
+        stayed_landed = stayed_landed and v.tel.landed
+    result["ground_engage"] = {"mode_after": mode_name(v), "stayed_landed": stayed_landed}
+    checks["ground_engage_refused"] = not in_structure_hold(v) and stayed_landed and v.tel.armed
+    if not in_stock(v):
+        v.set_mode(stock[0], stock[1])
+        v.pump(0.5)
     nan = float("nan")
     assert v.command(mavlink.MAV_CMD_NAV_TAKEOFF, nan, 0, 0, nan, nan, nan, nan) \
         == mavlink.MAV_RESULT_ACCEPTED, "takeoff rejected"
@@ -407,6 +478,12 @@ def fly(args: argparse.Namespace) -> dict:
     result["after_disengage"] = {"mode": stock[2],
                                  "xy_max_drift_m": round(max(samples.posctl_drift), 3)}
     checks["stock_mode_flying_after_disengage"] = in_stock(v) and not v.tel.landed
+    if args.moving_engage:
+        moving_engage_step(v, args, result, stock)
+        if not in_stock(v):
+            v.set_mode(stock[0], stock[1])
+        v.wait_for(lambda: in_stock(v), 5, f"{stock[2]} mode after the moving engage")
+        v.pump(args.settle_s)
 
     # 4. Re-engage, trip the watchdog, expect handback and a latched refusal. Commander
     # refuses the mode (or the module hands straight back) while the EKF-reset hold-off
@@ -516,6 +593,34 @@ def fly(args: argparse.Namespace) -> dict:
     return result
 
 
+def moving_engage_step(v: Vehicle, args: argparse.Namespace, result: dict,
+                       stock: tuple[int, int, str]) -> None:
+    """Push sideways in the stock mode, engage while moving, check the hold catches it."""
+    checks = result["checks"]
+    v.stick_y = args.moving_stick
+    v.pump(args.moving_push_s)
+    speed = math.hypot(v.tel.vn, v.tel.ve)
+    ack = v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    v.stick_y = 0  # centred again: only the module is flying from here
+    v.wait_for(lambda: in_structure_hold(v), 5, "Structure Hold engaged while moving")
+    # The heartbeat (and so the engage point seen here) lags the module's own engage by up
+    # to a second; the overshoot is measured from the first position seen in the mode.
+    p0 = (v.tel.north, v.tel.east, v.tel.down)
+    dist: list[float] = []
+    end = time.monotonic() + args.hold_s
+    while time.monotonic() < end:
+        v.pump(0.1)
+        dist.append(math.dist((v.tel.north, v.tel.east, v.tel.down), p0))
+    tail = dist[-int(5.0 / 0.1):]
+    result["moving_engage"] = {"ack": ack, "speed_at_request_mps": round(speed, 2),
+                               "max_from_engage_m": round(max(dist), 3),
+                               "last5s_max_m": round(max(tail), 3)}
+    checks["moving_engage_no_trip"] = in_structure_hold(v)
+    # Stops and holds: no wandering off at the end (the overshoot itself is reported).
+    checks["moving_engage_holds"] = max(tail) - min(tail) <= args.drift_tol
+    v.set_mode(stock[0], stock[1])
+
+
 def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, float, float],
                     result: dict) -> None:
     """Jump the virtual wall to inside SH_WALL_MIN of the hold point; expect a back-off."""
@@ -526,6 +631,22 @@ def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, flo
     # At --wall-m (above SH_WALL_MIN) the guard leaves the hold point alone: the vehicle
     # sits about --wall-m from the wall.
     settled = before[len(before) // 2:] or [math.nan]
+    if args.range_faults:
+        # Back-off = movement away from the wall along its normal, from where the faults
+        # start (the policy's own wander in SIH is a few cm to 0.2 m).
+        n = (math.cos(v.wall.yaw), math.sin(v.wall.yaw))
+        p0 = (v.tel.north, v.tel.east)
+        backoff = 0.0
+        v.range_faults = True
+        end = time.monotonic() + args.range_faults_s
+        while time.monotonic() < end:
+            v.pump(0.1)
+            moved = (v.tel.north - p0[0]) * n[0] + (v.tel.east - p0[1]) * n[1]
+            backoff = max(backoff, -moved)
+        v.range_faults = False
+        result["range_faults"] = {"duration_s": args.range_faults_s, "sent": v._fault_i,
+                                  "max_backoff_m": round(backoff, 3)}
+        checks["range_faults_ignored"] = backoff <= args.range_fault_tol and in_structure_hold(v)
     v.wall = VirtualWall((hold[0], hold[1]), v.wall.yaw, args.wall_close_m)
     n0 = len(v.ranges)
     v.pump(args.wall_s)
@@ -570,6 +691,9 @@ def check_ulog(path: Path, result: dict) -> None:
         expected.add(STATE_HOVER)
     checks["status_states_logged"] = bool(expected <= states)
     checks["status_trip_logged"] = bool(TRIP_TEST_FAULT in trips)
+    if "ground_engage" in result:
+        # Commander takes the switch on the ground; the module's refusal must be logged.
+        checks["ground_refusal_logged"] = bool(TRIP_LANDED in trips)
     if "wall" in result and "standoff_shift_m" in status.data:
         shift = float(max(status.data["standoff_shift_m"]))
         result["ulog"]["max_standoff_shift_m"] = round(shift, 3)

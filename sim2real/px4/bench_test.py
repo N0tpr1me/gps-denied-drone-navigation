@@ -34,7 +34,7 @@ from pathlib import Path
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common as mavlink
 
-RELEASED_POLICY = "structure_hold_v19"
+RELEASED_POLICY = "structure_hold_v22"
 PROMPT = re.compile(r"(nsh|pxh)> ?$")
 
 

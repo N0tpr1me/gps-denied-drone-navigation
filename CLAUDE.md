@@ -107,6 +107,7 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
+# also test_params.cpp and test_handback.cpp, same flags (sim2real/px4/README.md "Unit tests")
 
 # SITL (needs Docker: the Mac)
 sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
@@ -139,10 +140,14 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   old ending) and Structure Hover (ext3, `SH_HB_GUARD`: a trip next to a measured wall
   hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
-  `sitl_test.py --wall` with a simulated rangefinder.
+  `sitl_test.py --wall` with a simulated rangefinder. Safety hardening (Nov 2026): the
+  module clamps its own parameters (`ParamLimits.hpp`; PX4 does not), refuses to engage on
+  the ground (`SH_BENCH` 1 lifts it for the bench test only), stops on disarm, and the
+  handback order lives in `Handback.hpp` (decided rows, pinned by `test_handback.cpp`);
+  `sitl_test.py` checks ground engage always, `--range-faults` and `--moving-engage` on demand.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
-  hosts allowed in the cloud environment), harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
+  hosts allowed in the cloud environment), the distance-to-wall policy input, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
 
 ## Notes for future Claude sessions
