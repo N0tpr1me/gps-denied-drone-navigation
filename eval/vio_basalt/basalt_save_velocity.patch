@@ -1,0 +1,39 @@
+diff --git a/src/vio.cpp b/src/vio.cpp
+index 8adad0a..1141157 100644
+--- a/src/vio.cpp
++++ b/src/vio.cpp
+@@ -134,6 +134,7 @@ tbb::concurrent_bounded_queue<basalt::PoseVelBiasState<double>::Ptr>
+ std::vector<int64_t> vio_t_ns;
+ Eigen::aligned_vector<Eigen::Vector3d> vio_t_w_i;
+ Eigen::aligned_vector<Sophus::SE3d> vio_T_w_i;
++Eigen::aligned_vector<Eigen::Vector3d> vio_vel_w_i;
+ 
+ std::vector<int64_t> gt_t_ns;
+ Eigen::aligned_vector<Eigen::Vector3d> gt_t_w_i;
+@@ -376,6 +377,7 @@ int main(int argc, char** argv) {
+       vio_t_ns.emplace_back(data->t_ns);
+       vio_t_w_i.emplace_back(T_w_i.translation());
+       vio_T_w_i.emplace_back(T_w_i);
++      vio_vel_w_i.emplace_back(vel_w_i);
+ 
+       if (show_gui) {
+         std::vector<float> vals;
+@@ -900,7 +902,7 @@ void saveTrajectoryButton() {
+     {
+       std::ofstream os("trajectory.txt");
+ 
+-      os << "# timestamp tx ty tz qx qy qz qw" << std::endl;
++      os << "# timestamp tx ty tz qx qy qz qw vx vy vz" << std::endl;
+ 
+       for (size_t i = 0; i < vio_t_ns.size(); i++) {
+         const Sophus::SE3d& pose = vio_T_w_i[i];
+@@ -909,7 +911,8 @@ void saveTrajectoryButton() {
+            << " " << pose.translation().z() << " " << pose.unit_quaternion().x()
+            << " " << pose.unit_quaternion().y() << " "
+            << pose.unit_quaternion().z() << " " << pose.unit_quaternion().w()
+-           << std::endl;
++           << " " << vio_vel_w_i[i].x() << " " << vio_vel_w_i[i].y() << " "
++           << vio_vel_w_i[i].z() << std::endl;
+       }
+ 
+       os.close();
