@@ -124,6 +124,8 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
 
 - Released policy: **v19** (`training/policies/structure_hold_v19.*`, trained on the
   `gz_x500_sitl` preset). The module's `PolicyWeights.hpp` is generated from it.
+  Candidate **v22** adds a 21st input, the time since engage (`docs/hold-offset.md`); the
+  module reads it when its header has it (`HAS_ENGAGE_TIME`). It waits for a Gazebo re-fly.
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.

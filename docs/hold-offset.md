@@ -76,7 +76,42 @@ estimate, which is what Gate 1, Gate 2 and the Gazebo-like check fly. Not put th
 `eval/configs/gazebo_check.yaml`: its rough cells are the standard estimate, where it is
 already worse. v19 stays.
 
-## What would fix it
+## v22: the time-since-engage input (candidate, 2026-10-31)
+
+The fix proposed here, tried. The observation gets a 21st value, seconds since the last
+engage (episode start or re-engage) over `engage_obs_cap_s` (4 s), capped at 1
+(`envs/structure_hold/env.py`; policies up to v21 still read the first 20). v22
+(`training/configs/structure_hold_ppo_v22.yaml`, run `20261030-220041`) is v19's ONNX with
+zero weights on the new input, so it starts out flying exactly as v19, plus a 200-iteration
+critic warm-up and 1000 PPO iterations on v19's recipe (re-engages back at 0.05 Hz), 23 min.
+
+Scratch seed 8001 (`eval.settle_split`, 256 episodes, metres):
+
+| | v19 | v22 | PD |
+| --- | --- | --- | --- |
+| Fitted VIO, calm 1 m: p95 / after 5 s / error at 2 s | 0.194 / 0.103 / 0.132 | 0.157 / 0.090 / 0.084 | 0.161 / 0.099 / 0.030 |
+| Fitted VIO, 8 m/s 1 m: p95 / after 5 s | 0.200 / 0.108 | 0.172 / 0.106 | 0.227 / 0.155 |
+| Standard estimate, calm 1 m: p95 / after 5 s | 0.217 / 0.141 | 0.169 / 0.110 | 0.303 / 0.260 |
+| Standard estimate, 8 m/s 1 m: p95 / after 5 s | 0.224 / 0.147 | 0.184 / 0.126 | 0.334 / 0.280 |
+
+It settles faster and, unlike v21, holds tighter after the settle as well, so it does not
+buy the settle by following jumps. Against the release gates (`experiments/LOG.md`):
+
+| Check | v19 | v22 |
+| --- | --- | --- |
+| Gazebo-like check (`gazebo_check_v22.yaml`, run `20261030-224041`), rough cells pooled p95 | 0.244 m | 0.196 m: beats v19, ratio 0.81 (0.79 to 0.83), no rule failed; calm clean 0.037 vs 0.044 m, seed 3 replay toward the wall 0.19 vs 0.24 m, fast ring 0.017 rad/s, 0.02 m low |
+| Gate 1 x500 fused, held-out (run `20261030-230516`) | 6/6, pooled 0.241 m, headline -34 %, 7 crashes in 18,432 | 6/6, pooled 0.19 m vs PD 0.36, headline -47 %, no crash |
+| Gate 1 stress (run `20261030-232614`) | 13/13, pooled 0.256 m | 13/13, pooled 0.21 m vs PD 0.38, crash 0.1 % vs 0.6 %; the 5 s dropout cell (outside the envelope, decided 2026-10-24) still loses |
+| Fitted-VIO re-check (run `20261031-000742`) | 1/6, pooled 0.211 vs PD 0.213 m | 5/6, pooled 0.18 vs 0.21 m; the headline cell is -23 % against the -30 % rule |
+
+A check ratio of 0.81 is about where v11, v12 and v18 stood before Gazebo flew them worse,
+so the Gazebo re-fly decides. The PX4 module reads the input when its header has it
+(`HAS_ENGAGE_TIME`; `sample.engage_s` from the engage time in `StructureHold.cpp`); the
+committed header stays v19's until v22 is released. With a v22 header and test vectors
+`tests/test_policy.cpp` passes (observation within 3e-7 of the env, MLP within 1e-6 of
+onnxruntime).
+
+## Why the input (the reasoning before v22)
 
 Reward weights cannot: the trade is between two things the policy cannot tell apart. Giving it
 the missing fact can. The module knows when it engaged, so a **time-since-engage input**

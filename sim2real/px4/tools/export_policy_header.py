@@ -182,6 +182,14 @@ def render_header(net: dict, meta: dict, onnx_path: Path, json_path: Path, sha: 
         out.append(f"static constexpr int OBS_{name.upper()} = {a};  // size {b - a}")
     clip = float(meta["input"]["obs_pos_clip_m"])
     out.append(f"static constexpr float OBS_POS_CLIP_M = {clip!r}f;")
+    # The engage-time input (v22 on): seconds since engage over ENGAGE_OBS_CAP_S, capped at
+    # 1. Policies without it get the constants too, so the module code compiles either way.
+    has_engage = "engage_time" in layout
+    if not has_engage:
+        out.append("static constexpr int OBS_ENGAGE_TIME = 0;  // unused: no engage-time input")
+    cap = float(env.get("engage_obs_cap_s", 4.0))
+    out.append(f"static constexpr bool HAS_ENGAGE_TIME = {str(has_engage).lower()};")
+    out.append(f"static constexpr float ENGAGE_OBS_CAP_S = {cap!r}f;")
     out.append("")
     out.append("// Action scaling and the airframe the policy was trained on (mock sim).")
     max_rate = float(meta["output"]["max_rate_rad_s"])

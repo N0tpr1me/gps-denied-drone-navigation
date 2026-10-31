@@ -124,6 +124,7 @@ struct VehicleSample {
 	float rates_frd[3] {0.f, 0.f, 0.f};
 	bool stale{false};  // no fresh position fix within the expected interval
 	float age_s{0.f};   // 0 while fresh, time since the last fix while stale (the env's age)
+	float engage_s{0.f};  // time since engage (the env's engage_time), s
 };
 
 struct Setpoint {
@@ -174,6 +175,8 @@ inline void buildObservation(const StructureFrame &f, const VehicleSample &s, co
 
 	obs[OBS_STALE] = s.stale ? 1.f : 0.f;
 	obs[OBS_AGE] = clampf(s.age_s, 0.f, 1.f);
+
+	if (HAS_ENGAGE_TIME) { obs[OBS_ENGAGE_TIME] = clampf(s.engage_s / ENGAGE_OBS_CAP_S, 0.f, 1.f); }
 
 	for (int i = 0; i < NUM_OBS; i++) { obs[i] = finiteOrZero(obs[i]); }
 }

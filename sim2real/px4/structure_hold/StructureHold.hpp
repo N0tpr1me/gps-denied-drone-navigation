@@ -204,6 +204,7 @@ private:
 	hrt_abstime _prev_pos_us{0};
 	bool _vel_fd_valid{false};
 	hrt_abstime _last_control_us{0};
+	hrt_abstime _engaged_us{0};  // the policy's engage-time input counts from here
 	hrt_abstime _last_status_us{0};
 
 	perf_counter_t _loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": control step")};
