@@ -1375,3 +1375,130 @@ drops a topic whose expanded format passes its 1600-byte buffer, and the module'
 message grew). `ulog_checks.aiding` now reads `estimator_status.control_mode_flags` when that
 topic is missing. These six flights were scored before that fix, so their `ok` is false
 while the flights were clean (vision fused 99.4 % of the logged samples).
+
+## v22 candidate vs tuned PX4 and v19, 8 seeds, corrected stream
+
+A test of the candidate, not a release. v22 is v19 plus the time-since-engage input
+(`docs/hold-offset.md`, decision row Proposed 2026-10-31). Flown on the Mac on 2026-10-31
+on branch `claude/project-thread-taysdp` at `6d5341d` (module headers generated from
+`structure_hold_v22.onnx`, `NUM_OBS = 21`, `HAS_ENGAGE_TIME = true`; image rebuilt from that
+commit, it reports `structure_hold_v22`; hover test passed). Same protocol as the v19 section
+above, so tuned PX4 and v19 were not re-flown: their pools are
+`runs/pooled_tuned_v1_at_hover_ba_seeds1-8.json` and `runs/pooled_structure_hold_v19_ba_seeds1-8.json`.
+
+```bash
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v22_ba --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 4 -- --profile vio_at_engage   # then --seeds 5 6 7 8
+python -m eval.baselines.run_baseline --compare runs/pooled_tuned_v1_at_hover_ba_seeds1-8.json runs/pooled_structure_hold_v22_ba_seeds1-8.json
+python -m eval.baselines.run_baseline --compare runs/pooled_structure_hold_v19_ba_seeds1-8.json runs/pooled_structure_hold_v22_ba_seeds1-8.json
+```
+
+Batches: `20261031-004623_..._structure_hold_v22_ba_6d5341d` (seeds 1–4) and
+`20261031-011129_..._structure_hold_v22_ba_6d5341d` (seeds 5–8). **Three seed 5–8 flights were
+re-flown** (4 m/s seed 8, 8 m/s seeds 5 and 6, in `20261031-013828` and `20261031-014029`).
+The batch scored them as crashes, but nothing touched anything: the Mac slowed down for
+about 5 minutes (a Chrome renderer at ~100 % CPU and macOS media analysis), the flight script
+timed its 60 s hold in wall-clock while the sim ran slow, and the scored windows came out
+52, 38 and 48 s of sim time (130–150 s wall per flight against the usual 119 s). The runner
+counts a short window as a crash. The re-flights ran full 58.6–58.8 s windows at 119 s
+wall and replace the three rows in the pool (`batch_kept.json` in the seeds 5–8 folder is that
+batch without them). Their first-try p95 (0.141, 0.130, 0.258 m) was close to the re-flown
+values anyway.
+
+### Pooled compare (8 seeds, as `--compare` prints it)
+
+| scenario | p95 m, tuned → v22 | worst toward wall m | rms m | crashes | failsafes |
+|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.427 (1.112) → **0.198 (0.280), −54 %** | 0.194 (0.493) → 0.063 (0.197), −67 % | 0.198 (0.464) → 0.116 (0.147), −42 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_4ms | 0.424 (1.075) → **0.196 (0.274), −54 %** | 0.189 (0.475) → 0.068 (0.208), −64 % | 0.198 (0.462) → 0.114 (0.142), −43 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_8ms | 0.428 (1.093) → **0.194 (0.244), −55 %** | 0.189 (0.450) → 0.099 (0.246), −48 % | 0.198 (0.464) → 0.113 (0.136), −43 % | 0/8 → 0/8 | 0/8 → 0/8 |
+
+| scenario | p95 m, v19 → v22 | worst toward wall m | rms m |
+|---|---|---|---|
+| wall1m_calm_0ms | 0.221 (0.308) → **0.198 (0.280), −11 %** | 0.075 (0.280) → 0.063 (0.197), −16 % | 0.130 → 0.116, −11 % |
+| wall1m_wind_4ms | 0.224 (0.312) → **0.196 (0.274), −13 %** | 0.077 (0.280) → 0.068 (0.208), −12 % | 0.130 → 0.114, −12 % |
+| wall1m_wind_8ms | 0.227 (0.300) → **0.194 (0.244), −15 %** | 0.093 (0.291) → 0.099 (0.246), +7 % | 0.129 → 0.113, −13 % |
+
+Median p95 (calm / 4 / 8 m/s): tuned 0.257 / 0.258 / 0.257 m, v19 0.219 / 0.225 / 0.222 m,
+**v22 0.207 / 0.199 / 0.188 m** (−20 / −23 / −27 % against tuned PX4, where v19 was −15 / −13 / −14 %).
+
+### Per-seed p95 m
+
+| v22 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean | median |
+|---|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.208 | 0.208 | 0.215 | 0.166 | 0.161 | 0.280 | 0.206 | 0.142 | 0.198 | 0.207 |
+| 4 m/s | 0.195 | 0.204 | 0.224 | 0.166 | 0.161 | 0.274 | 0.205 | 0.137 | 0.196 | 0.199 |
+| 8 m/s | 0.165 | 0.222 | 0.237 | 0.169 | 0.167 | 0.244 | 0.207 | 0.140 | 0.194 | 0.188 |
+
+p95 change per seed, seeds 1 to 8:
+
+| | calm | 4 m/s | 8 m/s |
+|---|---|---|---|
+| v22 vs v19 | −7 −26 −16 −6 −4 −9 −4 −2 % | −17 −27 −13 −7 −4 −12 −5 −7 % | −27 −20 −14 −9 −5 −19 −6 −12 % |
+| v22 vs tuned PX4 | −77 −28 −45 0 −22 −75 −10 +6 % | −78 −29 −42 −1 −21 −74 −10 +2 % | −82 −23 −39 −1 −17 −78 −8 −3 % |
+
+**v22 beats v19 on every one of the 24 seed and wind cells** (−2 to −27 %). Against tuned PX4,
+seeds 4 and 8 stay ties (−3 to +6 %): stock PX4 already holds them well, so the win is still
+mostly on the seeds where tuned PX4 loses the hold (1 and 6), but seeds 2, 3, 5 and 7 now
+gain 8 to 45 % too.
+
+**Toward the wall (seed 3).** v22 worst toward the wall 0.197 / 0.208 / 0.246 m (min clearance
+0.789 / 0.780 / 0.749 m) against v19's 0.280 / 0.280 / 0.291 m (0.708 / 0.711 / 0.704 m):
+0.05 to 0.08 m better. That is the seed whose faults pull every policy toward the wall. The
+8 m/s mean toward the wall is the one pooled number worse than v19 (+7 %, 0.093 → 0.099 m),
+made up of 1–5 cm more on seeds 1, 4, 5, 7 and 8 at 8 m/s, none closer than 0.90 m.
+
+**Crashes, contacts, failsafes.** 0 contacts and 0 crashes in the 24 scored holds; no
+watchdog trip or fallback inside any hold. The one `failsafe_in_hover` flag (8 m/s seed 3)
+is the scripted Position switch at t = 88.78 s = window end, the same artefact v19's pool has
+on 4 m/s seed 8.
+
+**Re-engage and after the hold.** Re-engage was accepted on 24 of 24 flights, 0 refusals, the
+test-fault trip handed back to Position within tolerance everywhere, and on seeds 1, 2 and 4
+to 8 the landing went through Structure Land. Seed 3 went wrong after the hold at all three
+winds, as it does without the rangefinder (`docs/near-wall-flow.md`, follow-up of
+2026-10-28). After the scripted trip, stock Position followed seed 3's estimate jump toward
+the wall: true clearance (vehicle centre) 0.25 / 0.23 / 0.27 m at 99–100 s, close enough to
+touch with the arms. Structure Land then engaged on a low, yawed vehicle (0.4–1 m up, yaw 66
+to 170° off), tripped on `position_error` (calm) or `tilt` (4, 8 m/s) and handed over to stock
+Land. 4 and 8 m/s landed and disarmed; calm never registered touchdown (auto-disarm timeout,
+roll attitude failure), the 1 of 24 `post_hold_fail`, as for v19 on the same flight. The hold
+before it is unaffected and stock PX4 was flying, not the policy. With the rangefinder the
+same seed stays off the wall (below).
+
+**Ring.** One script over each flight's scored window, run on both pools (FFT band rms of
+`vehicle_angular_velocity` roll; it gives v19's 24 flights 0.0101 rad/s, against the 0.0085 /
+0.011 quoted above for seeds 1–3 / 4–8 from a different script):
+
+| mean of 24 flights | v19 | **v22** |
+|---|---|---|
+| roll-rate 2.2–5 Hz rms | 0.0101 rad/s | **0.0094** (0.0049–0.0222) |
+| roll-rate 1.2–2.2 Hz rms | 0.0150 | **0.0053** |
+| roll-rate std | 0.030 | **0.024** |
+| rate setpoint 2.2–5 Hz rms, roll / pitch | 0.012 / 0.010 | 0.012 / **0.016** |
+| roll-rate spectrum peak, 1–6 Hz | 1.2–2.3 Hz | 1.0–3.1 Hz |
+
+No v18-style ring (0.130 rad/s at 3.4 Hz). The roll rate is quieter than v19's overall, mostly
+in the 1.2–2.2 Hz band. The highest 2.2–5 Hz flights are calm seeds 6 and 7 and 4 m/s seeds 6
+and 7 (0.015–0.022 rad/s), and the pitch rate command carries a little more 2.2–5 Hz content
+than v19's (0.016 against 0.010 rad/s). Small, but it is where to look first if a real flight
+shows a buzz.
+
+### Seed 3 near-wall flow with the rangefinder
+
+As PR #87 flew it for v19 (`docs/near-wall-flow.md`), batch `20261031-014547_px4_baseline_v22_flow_rf_6d5341d`
+(`--scenarios wall1m_wind_8ms_flow wall1m_lee_8ms_flow --seeds 3 -- --profile vio_at_engage --rangefinder`):
+
+| seed 3, 8 m/s, flow | p95 m, tuned / v19 / **v22** | worst toward wall m | closest after the hold m (when) | closest in Structure Land m |
+|---|---|---|---|---|
+| into the wall | 0.408 / 0.232 / **0.199** | 0.444 / 0.220 / **0.182** | v19 0.65 (105 s), **v22 0.54 (95.3 s)** | v19 0.65, v22 0.65 |
+| in the lee | 0.406 / 0.226 / **0.148** | 0.487 / 0.161 / **0.111** | v19 0.67 (97.7 s), **v22 0.61 (95.5 s)** | v19 0.69, v22 0.69 |
+
+Both flights passed every check, handed the trip back to Structure Hover and landed through
+Structure Land. In the hold the guard acted as for v19 (hold point kept at 0.70 m, moved back
+0.07 / 0.08 m). **One thing to note:** v22's closest approach after the hold comes in the
+scripted re-engage, not after the trip: 0.54 m into the wall and 0.61 m in the lee, 0.3–0.5 s
+after the re-engage, while the guard was moving the re-captured (jumped) hold point back 0.46
+/ 0.35 m. v19 kept 0.75 / 0.67 m in that same stretch. The guard kept the setpoint at 0.70 m,
+so this is the vehicle overshooting it by 0.1–0.16 m right after an engage. That fits the new
+input: v22 settles faster after an engage, which here means toward a point the guard is still
+moving. No contact, but it is the first thing to check if v22 is released.
