@@ -122,15 +122,15 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
 
 ## Current state (late Oct 2026; check docs before relying on it)
 
-- Released policy: **v19** (`training/policies/structure_hold_v19.*`, trained on the
-  `gz_x500_sitl` preset). The module's `PolicyWeights.hpp` is generated from it.
-  Candidate **v22** adds a 21st input, the time since engage (`docs/hold-offset.md`); the
-  module reads it when its header has it (`HAS_ENGAGE_TIME`). It waits for a Gazebo re-fly.
+- Released policy: **v22** (`training/policies/structure_hold_v22.*`, since 2026-10-31):
+  v19 plus a 21st input, the time since engage (`docs/hold-offset.md`), which the module
+  reads when its header has it (`HAS_ENGAGE_TIME`). The module's `PolicyWeights.hpp` is
+  generated from it. v19 (20 inputs) is the fallback release.
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
-- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v19 mean p95 -47 to -48 %, 0 crashes
-  (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
+- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v22 mean p95 -54 to -55 % (v19 -47 to
+  -48 %), 0 crashes (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second

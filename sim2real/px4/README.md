@@ -157,15 +157,15 @@ sim2real/px4/
 After a policy release, regenerate both headers and commit them:
 
 ```bash
-python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v19.onnx
-python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v19.onnx
+python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v22.onnx
+python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v22.onnx
 ```
 
 A policy with the engage-time input (v22 on, 21 inputs per step) gets `HAS_ENGAGE_TIME`
 in its header and reads `VehicleSample::engage_s`, the seconds since `StructureHold::engage`
 (a wall-guard move of the hold point does not restart it, as in the env).
 
-`RATE_HZ` in the generated header is the tick the policy trained at (v9, v10 and v19: 83 Hz, the
+`RATE_HZ` in the generated header is the tick the policy trained at (v9, v10, v19 and v22: 83 Hz, the
 12 ms tick the module's 10 ms `CONTROL_INTERVAL` gives on Gazebo's 4 ms gyro). It is
 informational: the module keeps `CONTROL_INTERVAL` at 10 ms and never derives it from
 `RATE_HZ`.

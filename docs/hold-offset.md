@@ -76,7 +76,7 @@ estimate, which is what Gate 1, Gate 2 and the Gazebo-like check fly. Not put th
 `eval/configs/gazebo_check.yaml`: its rough cells are the standard estimate, where it is
 already worse. v19 stays.
 
-## v22: the time-since-engage input (candidate, 2026-10-31)
+## v22: the time-since-engage input (released 2026-10-31)
 
 The fix proposed here, tried. The observation gets a 21st value, seconds since the last
 engage (episode start or re-engage) over `engage_obs_cap_s` (4 s), capped at 1
@@ -106,10 +106,17 @@ buy the settle by following jumps. Against the release gates (`experiments/LOG.m
 
 A check ratio of 0.81 is about where v11, v12 and v18 stood before Gazebo flew them worse,
 so the Gazebo re-fly decides. The PX4 module reads the input when its header has it
-(`HAS_ENGAGE_TIME`; `sample.engage_s` from the engage time in `StructureHold.cpp`); the
-committed header stays v19's until v22 is released. With a v22 header and test vectors
-`tests/test_policy.cpp` passes (observation within 3e-7 of the env, MLP within 1e-6 of
-onnxruntime).
+(`HAS_ENGAGE_TIME`; `sample.engage_s` from the engage time in `StructureHold.cpp`), and
+`tests/test_policy.cpp` passes on the v22 header (observation within 3e-7 of the env, MLP
+within 1e-6 of onnxruntime).
+
+Gazebo confirmed it (`docs/baseline.md`, "v22 candidate vs tuned PX4 and v19"): over 8 seeds
+mean hold p95 0.198 / 0.196 / 0.194 m at calm / 4 / 8 m/s against v19's 0.221 / 0.224 /
+0.227 and tuned PX4's 0.427 / 0.424 / 0.428 (-54 / -54 / -55 %), lower than v19 in all 24
+seed and wind cells, no crash or contact. Zain released it on 2026-10-31 and the module
+header is generated from it. To watch on a real flight: after the scripted re-engage in the
+seed 3 near-wall flow run it came to 0.54 m from the wall (v19 0.75 m) while the wall guard
+moved the hold point, and its pitch-rate content is a little higher than v19's.
 
 ## Why the input (the reasoning before v22)
 
