@@ -1502,3 +1502,36 @@ after the re-engage, while the guard was moving the re-captured (jumped) hold po
 so this is the vehicle overshooting it by 0.1–0.16 m right after an engage. That fits the new
 input: v22 settles faster after an engage, which here means toward a point the guard is still
 moving. No contact, but it is the first thing to check if v22 is released.
+(Checked after the release: not v22 and not the guard; see the next section.)
+
+### Why v22 came to 0.54 m after the re-engage
+
+The re-engage catches the vehicle wherever the sequence left it, so the closest approach after
+it says as much about the 5 s of stock Position mode before it as about the controller. The
+sequence re-engages on the wall clock, about 5 s after the disengage, while stock Position mode
+is holding an estimate that the vision jump at 91.0 s and the EKF2 reset at 92.1 s (log time)
+left 0.8 to 1.2 m off toward the wall. As that error decays, Position mode walks the truth
+toward the wall. Into the wall, v22's flight re-engaged 1 s later than v19's (95.0 against 94.0
+s), by which time Position mode had brought the vehicle to 0.60 m and was closing at 0.27 m/s.
+v19's re-engage caught it at 1.04 m.
+
+`run_gazebo` now writes that entry state to `hold.json` (`reengage`: clearance and closing
+speed when the module took over, the closest in the next 3 s, and the overrun between them).
+On the four seed 3 flow flights (same ulogs as above, truth from Gazebo):
+
+| seed 3, 8 m/s, flow | clearance at re-engage m | closing m/s | closest in 3 s m | overrun m |
+|---|---|---|---|---|
+| into the wall, v19 (`20261030-170936`) | 1.04 | 0.13 | 0.74 | 0.30 |
+| into the wall, **v22** (`20261031-014547`) | **0.60** | **0.27** | **0.54** | **0.06** |
+| in the lee, v19 (`20261030-171537`) | 0.86 | 0.44 | 0.67 | 0.19 |
+| in the lee, **v22** (`20261031-014748`) | **0.69** | **0.37** | **0.61** | **0.09** |
+
+v22 lets the vehicle travel 0.06 to 0.09 m after it takes over, from a faster approach; v19
+let it travel 0.19 to 0.30 m. The guard did its part: into the wall the re-captured hold point
+was 0.60 m from the wall and it moved it to 0.70 m on the first tick (`wall guard: hold point
+0.60 m from the wall` in `px4.log`), then kept it there as the estimate decayed, and the
+vehicle was back past 0.70 m 1.1 s after the engage. On these overruns v19, engaged in v22's
+spot, would likely have come closer, not farther. So no module or policy change: the
+0.54 m is the Position-mode stretch of the test sequence, which tuned PX4 flies too
+(`docs/gazebo_check.md`: closest approaches after the hold are printed, not scored). Compare
+closest approaches after a re-engage only next to the entry state.
