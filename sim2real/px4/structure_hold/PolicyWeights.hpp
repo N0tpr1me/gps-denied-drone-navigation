@@ -27,6 +27,9 @@ static constexpr int OBS_LAST_ACTION = 14;  // size 4
 static constexpr int OBS_STALE = 18;  // size 1
 static constexpr int OBS_AGE = 19;  // size 1
 static constexpr float OBS_POS_CLIP_M = 5.0f;
+static constexpr int OBS_ENGAGE_TIME = 0;  // unused: no engage-time input
+static constexpr bool HAS_ENGAGE_TIME = false;
+static constexpr float ENGAGE_OBS_CAP_S = 4.0f;
 
 // Action scaling and the airframe the policy was trained on (mock sim).
 static constexpr float MAX_RATE_RAD_S = 2.0f;

@@ -402,6 +402,7 @@ def test_reengage_moves_the_hold_point_about_the_episodes_own_and_zeroes_the_las
         seen |= r
         if r.any():
             assert torch.all(obs[r][:, OBS["last_action"]] == 0.0)
+            assert torch.all(obs[r][:, OBS["engage_time"]] == 0.0)  # the clock restarts
             assert torch.allclose(obs[r][:, OBS["pos_err"]],
                                   env.estimate_pos[r] - env.hold_point[r], atol=1e-6)
     assert env.reengage_count > 64 and seen.all()
@@ -482,3 +483,17 @@ def test_toward_wall_vel_charges_the_approach_speed_not_the_position():
     assert reward_at(0.0, 0.0, 0.2) - reward_at(0.0, 1.0, 0.2) == pytest.approx(0.0, abs=1e-6)
     with pytest.raises(ValueError, match="toward_wall_vel"):
         StructureHoldConfig(reward=RewardWeights(toward_wall_vel_deadband_mps=-0.1))
+
+
+def test_engage_time_counts_up_from_the_start_and_saturates_at_its_cap():
+    cfg = still_air(engage_obs_cap_s=0.1)
+    env = StructureHoldEnv(cfg, num_envs=4, seed=2)
+    obs, _ = env.reset()
+    assert torch.all(obs[:, OBS["engage_time"]] == 0.0)
+    for _ in range(5):
+        obs, *_ = env.step(hover_action(env))
+    torch.testing.assert_close(obs[:, OBS["engage_time"]],
+                               torch.full((4, 1), 5 * cfg.dt / 0.1, dtype=obs.dtype))
+    for _ in range(20):
+        obs, *_ = env.step(hover_action(env))
+    assert torch.all(obs[:, OBS["engage_time"]] == 1.0)

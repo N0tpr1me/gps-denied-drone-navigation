@@ -247,6 +247,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_state = structure_hold_status_s::STATE_ENGAGED;
 	_active_mode_id = _mode_id;
 	_last_control_us = 0;
+	_engaged_us = hrt_absolute_time();
 	_vel_fd_valid = false;
 	_fallback_active = false;
 
@@ -601,6 +602,9 @@ void StructureHold::controlStep(const hrt_abstime now)
 		// mock) is an input it was not trained on. It stays in the status message as
 		// estimate_age_s.
 		sample.age_s = sample.stale ? _stale_s : 0.f;
+		// Seconds since engage (read only by policies with the engage-time input, v22 on).
+		// A wall-guard move of the hold point is not an engage, as in the env.
+		sample.engage_s = now > _engaged_us ? (now - _engaged_us) * 1e-6f : 0.f;
 
 		const PolicyOutput out = _policy.step(sample, _stale_s, _hover_thrust);
 

@@ -30,7 +30,7 @@ from envs.frames import enu_to_ned, flu_to_frd
 from envs.sims import QuadState
 from envs.structure_hold.baseline import acceleration_to_action
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.env import NUM_OBS, StructureHoldEnv
+from envs.structure_hold.env import NUM_OBS_V1, StructureHoldEnv
 from envs.structure_hold.fallback import FallbackRule
 from training.policy_io import read_metadata
 
@@ -83,6 +83,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
 
     meta = read_metadata(onnx_path)
     history = int(meta["input"]["history"])
+    num_obs = int(meta["input"].get("num_obs", NUM_OBS_V1))  # the policy's slice of the obs
     rng = np.random.default_rng(seed)
     # The policy's own airframe (policy.json env_cfg), so the fallback vectors use the same
     # mass and thrust the header's MASS_KG / MAX_THRUST_N carry.
@@ -98,6 +99,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     last_action = rng.uniform(-1, 1, (n, 4))
     stale = rng.random(n) < 0.5
     age = np.where(stale, rng.uniform(0.2, 2.5, n), 0.0)  # the env's age: 0 while fresh
+    engage = rng.uniform(0.0, 6.0, n)  # past the cap on some
     pos[0] = hold[0] + np.array([-7.0, 0.3, 0.1])  # beyond the 5 m clip
     stale[0], age[0] = True, 3.0
 
@@ -109,6 +111,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     env.estimate_vel[:] = t(vel)
     env.estimate_stale[:] = torch.as_tensor(stale)
     env.estimate_age[:] = t(age)
+    env.engage_time[:] = t(engage)
     env.last_action[:] = t(last_action)
     # On airframes with PX4's gyro filter the env observes the filtered rate the rate loop
     # last read (rate_pid.gyro). The module reads vehicle_angular_velocity, which is that
@@ -116,7 +119,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     # filter state at the sampled rate.
     env.rate_pid.gyro[:] = t(ang_vel)
     env._observe()
-    obs = env.obs_buf.clone()
+    obs = env.obs_buf[:, :num_obs].clone()
 
     rule = FallbackRule(threshold_s=0.5)
     acc = (-rule.brake_vel * obs[:, 3:6]).clamp(-rule.max_acc, rule.max_acc)
@@ -147,7 +150,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
         "",
         f"static constexpr int N = {n};",
         f"static constexpr int HISTORY = {history};",
-        f"static constexpr int NUM_OBS = {NUM_OBS};",
+        f"static constexpr int NUM_OBS = {num_obs};",
         "// The mock's structure x (east) is a NED heading of +90 deg.",
         "static constexpr float STRUCTURE_YAW_NED = 1.5707963267948966f;",
         f"static constexpr float FALLBACK_THRESHOLD_S = {rule.threshold_s!r}f;",
@@ -165,6 +168,7 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
         _table("LAST_ACTION[N * 4]", last_action),
         "static constexpr bool STALE[N] = {" + ", ".join(stale_words) + "};",
         _table("AGE_S[N]", age),
+        _table("ENGAGE_S[N]", engage),
         _table("OBS[N * NUM_OBS]", obs.numpy(), "StructureHoldEnv._observe"),
         _table("FALLBACK_ACTION[N * 4]", fallback, "acceleration_to_action"),
         "",

@@ -48,7 +48,7 @@ from typing import Any
 import torch
 
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.env import StructureHoldEnv
+from envs.structure_hold.env import NUM_OBS_V1, StructureHoldEnv
 from eval.gate1 import check_not_held_out
 from training import evaluate
 from training.policy_io import export_policy, load_controller, policy_metadata
@@ -60,6 +60,7 @@ DEFAULTS: dict[str, Any] = {
     "iterations": 300,
     "num_steps_per_env": 48,
     "history": 3,
+    "num_obs": NUM_OBS_V1,  # inputs per step: NUM_OBS adds the engage time (21)
     "sim": "torch",
     "save_interval": 50,
     "init_at_random_ep_len": True,
@@ -175,15 +176,21 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
     env = StructureHoldEnv(env_cfg, int(p["num_envs"]), seed=seed, device=device,
                            sim=str(p["sim"]))
     vec = StructureHoldVecEnv(env, history=int(p["history"]), curriculum=make_curriculum(p),
-                              steps_per_iteration=int(p["num_steps_per_env"]))
+                              steps_per_iteration=int(p["num_steps_per_env"]),
+                              num_obs=int(p["num_obs"]))
     train_cfg = build_train_cfg(p)
     runner = Runner(vec, train_cfg, str(log_dir), device)
     return runner, vec, env_cfg, train_cfg
 
 
-def init_actor_from_onnx(runner: Any, path: Path) -> None:
+def init_actor_from_onnx(runner: Any, path: Path, history: int) -> None:
     """Load a released policy's actor (``export_onnx``'s graph: normaliser Sub and Div, then
-    the MLP's Gemm layers) into the runner's actor, and freeze the normaliser there."""
+    the MLP's Gemm layers) into the runner's actor, and freeze the normaliser there.
+
+    When the runner's actor reads more inputs per step than the ONNX did (the 21-input
+    layout from a 20-input release), each step's new inputs get zero weights, so the actor
+    starts out acting exactly as the release, with a normaliser of mean 0.5 and std 0.5 (the
+    engage time lies in [0, 1])."""
     import onnx
     from onnx import numpy_helper
 
@@ -192,11 +199,23 @@ def init_actor_from_onnx(runner: Any, path: Path) -> None:
     div = next(n for n in onnx.load(str(path)).graph.node if n.op_type == "Div")
     actor = runner.alg.get_policy()
     norm = actor.obs_normalizer
+    w0, mean, std = init["mlp.0.weight"], init["obs_normalizer._mean"], init[div.input[1]]
+    std = std - norm.eps  # the graph stores std + eps
+    old_k, new_k = w0.shape[1] // history, actor.mlp[0].in_features // history
+    if new_k != old_k:
+        if new_k < old_k or w0.shape[1] != history * old_k:
+            raise ValueError(f"{path.name}: {w0.shape[1]} inputs cannot grow to "
+                             f"{actor.mlp[0].in_features} over history {history}")
+        def pad(x: torch.Tensor, value: float) -> torch.Tensor:
+            x = x.reshape(x.shape[0], history, old_k)
+            extra = torch.full((x.shape[0], history, new_k - old_k), value, dtype=x.dtype)
+            return torch.cat([x, extra], dim=-1).reshape(x.shape[0], history * new_k)
+        init["mlp.0.weight"] = pad(w0, 0.0)
+        mean, std = pad(mean, 0.5), pad(std, 0.5)
     with torch.no_grad():
         for name, q in actor.mlp.named_parameters():
             q.copy_(init[f"mlp.{name}"])
-        std = init[div.input[1]] - norm.eps  # the graph stores std + eps
-        norm._mean.copy_(init["obs_normalizer._mean"])
+        norm._mean.copy_(mean)
         norm._std.copy_(std)
         norm._var.copy_(std**2)
         norm.count.fill_(10**9)
@@ -265,7 +284,7 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
     if p.get("init_actor_onnx"):
         if p.get("resume"):
             raise ValueError("give resume or init_actor_onnx, not both")
-        init_actor_from_onnx(runner, Path(p["init_actor_onnx"]))
+        init_actor_from_onnx(runner, Path(p["init_actor_onnx"]), int(p["history"]))
         if p.get("resume_std") is not None:
             with torch.no_grad():
                 runner.alg.get_policy().distribution.std_param.fill_(float(p["resume_std"]))
@@ -296,7 +315,7 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
         "seed": seed, "iterations": int(p["iterations"]), "num_envs": vec.num_envs,
         "actor_params": n_params, "train_reward_mean": reward,
         "start_iteration": p["_start_iteration"], "resumed_from": p.get("resume"),
-    })
+    }, num_obs=int(p["num_obs"]))
     chosen = select_checkpoint(runner, run_dir, meta, eval_cfg, p, seed, device, writer)
     meta["selected_iteration"] = chosen
     onnx_path = export_policy(runner, run_dir, meta)

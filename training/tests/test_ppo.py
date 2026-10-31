@@ -16,7 +16,7 @@ pytest.importorskip("rsl_rl")
 pytest.importorskip("onnxruntime")
 
 from envs.structure_hold.config import StructureHoldConfig  # noqa: E402
-from envs.structure_hold.env import NUM_OBS, StructureHoldEnv  # noqa: E402
+from envs.structure_hold.env import NUM_OBS, NUM_OBS_V1, OBS, StructureHoldEnv  # noqa: E402
 from training import train_ppo  # noqa: E402
 from training.policy_io import export_policy, load_controller, policy_metadata  # noqa: E402
 from training.ppo_env import (  # noqa: E402
@@ -120,7 +120,7 @@ def trained(tmp_path_factory):
     p = smoke_params()
     runner, vec, env_cfg, train_cfg = train_ppo.make_runner(p, 0, "cpu", run_dir / "tb", writer)
     runner.learn(2)
-    meta = policy_metadata(env_cfg, p["history"], train_cfg)
+    meta = policy_metadata(env_cfg, p["history"], train_cfg, num_obs=p["num_obs"])
     onnx_path = export_policy(runner, run_dir, meta)
     writer.close()
     rows = [json.loads(x) for x in (run_dir / "metrics.jsonl").read_text().splitlines()]
@@ -147,7 +147,7 @@ def test_onnx_matches_torch_actor_and_takes_any_batch(trained):
     policy = trained["runner"].get_inference_policy("cpu")
     from tensordict import TensorDict
 
-    x = torch.randn(16, 3 * NUM_OBS)
+    x = torch.randn(16, 3 * NUM_OBS_V1)
     with torch.no_grad():
         want = policy(TensorDict({"policy": x}, batch_size=[16])).numpy()
     sess = ort.InferenceSession(str(trained["onnx"]), providers=["CPUExecutionProvider"])
@@ -161,9 +161,9 @@ def test_actor_initialised_from_onnx_acts_like_it_and_keeps_its_normaliser(train
 
     p = smoke_params()
     runner, *_ = train_ppo.make_runner(p, 1, "cpu", tmp_path / "tb", RunWriter(tmp_path))
-    train_ppo.init_actor_from_onnx(runner, trained["onnx"])
+    train_ppo.init_actor_from_onnx(runner, trained["onnx"], p["history"])
     want = trained["runner"].get_inference_policy("cpu")
-    x = torch.randn(16, 3 * NUM_OBS)
+    x = torch.randn(16, 3 * NUM_OBS_V1)
     td = TensorDict({"policy": x}, batch_size=[16])
     with torch.no_grad():
         np.testing.assert_allclose(runner.get_inference_policy("cpu")(td).numpy(),
@@ -175,6 +175,23 @@ def test_actor_initialised_from_onnx_acts_like_it_and_keeps_its_normaliser(train
     with torch.no_grad():
         np.testing.assert_allclose(runner.get_inference_policy("cpu")(td).numpy(),
                                    want(td).numpy(), rtol=1e-4, atol=1e-5)
+
+
+def test_a_20_input_release_grows_to_the_engage_time_layout_unchanged(trained, tmp_path):
+    from tensordict import TensorDict
+
+    p = smoke_params(num_obs=NUM_OBS)
+    runner, *_ = train_ppo.make_runner(p, 1, "cpu", tmp_path / "tb", RunWriter(tmp_path))
+    train_ppo.init_actor_from_onnx(runner, trained["onnx"], p["history"])
+    old = trained["runner"].get_inference_policy("cpu")
+    new = runner.get_inference_policy("cpu")
+    x = torch.randn(16, 3, NUM_OBS)
+    want = old(TensorDict({"policy": x[..., :NUM_OBS_V1].reshape(16, -1)}, batch_size=[16]))
+    for engage in (0.0, 1.0):  # the new input has no effect until training gives it one
+        x[..., OBS["engage_time"]] = engage
+        got = new(TensorDict({"policy": x.reshape(16, -1)}, batch_size=[16]))
+        np.testing.assert_allclose(got.detach().numpy(), want.detach().numpy(),
+                                   rtol=1e-4, atol=1e-5)
 
 
 def test_onnx_and_pt_controllers_agree_on_the_env(trained):

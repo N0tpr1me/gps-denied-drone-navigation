@@ -6,13 +6,21 @@ from envs.structure_hold.config import (
     StructureHoldConfig,
     WallYawTorque,
 )
-from envs.structure_hold.env import NUM_ACTIONS, NUM_OBS, OBS, TERM_REASONS, StructureHoldEnv
+from envs.structure_hold.env import (
+    NUM_ACTIONS,
+    NUM_OBS,
+    NUM_OBS_V1,
+    OBS,
+    TERM_REASONS,
+    StructureHoldEnv,
+)
 
 __all__ = [
     "Actuation",
     "AirframeRandomization",
     "NUM_ACTIONS",
     "NUM_OBS",
+    "NUM_OBS_V1",
     "OBS",
     "RewardWeights",
     "SensorNoise",
