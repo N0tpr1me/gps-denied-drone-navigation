@@ -1,0 +1,43 @@
+# The released policy (v22) against the cascaded PD on its own training task (the x500 as
+# the Gazebo benchmark flies it), on the standard estimate and with no
+# re-engages, as v22's checkpoint selection scored it. The same file on both simulators is
+# the Isaac Lab bring-up check that matters for training (docs/isaac-lab.md, M3):
+#   python -m training.launch --config training/configs/structure_hold_eval_v22.yaml --device cpu
+#   python -m training.launch --config training/configs/structure_hold_eval_v22.yaml --sim isaac --device cuda
+# The mock's numbers are in experiments/LOG.md; Isaac must land inside their seed spread.
+name: structure_hold_eval_v22
+entrypoint: training.eval_policy
+seed: 1
+expected_hours: 0.3
+gpus: 1
+params:
+  policy: training/policies/structure_hold_v22.onnx
+  num_envs: 512
+  episodes: 1
+  score_envs: 64
+  seeds: [1, 2, 3]
+  sim: torch
+  env:  # v22's training env (structure_hold_ppo_v22.yaml) less the training-only parts
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.0
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.02
+      dropout_rate_hz: 0.02
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+smoke:
+  num_envs: 8
+  score_envs: 4
+  seeds: [1]
+  env: {airframe: gz_x500_sitl, episode_length_s: 2.0, contact_radius_m: 0.40}

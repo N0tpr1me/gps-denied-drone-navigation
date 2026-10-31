@@ -76,11 +76,26 @@ SCENARIOS = ("hover", "free_fall", "climb", "roll_pulse", "pitch_pulse", "yaw_sp
              "external_force", "tilted_spinning_start", "saturated", "aggressive",
              "other_airframe", "external_moment")
 
-# The airframe the ``other_airframe`` scenario flies (``set_airframe``): every knob off
-# nominal, inside or at the edge of the Gate 1 "combined" stress row, with unequal inertia
-# scales so a swapped axis shows, and a max thrust the sweep runs into.
-OTHER_AIRFRAME = {"mass": 0.8 * 1.3, "inertia": (0.0035 * 1.5, 0.0035 * 0.7, 0.0060 * 1.2),
-                  "max_thrust": 14.0, "max_torque": (0.24, 0.24, 0.015), "motor_tau": 0.05}
+# The scenarios were written for the placeholder airframe (``QuadParams()``). On another
+# airframe (``open_loop(..., params=x500_params())``) every fixed force is scaled by the mass
+# ratio and every fixed torque by the inertia ratio of its axis, so each scenario asks the
+# same accelerations of it; on the placeholder the ratios are exactly 1 and nothing changes.
+PLACEHOLDER = QuadParams()
+
+
+def other_airframe(params: QuadParams) -> dict[str, Any]:
+    """The airframe the ``other_airframe`` scenario flies (``set_airframe``): every knob off
+    nominal, inside or at the edge of the Gate 1 "combined" stress row, with unequal inertia
+    scales so a swapped axis shows, and a max thrust the sweep runs into."""
+    i = params.inertia
+    return {"mass": params.mass * 1.3, "inertia": (i[0] * 1.5, i[1] * 0.7, i[2] * 1.2),
+            "max_thrust": params.max_thrust * 0.875,
+            "max_torque": tuple(t * k for t, k in zip(params.max_torque, (0.8, 0.8, 0.3),
+                                                       strict=True)),
+            "motor_tau": 0.05}
+
+
+OTHER_AIRFRAME = other_airframe(PLACEHOLDER)  # 1.04 kg, 14 N, (0.24, 0.24, 0.015) N m
 
 # Per scenario: twice the gap measured between the mock and the mock at 8x finer physics
 # steps (2026-10-22, CPU, float32), rounded up to two digits, with floors of 1 mm, 1 mm/s,
@@ -118,7 +133,44 @@ CLOSED_LOOP_TOL = ClosedLoopTolerance()
 RANDOMISED_TOL = ClosedLoopTolerance(pos_median_m=0.033, pos_p95_m=0.33, crash_mismatch=0.032,
                                      p95_rel=0.03)
 
+# The x500 checks (added 2026-11-01): the open-loop scenarios on the PX4 Gazebo x500's rigid
+# body (``x500_params``), and a closed loop on the task the released policy trains on
+# (``X500_V22``) flown by that policy. Tolerances by the same rule: twice the mock vs 8x finer
+# mock gap (2026-11-01, CPU, float32), rounded up to two digits, with the same floors. The
+# scenarios scale with the airframe (see ``inputs_at``), so most gaps match the placeholder's.
+OPEN_LOOP_TOL_X500: dict[str, OpenLoopTolerance] = {
+    "hover": OPEN_LOOP_TOL["hover"],
+    "free_fall": OPEN_LOOP_TOL["free_fall"],
+    "climb": OPEN_LOOP_TOL["climb"],
+    "roll_pulse": OpenLoopTolerance(pos_m=0.0043, vel_m_s=0.0024, att_rad=0.0043,
+                                    rate_rad_s=0.024),
+    "pitch_pulse": OpenLoopTolerance(pos_m=0.0043, vel_m_s=0.0024, att_rad=0.0043,
+                                     rate_rad_s=0.024),
+    "yaw_spin": OPEN_LOOP_TOL["yaw_spin"],
+    "external_force": OPEN_LOOP_TOL["external_force"],
+    "tilted_spinning_start": OpenLoopTolerance(pos_m=0.02, vel_m_s=0.034, att_rad=0.013,
+                                               rate_rad_s=0.01),
+    "saturated": OpenLoopTolerance(pos_m=0.047, vel_m_s=0.049, att_rad=0.026, rate_rad_s=0.24),
+    "aggressive": OpenLoopTolerance(pos_m=0.083, vel_m_s=0.076, att_rad=0.049, rate_rad_s=0.16),
+    "other_airframe": OpenLoopTolerance(pos_m=0.11, vel_m_s=0.11, att_rad=0.074,
+                                        rate_rad_s=0.24),
+    "external_moment": OpenLoopTolerance(pos_m=0.023, vel_m_s=0.0056, att_rad=0.01,
+                                         rate_rad_s=0.01),
+}
+# X500_V22 flown by v22 (four seeds, 256 envs x 10 s): median 2.0 mm, p95 6.8 to 8.1 mm, no
+# crash mismatch, hold p95 within 0.07 %. Position limits twice the worst seed; the crash
+# and hold-p95 limits keep the nominal run's floors (2 % of envs, 1 %).
+X500_TOL = ClosedLoopTolerance(pos_median_m=0.0041, pos_p95_m=0.017, crash_mismatch=0.02,
+                               p95_rel=0.01)
+
 SimFactory = Callable[[QuadParams, int, float, str], Any]
+
+
+def x500_params() -> QuadParams:
+    """The PX4 Gazebo x500's rigid body and actuator limits (``envs/structure_hold/airframes``)."""
+    from envs.structure_hold.config import StructureHoldConfig
+
+    return StructureHoldConfig.from_dict({"airframe": "gz_x500"}).quad
 
 
 def factory(name: str) -> SimFactory:
@@ -157,6 +209,9 @@ def inputs_at(step: int, params: QuadParams, device: str
     t = step * DT
     n = len(SCENARIOS)
     hover = params.hover_thrust
+    m = params.mass / PLACEHOLDER.mass  # 1 on the placeholder
+    ir = [a / b for a, b in zip(params.inertia, PLACEHOLDER.inertia, strict=True)]
+    other = other_airframe(params)
     thrust = torch.full((n,), hover, device=device)
     torque = torch.zeros(n, 3, device=device)
     force = torch.zeros(n, 3, device=device)
@@ -165,7 +220,7 @@ def inputs_at(step: int, params: QuadParams, device: str
 
     def pulse(axis: int) -> torch.Tensor:
         v = torch.zeros(3, device=device)
-        v[axis] = 0.02 if t < 0.1 else (-0.02 if t < 0.2 else 0.0)
+        v[axis] = ir[axis] * (0.02 if t < 0.1 else (-0.02 if t < 0.2 else 0.0))
         return v
 
     i = SCENARIOS.index
@@ -173,13 +228,14 @@ def inputs_at(step: int, params: QuadParams, device: str
     thrust[i("climb")] = 1.3 * hover
     torque[i("roll_pulse")] = pulse(0)
     torque[i("pitch_pulse")] = pulse(1)
-    torque[i("yaw_spin")] = torch.tensor([0.0, 0.0, 0.01], device=device)
-    force[i("external_force")] = torch.tensor(
+    torque[i("yaw_spin")] = torch.tensor([0.0, 0.0, 0.01 * ir[2]], device=device)
+    force[i("external_force")] = m * torch.tensor(
         [0.6 + 0.3 * math.sin(2 * math.pi * t), -0.3, 0.2], device=device)
     k = i("tilted_spinning_start")
     thrust[k] = hover * (1.0 + 0.2 * math.sin(2 * math.pi * 1.5 * t))
-    torque[k] = 0.005 * torch.tensor([math.sin(3 * t), math.cos(2 * t), 0.5], device=device)
-    force[k] = torch.tensor([0.2, 0.1, 0.0], device=device)
+    torque[k] = 0.005 * torch.tensor([ir[0] * math.sin(3 * t), ir[1] * math.cos(2 * t),
+                                      ir[2] * 0.5], device=device)
+    force[k] = m * torch.tensor([0.2, 0.1, 0.0], device=device)
     k = i("saturated")
     thrust[k] = 2.0 * params.max_thrust if t < 0.3 else -1.0
     torque[k] = torch.tensor([1.0, -1.0, 1.0], device=device) * (1.0 if t < 0.05 else 0.0)
@@ -190,13 +246,13 @@ def inputs_at(step: int, params: QuadParams, device: str
     torque[k] = 0.3 * tmax * sweep
     # Around its own hover point, into its lower thrust and torque limits.
     k = i("other_airframe")
-    thrust[k] = OTHER_AIRFRAME["mass"] * GRAVITY * (1.0 + 0.4 * math.sin(2 * math.pi * 2.0 * t))
+    thrust[k] = other["mass"] * GRAVITY * (1.0 + 0.4 * math.sin(2 * math.pi * 2.0 * t))
     torque[k] = 0.4 * tmax * sweep
     # A yaw moment like the near-wall one (Gate 1's 25 % row at the wall), plus small roll
     # and pitch parts, on top of a hover command: neither clipped nor lagged.
     k = i("external_moment")
-    moment[k] = torch.tensor([0.004 * math.sin(2 * math.pi * t), -0.003, 0.0125],
-                             device=device)
+    moment[k] = torch.tensor([0.004 * ir[0] * math.sin(2 * math.pi * t), -0.003 * ir[1],
+                              0.0125 * ir[2]], device=device)
     return thrust, torque, force, moment
 
 
@@ -204,7 +260,7 @@ def rollout_open_loop(make: SimFactory, params: QuadParams, device: str,
                       steps: int = OPEN_LOOP_STEPS) -> dict[str, torch.Tensor]:
     """Trajectories (steps, n, ...) of every scenario on one backend."""
     sim = make(params, len(SCENARIOS), DT, device)
-    sim.set_airframe([SCENARIOS.index("other_airframe")], **OTHER_AIRFRAME)
+    sim.set_airframe([SCENARIOS.index("other_airframe")], **other_airframe(params))
     sim.reset(state=initial_state(params, device))
     out: dict[str, list[torch.Tensor]] = {"pos": [], "quat": [], "vel": [], "ang_vel": []}
     for k in range(steps):
@@ -275,23 +331,50 @@ RANDOMISED: dict[str, Any] = {
 }
 
 
+# The third closed-loop run: the task the released policy (v22) trains on, flown by v22
+# itself, on the PX4 Gazebo x500 as the Gazebo benchmark flies it (``gz_x500_sitl``: 12 ms
+# tick, PX4's gyro and yaw filters, the bridge's lever arm, the EKF2-like fusion), with
+# v22's airframe randomisation and wall yaw moment, wind toward the wall, and the near-wall
+# flow terms on at their evaluation ranges (docs/near-wall-flow.md). Everything Structure
+# Hold sends through the seam is in this run.
+V22_POLICY = Path(__file__).resolve().parents[1] / "training" / "policies" / \
+    "structure_hold_v22.onnx"
+X500_V22: dict[str, Any] = {
+    "airframe": "gz_x500_sitl",
+    "contact_radius_m": 0.40,  # the x500's props, as v22 trains and gazebo_check scores
+    "disturbance": {"mean_heading_deg": [-90.0, 90.0], "wall_deflect": [0.3, 0.8],
+                    "wall_recirc": [0.2, 0.5], "wake_ti": [0.1, 0.3], "shed_amp": [0.1, 0.4]},
+    "airframe_rand": {"mass_scale": [0.85, 1.2], "inertia_scale": [0.75, 1.35],
+                      "thrust_to_weight_scale": [0.9, 1.1], "motor_tau_s": [0.012, 0.035],
+                      "hover_thrust_error": [-0.2, 0.2]},
+    "wall_yaw_torque": {"peak_nm": [0.0, 0.02]},
+}
+
+
 def _closed_loop_run(sim: str, num_envs: int, seconds: float, seed: int, device: str,
-                     env: dict[str, Any] | None = None) -> dict[str, torch.Tensor]:
+                     env: dict[str, Any] | None = None, policy: Path | None = None
+                     ) -> dict[str, torch.Tensor]:
     from envs.sims.torch_quad import body_z_world
     from envs.structure_hold import StructureHoldConfig, StructureHoldEnv
     from envs.structure_hold.baseline import CascadedPd
 
     overrides: dict[str, Any] = {**(env or {}), **NO_TERMINATION}
     if sim == "torch-fine":
+        # One level deep onto the named airframe's quad, like any config override.
         overrides["quad"] = {"substeps": QuadParams().substeps * FINE_FACTOR}
     cfg = StructureHoldConfig.from_dict(overrides)
-    rules = StructureHoldConfig()  # the standard crash rules, applied afterwards
+    rules = StructureHoldConfig.from_dict(env)  # its own crash rules, applied afterwards
     steps = int(round(seconds / cfg.dt))
     if steps >= cfg.max_episode_length:
         raise ValueError("closed-loop parity compares one episode: seconds < episode length")
     hold = StructureHoldEnv(cfg, num_envs, seed=seed, device=device,
                             sim="torch" if sim == "torch-fine" else sim)
-    ctl = CascadedPd(hold)
+    if policy is None:
+        ctl = CascadedPd(hold)
+    else:
+        from training.policy_io import load_controller
+
+        ctl = load_controller(Path(policy), num_envs, device)
     obs, _ = hold.get_observations()
     cos_tilt = math.cos(math.radians(rules.max_tilt_deg))
     pos, err = [], []
@@ -304,7 +387,7 @@ def _closed_loop_run(sim: str, num_envs: int, seconds: float, seed: int, device:
         crash |= ((e > rules.max_pos_error_m) | (s.pos[:, 2] <= rules.min_height_m)
                   | (body_z_world(s.quat)[:, 2] < cos_tilt)
                   | (-s.pos[:, 0] <= rules.contact_radius_m) | ~s.finite())
-        obs, _, dones, _ = hold.step(ctl(obs))  # the PD restarts its integrator itself
+        obs, _, dones, _ = hold.step(ctl(obs))  # nothing resets, so no history refill
         if bool(dones.any()):
             raise RuntimeError("an env ended inside the parity window; the runs would diverge")
     return {"pos": torch.stack(pos), "err": torch.stack(err), "crash": crash.cpu()}
@@ -313,11 +396,14 @@ def _closed_loop_run(sim: str, num_envs: int, seconds: float, seed: int, device:
 def closed_loop(sim_a: str = "torch", sim_b: str = "isaac", *, num_envs: int = 256,
                 seconds: float = 10.0, seed: int = 0, device: str = "cpu",
                 tol: ClosedLoopTolerance = CLOSED_LOOP_TOL,
-                env: dict[str, Any] | None = None) -> dict[str, Any]:
+                env: dict[str, Any] | None = None, policy: Path | None = None
+                ) -> dict[str, Any]:
     """``env``: Structure Hold config overrides for both runs (``RANDOMISED`` for the second
-    run); the crash rules are always switched off during the run and judged afterwards."""
-    a = _closed_loop_run(sim_a, num_envs, seconds, seed, device, env)
-    b = _closed_loop_run(sim_b, num_envs, seconds, seed, device, env)
+    run, ``X500_V22`` for the third); the crash rules are always switched off during the run
+    and judged afterwards. ``policy``: an exported policy (``.onnx``) flies instead of the
+    cascaded PD (``V22_POLICY`` for the third run)."""
+    a = _closed_loop_run(sim_a, num_envs, seconds, seed, device, env, policy)
+    b = _closed_loop_run(sim_b, num_envs, seconds, seed, device, env, policy)
     worst = (a["pos"] - b["pos"]).norm(dim=-1).amax(0)  # per env, over the window
     calm = ~(a["crash"] | b["crash"])  # envs that would not have crashed in either
     w = worst[calm] if bool(calm.any()) else worst
@@ -358,33 +444,43 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, help="write the full report here as JSON")
     args = ap.parse_args(argv)
 
-    ol = open_loop(factory(args.a), factory(args.b), device=args.device)
-    print(f"open loop, {args.b} vs {args.a} on {args.device} (worst over 1 s / limit):")
-    for name, row in ol["per_scenario"].items():
-        lim = ol["tolerance"][name]
-        cells = "  ".join(f"{q} {v:.1e}/{lim[q]:.1e}" for q, v in row.items())
-        print(f"  {name:<22} {cells}")
+    open_loops = {}
+    for name, params, tol in (("placeholder", QuadParams(), OPEN_LOOP_TOL),
+                              ("x500", x500_params(), OPEN_LOOP_TOL_X500)):
+        ol = open_loop(factory(args.a), factory(args.b), params, device=args.device, tol=tol)
+        open_loops[name] = ol
+        print(f"open loop, {name} airframe, {args.b} vs {args.a} on {args.device} "
+              "(worst over 1 s / limit):")
+        for scenario, row in ol["per_scenario"].items():
+            lim = ol["tolerance"][scenario]
+            cells = "  ".join(f"{q} {v:.1e}/{lim[q]:.1e}" for q, v in row.items())
+            print(f"  {scenario:<22} {cells}")
     runs = {}
-    for name, env, tol in (("nominal", None, CLOSED_LOOP_TOL),
-                           ("randomised", RANDOMISED, RANDOMISED_TOL)):
+    for name, env, tol, policy in (("nominal", None, CLOSED_LOOP_TOL, None),
+                                   ("randomised", RANDOMISED, RANDOMISED_TOL, None),
+                                   ("x500_v22", X500_V22, X500_TOL, V22_POLICY)):
         cl = closed_loop(args.a, args.b, num_envs=args.num_envs, seconds=args.seconds,
-                         seed=args.seed, device=args.device, tol=tol, env=env)
+                         seed=args.seed, device=args.device, tol=tol, env=env, policy=policy)
         runs[name] = cl
-        print(f"closed loop, Structure Hold + PD, {name} airframe, {args.num_envs} envs x "
+        who = "v22" if policy else "PD"
+        print(f"closed loop, Structure Hold + {who}, {name}, {args.num_envs} envs x "
               f"{args.seconds:g} s: worst position gap median {cl['pos_median_m']:.2e} m, "
               f"p95 {cl['pos_p95_m']:.2e} m; crash mismatch {cl['crash_mismatch']:.1%}; "
               f"hold p95 {cl['hold_p95_m']} (rel {cl['p95_rel']:.1%})")
-    failures = ol["failures"] + [f"{name} {f}" for name, cl in runs.items()
-                                 for f in cl["failures"]]
+    failures = ([f"open loop {name} {f}" for name, ol in open_loops.items()
+                 for f in ol["failures"]]
+                + [f"{name} {f}" for name, cl in runs.items() for f in cl["failures"]])
     ok = not failures
     for f in failures:
         print(f"  FAIL {f}")
     print("parity: PASS" if ok else "parity: FAIL (see docs/isaac-lab.md, 'If parity fails')")
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps({"a": args.a, "b": args.b, "device": args.device,
-                                        "ok": ok, "open_loop": ol, "closed_loop": runs["nominal"],
-                                        "closed_loop_randomised": runs["randomised"]}, indent=2))
+        args.out.write_text(json.dumps({
+            "a": args.a, "b": args.b, "device": args.device, "ok": ok,
+            "open_loop": open_loops["placeholder"], "open_loop_x500": open_loops["x500"],
+            "closed_loop": runs["nominal"], "closed_loop_randomised": runs["randomised"],
+            "closed_loop_x500_v22": runs["x500_v22"]}, indent=2))
     return 0 if ok else 1
 
 
