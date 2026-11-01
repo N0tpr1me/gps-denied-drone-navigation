@@ -57,18 +57,42 @@ cloud-built image (`sim2real/docker/cloud_build.sh`: same PX4 v1.17.0, module an
 different Gazebo base). Treat these as a first look, not a benchmark claim: one seed, one
 scenario.
 
+The hold flights were flown twice. In the first set the bridge anchored the fault clock on
+the engage the flight sequence tries on the ground, which the module refuses (PR #101 added
+that check), so each fault hit about 4 s into the hold instead of 20 s. The bridge now counts
+an engage only once the vehicle is airborne (`heartbeat.airborne_engage`), and the table is
+the second set. The stock runner anchors on its height and was not affected.
+
 | Fault | Runner | Closest to wall | Largest move | Lowest height | What happened |
 | --- | --- | --- | --- | --- | --- |
-| reset to origin | Structure Hold | 0.99 m | 0.08 m | 2.50 m | watchdog trip (`position_error`), handed back to Structure Hover, which held in place |
+| reset to origin | Structure Hold | 0.99 m | 0.09 m | 2.49 m | watchdog trip (`position_error`), handed back to Structure Hover, which held in place |
 | reset to origin | tuned PX4 | 0.75 m | 0.39 m | 2.51 m | climbed 2.2 m (EKF2's height snapped to the takeoff height) and moved 0.39 m toward the wall |
-| restart (3 s gap, then reset) | Structure Hold | 0.97 m | 0.10 m | 2.46 m | same trip and hover |
+| restart (3 s gap, then reset) | Structure Hold | 0.95 m | 0.08 m | 2.42 m | same trip and hover |
 | restart (3 s gap, then reset) | tuned PX4 | 0.77 m | 0.37 m | 2.51 m | same climb of 2.2 m |
-| drift 0.6 m away from the wall | Structure Hold | 0.70 m | 0.33 m | 2.50 m | no trip; the wall guard stopped the drift at `SH_WALL_MIN` 0.70 m |
+| drift 0.6 m away from the wall | Structure Hold | 0.70 m | 0.33 m | 2.48 m | no trip; the wall guard stopped the drift at `SH_WALL_MIN` 0.70 m |
 | drift 0.6 m away from the wall | tuned PX4 | 0.42 m | 0.59 m | 2.46 m | followed the drift to 2 cm from prop contact |
-| freeze 5 s | Structure Hold | 0.82 m | 0.78 m | 2.51 m | no trip: nothing in the module sees a frozen estimate |
-| freeze 5 s | tuned PX4 | 0.94 m | 0.46 m | 2.51 m | wandered less than the module |
-| silence 8 s | Structure Hold | **0.29 m (contact)** | 10.96 m | 2.04 m | EKF2 marked the position invalid, the watchdog tripped (`estimate_invalid`) and handed back to Altitude mode; the wind pushed it into the wall and along it |
-| silence 8 s | tuned PX4 | **0.24 m (contact)** | 0.80 m | 0 m (landed) | PX4's failsafe descended; it touched the wall on the way down |
+| freeze 5 s | Structure Hold | 0.94 m | 0.55 m | 2.46 m | no trip: nothing in the module sees a frozen estimate |
+| freeze 5 s | tuned PX4 | 0.94 m | 0.46 m | 2.51 m | about the same |
+| silence 8 s | Structure Hold | 0.26 m (on the ground) | 2.77 m | 0 m | **sank to the ground** in 5.5 s, 1 m from the wall, while EKF2 still showed 2.5 m (below); the watchdog tripped (`estimate_invalid`) to Altitude mode at 0.8 m; on the ground the wind then pushed it to the wall |
+| silence 8 s | tuned PX4 | **0.24 m (contact)** | 0.80 m | 0 m | held its height for 4.5 s, then PX4's failsafe descended; it touched the wall on the way down |
+
+### Why Structure Hold sank on the link loss
+
+Not the module's horizontal logic: EKF2's height. The benchmark's EKF2 set-up
+(`ekf2_ev.params`, a Decided row of 2026-10-21) makes vision the height reference
+(`EKF2_HGT_REF 3`), with the barometer aiding through a bias estimate. When the vision stream
+stops, EKF2 puts the barometer's change into that bias and its height stops moving: in this
+flight the baro innovation grew to -2.4 m while EKF2's height stayed at 2.5 m. A 4 % dip in
+the policy's thrust as the fix went stale started a 0.5 m/s descent, and nothing in the loop
+could see it. Stock PX4 meets the same frozen height, but nothing pushed it during
+those 4.5 s, and then its failsafe took over.
+
+The same flight with the barometer as the height reference (`EKF2_HGT_REF 1`, a scratch copy
+of the tuned parameters, nothing else changed) held its height through the silence (2.39 to
+2.45 m). It then failed the way the first set suggested: the watchdog handed back to
+Altitude mode, which keeps the vehicle level, and the wind blew it into the wall (props
+touching at 2.4 m height, 8.9 s after the link went; closest 0.26 m) and down. Stock PX4 with baro height did what it
+did before: failsafe descent, wall touched on the way down.
 
 What this says, in plain words:
 
@@ -78,21 +102,24 @@ What this says, in plain words:
 - **Slow drift is caught by the rangefinder, not by the estimate.** The wall guard held
   0.70 m while stock PX4 went to 0.42 m. Stock PX4 could only match this with a wall-aware
   hold of its own.
-- **A frozen estimate is invisible to both.** No trip fired. The module wandered a bit more
-  than stock PX4 (0.78 m against 0.46 m) and stayed further than 0.8 m from the wall. A
-  classical frozen-estimate check (the position not changing while the IMU says the vehicle
-  moves) is the obvious next watchdog trip.
-- **An 8 s link loss next to a wall in wind is not survived by either.** Once EKF2 has no
-  horizontal position, the module hands back to Altitude mode by the decided handback order,
-  and the 4 m/s wind blows the vehicle into the wall. Stock PX4 lands and touches the wall
-  on the way down. A range-guarded altitude hold (push off the wall on the rangefinder alone
-  when the position is gone) would be the fix; it changes the decided handback order, so it
-  is Zain's call (question in the PR that added this page).
+- **A frozen estimate is invisible to both.** No trip fired; both wandered about half a
+  metre and stayed 0.94 m from the wall. A classical frozen-estimate check (the position
+  not changing while the IMU says the vehicle moves) is the obvious next watchdog trip.
+- **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
+  height reference the height estimate freezes and the vehicle can sink unseen: partners
+  should fly the barometer (or a downward rangefinder) as the height reference, and our
+  benchmark set-up should probably follow, which changes a Decided row (Zain's call). With
+  the height fixed, the decided handback to Altitude mode lets the wind push the vehicle
+  into the wall; a hover that keeps the wall distance on the rangefinder alone would fix
+  that, and it also changes the decided handback order (Zain's call; built off by default
+  and flown in its own PR).
 
 ## Next
 
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
 - A frozen-estimate trip in the watchdog (classical, cheap), flown on `field_freeze_*`.
+- The link-loss pair again with the barometer as EKF2's height reference, once Zain decides
+  the benchmark's height reference, and with the range-only hover (`SH_HB_RANGE`).
 - The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
   should partners ever fly with GPS on?
