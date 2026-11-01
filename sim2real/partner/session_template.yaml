@@ -1,0 +1,47 @@
+# Run sheet for one flight session on a design partner's drone (docs/partner-pack.md).
+# Confidential. Copyright (c) 2026 Zain Ali. All rights reserved.
+#
+# Copy this file into the session folder next to the .ulg files, fill it in during the day,
+# and send the whole folder. We score it with:
+#   python -m eval.partner_session <folder>/session.yaml
+#
+# Frames: positions are ENU (x east, y north, z up) in the MOCAP system's frame, metres.
+# If your mocap software shows another axis order, write down what it shows and say so in
+# notes; we convert it.
+
+drone: "<maker> <model>, <mass with battery> kg, <prop size>"
+site: "<facility, indoor or outdoor>"
+date: "YYYY-MM-DD"
+pilot: "<name or initials>"
+firmware: "<PX4 tree commit or tag> + structure_hold <our commit>"
+policy: "<structure_hold status line: policy name>"
+vio: "<VIO system and version, camera, rate in Hz>"
+truth: mocap                    # mocap streamed to PX4 as ODOMETRY, frame MOCAP, never fused
+tuned_px4_params: "<file name of your tuned parameter dump>"
+structure_hold_params: "<file name of the parameter dump with structure_hold_flight.params>"
+
+# The wall, measured with the mocap wand: one point on its face and the unit normal pointing
+# from the drone toward the wall.
+wall:
+  point: [0.0, 0.0, 0.0]
+  normal: [1.0, 0.0, 0.0]
+
+contact_radius_m: 0.25          # your drone's prop reach (centre to prop tip), m: closer
+                                # than this to the wall counts as a contact
+baseline_mode: hold             # tuned PX4 holds in Hold mode (as in our Gazebo benchmark);
+                                # "position" if you hold in Position mode with sticks centred
+hold_s: 60                      # the scored hold, from the mode switch
+settle_s: 2                     # first seconds after the switch left out of the score
+align: auto                     # EKF-to-mocap fit from arming to the mode switch; or [t0, t1]
+
+notes: ""
+
+# One entry per flight, in the order flown, aborts included. case: calm, wind_4ms, wind_8ms
+# or your own name. run: 1 to 8 within a case. gusts (optional): [[start, end], ...] in
+# seconds from the log start, when a gust switch or anemometer marks them. window (optional):
+# [t0, t1] to override the automatic window.
+runs:
+  - {file: 01_tuned_calm_1.ulg, controller: tuned_px4, case: calm, run: 1}
+  - {file: 02_hold_calm_1.ulg, controller: structure_hold, case: calm, run: 1}
+  - {file: 03_tuned_calm_2.ulg, controller: tuned_px4, case: calm, run: 2,
+     aborted: true, reason: "VIO warning on the climb, landed before engaging"}

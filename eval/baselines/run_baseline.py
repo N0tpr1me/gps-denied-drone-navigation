@@ -23,6 +23,13 @@ Writes ``runs/<time>_px4_baseline_<label>_<commit>/``:
 - ``table.md``: the same as a Markdown table
 - ``log_lines.md``: one experiments/LOG.md line per flight, to paste after review
 
+``--jobs N`` flies N flights at once, each container pinned to its own ``--cpus-per-job``
+host CPUs and given its own Gazebo partition (``sim2real.gazebo.run_scenario.
+isolation_options``); ``--jobs auto`` fits as many as the free CPUs allow. The default, one
+at a time, is how every batch before 2026-11 was flown (the Mac). Rows come out in the same
+order either way. SITL needs no GPU: Gazebo runs server-only with no camera, so on the GPU
+server the flights use CPU cores and leave the GPUs to training.
+
 Crash: the vehicle came within ``eval.metrics.CONTACT_RADIUS_M`` of the wall (a contact)
 or the flight never completed (hover test error, no log). With ``--runner hold`` a crash is
 judged on the scored hold alone, as the stock runner's is on its hover: a contact in it, or
@@ -40,9 +47,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import platform
+import queue
 import statistics
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -100,6 +112,9 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
         "failsafe": bool(fs_fraction > 0) if modes else False,
         "failsafe_in_hover": failsafe_in_window(modes, window, expected_mode),
         "window_s": window,
+        # Gazebo's real-time factor over the hover (stock runner's hover test only): the
+        # check that parallel flights each still got a whole flight's worth of CPU.
+        "rtf_min": (hover.get("real_time_factor") or {}).get("min"),
     }
     # Mode changes inside the window are cut at the commanded Land at the end of the hover
     # (stock runner only: the hold runner's window ends at the commanded disengage, and the
@@ -263,20 +278,64 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
     profile = profile_of(run_args)
     return (f"| {when} | {r['run']} | {batch['commit']} | eval/baselines/run_baseline "
             f"{batch['label']} ({what}{extra}): {r['scenario']} seed {r['seed']}, {profile} "
-            f"estimate, `{batch['params']}`, GPS off | MacBook (Apple Silicon), Docker arm64 "
+            f"estimate, `{batch['params']}`, GPS off | {batch.get('host') or MAC_HOST} "
             f"| {status} | {result} | {{vs}} |")
 
 
+MAC_HOST = "MacBook (Apple Silicon), Docker arm64"
+
+
+def host_label(jobs: int = 1) -> str:
+    """Where the batch flew, for experiments/LOG.md. ``SITL_HOST_LABEL`` overrides it (the
+    GPU server's setup sets a short name)."""
+    label = os.environ.get("SITL_HOST_LABEL")
+    if not label:
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            label = MAC_HOST
+        else:
+            label = f"{platform.system()} {platform.machine()} ({os.cpu_count()} CPUs), Docker"
+    return label + (f", {jobs} flights in parallel" if jobs > 1 else "")
+
+
+def cpu_slots(jobs: str | int, cpus_per_job: int, cpus: list[int] | None = None
+              ) -> list[str | None]:
+    """One ``--cpuset`` per parallel flight: disjoint blocks of ``cpus_per_job`` CPUs from
+    the CPUs this process may use. ``jobs`` 1 means no pinning (the old behaviour);
+    ``"auto"`` means as many blocks as fit. Refuses to oversubscribe."""
+    if cpus is None:
+        cpus = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else \
+            list(range(os.cpu_count() or 1))
+    fit = len(cpus) // cpus_per_job
+    n = max(fit, 1) if jobs == "auto" else int(jobs)
+    if n < 1:
+        raise ValueError("--jobs must be at least 1")
+    if n == 1:
+        return [None]
+    if n > fit:
+        raise ValueError(f"--jobs {n} x --cpus-per-job {cpus_per_job} needs {n * cpus_per_job} "
+                         f"CPUs; {len(cpus)} available")
+    blocks = [cpus[i * cpus_per_job:(i + 1) * cpus_per_job] for i in range(n)]
+    return [",".join(str(c) for c in b) for b in blocks]
+
+
 def fly(scenario: str, seed: int, params: Path, extra: list[str],
-        runner: str = "estimate") -> Path | None:
+        runner: str = "estimate", cpuset: str | None = None,
+        container: str | None = None) -> Path | None:
     """One flight of the runner; return its run folder."""
     module = RUNNERS[runner][0]
     cmd = [sys.executable, "-m", module, scenario,
            "--seed", str(seed), "--scenario-seed", str(seed), "--params", str(params), *extra]
+    if cpuset:
+        cmd += ["--cpuset", cpuset]
+    if container:
+        cmd += ["--container-name", container]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     for line in proc.stdout.splitlines():
         if line.startswith("run folder:"):
-            return Path(line.split(":", 1)[1].strip())
+            folder = Path(line.split(":", 1)[1].strip())
+            # The runner's own output, so a flight that flew but was not scored says why.
+            (folder / "runner.log").write_text(proc.stdout + proc.stderr)
+            return folder
     sys.stderr.write(proc.stdout[-2000:] + proc.stderr[-2000:])
     return None
 
@@ -292,27 +351,58 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
                              "runner": args.runner, "run_args": list(args.run_args),
                              "scenarios": list(args.scenarios), "seeds": list(args.seeds),
                              "rows": []}
-    log_lines = []
-    for scenario in args.scenarios:
-        for seed in args.seeds:
+    slots = cpu_slots(args.jobs, args.cpus_per_job)
+    batch["host"] = host_label(len(slots))
+    batch["jobs"] = len(slots)
+    flights = [(sc, seed) for sc in args.scenarios for seed in args.seeds]
+    order = {f: i for i, f in enumerate(flights)}
+    free: queue.Queue[tuple[int, str | None]] = queue.Queue()
+    for i, cpuset in enumerate(slots):
+        free.put((i, cpuset))
+    done: dict[tuple[str, int], tuple[dict[str, Any], str]] = {}
+    lock = threading.Lock()
+
+    def one(flight: tuple[str, int]) -> None:
+        scenario, seed = flight
+        slot, cpuset = free.get()
+        try:
             when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-            folder = fly(scenario, seed, args.params, args.run_args, args.runner)
-            summary_path = folder / summary_name if folder else None
-            if summary_path is None or not summary_path.exists():
-                print(f"{scenario} seed {seed}: no summary", flush=True)
-                continue
-            summary = json.loads(summary_path.read_text())
-            ekf_path = folder / "ekf.json"
-            ekf = json.loads(ekf_path.read_text()) if ekf_path.exists() else None
-            row = row_from_summary(summary, ekf, expected_mode, hold_s_of(args.run_args))
-            batch["rows"].append(row)
-            log_lines.append(log_line(row, batch, when))
-            print(f"{scenario} seed {seed}: p95 {fmt(row['p95_m'])} m, worst toward wall "
-                  f"{fmt(row['worst_toward_surface_m'])} m, crash {row['crash']}, post-hold "
-                  f"sequence failed {row['post_hold_fail']}, failsafe {row['failsafe']}",
-                  flush=True)
+            # Parallel flights need distinct container names; one at a time keeps the
+            # runner's default name, as before.
+            name = f"px4-sitl-{stamp}-{slot}" if len(slots) > 1 else None
+            folder = fly(scenario, seed, args.params, args.run_args, args.runner, cpuset, name)
+        finally:
+            free.put((slot, cpuset))
+        summary_path = folder / summary_name if folder else None
+        if summary_path is None or not summary_path.exists():
+            why = ""
+            if folder and (folder / "runner.log").exists():
+                why = "\n" + (folder / "runner.log").read_text()[-1500:]
+            print(f"{scenario} seed {seed}: no summary{why}", flush=True)
+            return
+        summary = json.loads(summary_path.read_text())
+        ekf_path = folder / "ekf.json"
+        ekf = json.loads(ekf_path.read_text()) if ekf_path.exists() else None
+        row = row_from_summary(summary, ekf, expected_mode, hold_s_of(args.run_args))
+        print(f"{scenario} seed {seed}: p95 {fmt(row['p95_m'])} m, worst toward wall "
+              f"{fmt(row['worst_toward_surface_m'])} m, crash {row['crash']}, post-hold "
+              f"sequence failed {row['post_hold_fail']}, failsafe {row['failsafe']}"
+              + (f", real-time factor min {row['rtf_min']}" if row["rtf_min"] else ""),
+              flush=True)
+        with lock:
+            done[flight] = (row, when)
+            keys = sorted(done, key=order.__getitem__)
+            batch["rows"] = [done[k][0] for k in keys]
             batch["aggregate"] = aggregate(batch["rows"])
             (out / "batch.json").write_text(json.dumps(batch, indent=2) + "\n")
+
+    if len(slots) > 1:
+        print(f"{len(flights)} flights, {len(slots)} at a time on CPUs {slots}", flush=True)
+    with ThreadPoolExecutor(max_workers=len(slots)) as pool_:
+        for fut in [pool_.submit(one, f) for f in flights]:
+            fut.result()
+    keys = sorted(done, key=order.__getitem__)
+    log_lines = [log_line(done[k][0], batch, done[k][1]) for k in keys]
     batch["aggregate"] = aggregate(batch["rows"])
     (out / "batch.json").write_text(json.dumps(batch, indent=2) + "\n")
     (out / "table.md").write_text(table(batch))
@@ -331,6 +421,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--runner", choices=sorted(RUNNERS), default="estimate",
                     help="estimate: stock PX4 hover (run_estimate); hold: the Structure Hold "
                          "mode (sim2real.px4.run_gazebo)")
+    ap.add_argument("--jobs", default="1",
+                    help="flights at once (each pinned to its own CPUs), or 'auto'")
+    ap.add_argument("--cpus-per-job", type=int, default=4,
+                    help="host CPUs per parallel flight (default 4)")
     ap.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
                     help="print A vs B from two batch.json files and exit")
     ap.add_argument("--pool", nargs="+", type=Path, metavar="BATCH",
@@ -352,6 +446,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.label or not args.params:
         ap.error("--label and --params are required unless --compare is given")
+    if args.jobs != "auto":
+        try:
+            args.jobs = int(args.jobs)
+        except ValueError:
+            ap.error("--jobs takes a number or 'auto'")
+    try:
+        cpu_slots(args.jobs, args.cpus_per_job)
+    except ValueError as exc:
+        ap.error(str(exc))
     batch = run_batch(args)
     return 0 if batch["rows"] else 1
 

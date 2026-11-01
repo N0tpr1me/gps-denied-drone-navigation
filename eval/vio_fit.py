@@ -451,7 +451,13 @@ def _flight_row(f: FlightStats, p: FitParams) -> dict[str, Any]:
 
 
 def ensure_source(src: dict[str, Any]) -> Path:
-    """Clone a git source at its pinned commit into ``runs/vio_data`` (ignored by git)."""
+    """A source's folder: ``dir`` (relative to the repo, e.g. VIO output already under
+    ``runs/``), or a git source cloned at its pinned commit into ``runs/vio_data``."""
+    if "dir" in src:
+        root = REPO_ROOT / src["dir"]
+        if not root.is_dir():
+            raise FileNotFoundError(f"{src['name']}: no folder {root}")
+        return root
     root = REPO_ROOT / "runs" / "vio_data" / src["name"]
     if not (root / ".git").exists():
         root.parent.mkdir(parents=True, exist_ok=True)
@@ -522,8 +528,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.smoke:
                 pairs = pairs[:1]
             for name, est_path, gt_path in pairs:
+                # Truth as TUM text, or EuRoC's own state_groundtruth_estimate0/data.csv.
+                load_truth = load_euroc_csv if src.get("truth_format") == "euroc" else load_tum
                 f = measure_flight(f"{src['name']}/{name}", load_tum(est_path),
-                                   load_tum(gt_path), fit)
+                                   load_truth(gt_path), fit)
                 flights.append(f)
                 writer.metric(len(flights), flight=f.name, ate_rms_m=f.ate_rms_m,
                               gaps=len(f.gaps_s), jumps=len(f.jumps_m))

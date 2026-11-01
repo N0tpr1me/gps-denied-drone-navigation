@@ -244,6 +244,32 @@ inline void fallbackAction(const FallbackRule &r, const StructureFrame &f, const
  * the thrust in newtons for the mock airframe is scaled through the hover point, so the
  * policy's hover thrust lands on the vehicle's hover thrust whatever its mass.
  */
+/**
+ * Last check before a setpoint goes to PX4, for every controller: a non-finite body rate
+ * becomes 0 and a non-finite thrust becomes the hover thrust (itself clamped to the thrust
+ * limits; 0.5 if that is not finite either). clampf passes NaN through, and a NaN in
+ * vehicle_rates_setpoint reaches the motors through the rate loop's integrators. Returns
+ * false when anything was replaced.
+ */
+inline bool sanitizeSetpoint(float rates[3], float &thrust, float hover_thrust, float thrust_min, float thrust_max)
+{
+	bool ok = true;
+
+	for (int i = 0; i < 3; i++) {
+		if (!std::isfinite(rates[i])) {
+			rates[i] = 0.f;
+			ok = false;
+		}
+	}
+
+	if (!std::isfinite(thrust)) {
+		thrust = clampf(std::isfinite(hover_thrust) ? hover_thrust : 0.5f, thrust_min, thrust_max);
+		ok = false;
+	}
+
+	return ok;
+}
+
 inline Setpoint actionToSetpoint(const float action[4], float hover_thrust, const SetpointLimits &lim)
 {
 	using namespace policy;
@@ -253,6 +279,7 @@ inline Setpoint actionToSetpoint(const float action[4], float hover_thrust, cons
 	sp.rates_frd[2] = clampf(-action[2] * MAX_RATE_RAD_S, -lim.rate_max, lim.rate_max);
 	const float thrust_n = 0.5f * (clampf(action[3], -1.f, 1.f) + 1.f) * MAX_THRUST_N;
 	sp.thrust = clampf(thrust_n / (MASS_KG * GRAVITY_MPS2) * hover_thrust, lim.thrust_min, lim.thrust_max);
+	sanitizeSetpoint(sp.rates_frd, sp.thrust, hover_thrust, lim.thrust_min, lim.thrust_max);
 	return sp;
 }
 
@@ -262,7 +289,7 @@ struct PolicyOutput {
 	float policy_action[4] {0.f, 0.f, 0.f, 0.f};  // the policy's own output this tick
 	bool fallback_active{false};
 	bool yaw_guarded{false};  // the yaw action flown is the module's heading hold
-	bool ok{true};  // false if the network produced a non-finite value (zeros flown instead)
+	bool ok{true};  // false if the network or the fallback produced a non-finite value (zeros flown instead)
 };
 
 class PolicyController
@@ -318,6 +345,13 @@ public:
 
 		if (out.fallback_active) {
 			fallbackAction(_rule, _frame, s, _obs, out.action);
+
+			for (int i = 0; i < 4; i++) {
+				if (!std::isfinite(out.action[i])) {  // only from a non-finite attitude
+					out.ok = false;
+					out.action[i] = 0.f;
+				}
+			}
 
 		} else if (_yaw_guard.enabled) {
 			const float yaw_err = atan2f(_obs[policy::OBS_HEADING + 1], _obs[policy::OBS_HEADING + 0]);
