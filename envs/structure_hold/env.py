@@ -17,7 +17,7 @@ Frames: world ENU, the wall is the plane x = 0 and the drone flies at x < 0, so 
 structure frame (x toward the surface, z up) coincides with the world frame. Observations are
 written in that frame so a later wall placement changes one rotation, not the policy.
 
-Observation (``num_obs`` = 21), everything the onboard module can know:
+Observation (``num_obs`` = 23), everything the onboard module can know:
 
 | slice | what | units |
 | --- | --- | --- |
@@ -30,6 +30,8 @@ Observation (``num_obs`` = 21), everything the onboard module can know:
 | 18 | estimate stale flag (1 while the estimator has dropped out) | - |
 | 19 | estimate age, capped at 1 s | s |
 | 20 | time since engage (episode start or re-engage) / ``engage_obs_cap_s``, capped at 1 | - |
+| 21 | wall range error: the hold point's wall distance minus the measured one, clipped | m |
+| 22 | wall range usable (1 while a fresh forward range reading counts, else 0) | - |
 
 Policies up to v21 read the first 20 (``NUM_OBS_V1``); ``policy.json`` says how many a
 policy reads, and ``training/policy_io.py`` feeds it that many. The engage time is there
@@ -78,9 +80,12 @@ OBS = {
     "stale": slice(18, 19),
     "age": slice(19, 20),
     "engage_time": slice(20, 21),
+    "wall_range": slice(21, 22),
+    "range_ok": slice(22, 23),
 }
-NUM_OBS = 21
+NUM_OBS = 23
 NUM_OBS_V1 = 20  # what v0 to v21 read
+NUM_OBS_V22 = 21  # v22: plus the engage time
 NUM_ACTIONS = 4
 
 TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeout")
@@ -186,6 +191,25 @@ class StructureHoldEnv:
         self.reengaged = torch.zeros(n, dtype=torch.bool, device=dev)
         self.reengage_count = 0
         self.reengage_rng = np.random.default_rng([int(seed), 0xE6A])
+        # Forward rangefinder (cfg.range): per-episode presence and scale error, the newest
+        # sample and its age, time to the next sample, dropout time left, and the hold point's
+        # distance from the wall the input measures against. Its own generators, so turning
+        # it on leaves every other draw as it was.
+        self.range_rng = np.random.default_rng([int(seed), 0x7A6])
+        self.range_gen = torch.Generator(device=device).manual_seed(int(seed) * 7919 + 0x7A6)
+        self.range_present = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.range_scale = torch.zeros(n, dtype=dt, device=dev)
+        self.range_meas = torch.full((n,), math.inf, dtype=dt, device=dev)
+        self.range_age = torch.full((n,), math.inf, dtype=dt, device=dev)
+        self.range_timer = torch.zeros(n, dtype=dt, device=dev)
+        self.range_drop_left = torch.zeros(n, dtype=dt, device=dev)
+        self.range_ref = torch.zeros(n, dtype=dt, device=dev)
+        # Spike rejection (cfg.range.spike_gate_m): the last accepted perpendicular distance,
+        # the last rejected one (NaN: none pending) and whether the newest reading was rejected.
+        self.range_accepted = torch.full((n,), math.nan, dtype=dt, device=dev)
+        self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
+        self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
         self.reset()
 
     # ------------------------------------------------------------ state helpers
@@ -199,6 +223,11 @@ class StructureHoldEnv:
         """Distance from the wall along its normal, positive on the free-air side, (N,)."""
         p = self.sim.state.pos if pos is None else pos
         return (self.wall_point - p) @ self.wall_normal
+
+    def _beam_cos(self) -> torch.Tensor:
+        """Cosine between the body x axis (the rangefinder's beam) and the wall normal, (N,)."""
+        fwd = torch.tensor([1.0, 0.0, 0.0], dtype=self.dtype, device=self.device)
+        return quat_rotate(self.sim.state.quat, fwd.expand(self.num_envs, 3)) @ self.wall_normal
 
     # ------------------------------------------------------------ curriculum hooks
 
@@ -296,6 +325,97 @@ class StructureHoldEnv:
         self.estimate_stale[env_ids] = False
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
+        self.range_ref[env_ids] = self.clearance(self.hold_point[env_ids])
+        if cfg.range.active:
+            self._reset_range(env_ids)
+
+    def _reset_range(self, env_ids: torch.Tensor) -> None:
+        """Per-episode rangefinder draws, and a first sample at the start pose: the sensor
+        was running before the engage, so its newest sample is up to one period old."""
+        rc, rng, n = self.cfg.range, self.range_rng, int(env_ids.numel())
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        self.range_present[env_ids] = torch.as_tensor(rng.random(n) < rc.present_prob,
+                                                      device=self.device)
+        self.range_scale[env_ids] = t(rng.uniform(*rc.scale_error, size=n))
+        period = 1.0 / rc.rate_hz
+        age = rng.uniform(0.0, period, size=n)
+        self.range_age[env_ids] = t(age)
+        self.range_timer[env_ids] = t(period - age)
+        self.range_drop_left[env_ids] = 0.0
+        self.range_accepted[env_ids] = math.nan  # a new flight: the first reading is accepted
+        self.range_pending[env_ids] = math.nan
+        take = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        take[env_ids] = True
+        self._take_range(take, self._range_reading())
+
+    def _range_reading(self) -> torch.Tensor:
+        """What the rangefinder would read now for every env, (N,): the beam's distance to
+        the wall plane with this episode's scale error, noise and outliers."""
+        rc = self.cfg.range
+        cos = self._beam_cos()
+        true = torch.where(cos > 1e-3, self.clearance() / cos.clamp(min=1e-3),
+                           torch.full_like(cos, math.inf))
+        true = torch.where(true > 0, true, torch.full_like(true, math.inf))
+        n = self.num_envs
+        noise = torch.randn(n, generator=self.range_gen, device=self.device, dtype=self.dtype)
+        r = true * (1.0 + self.range_scale) + noise * (rc.noise_std_m + rc.noise_frac
+                                                         * true.clamp(max=rc.max_m))
+        if rc.outlier_prob > 0:
+            u = torch.rand(n, 2, generator=self.range_gen, device=self.device, dtype=self.dtype)
+            r = torch.where(u[:, 0] < rc.outlier_prob, rc.min_m + u[:, 1] * (rc.max_m - rc.min_m),
+                            r)
+        return r
+
+    def _update_range(self) -> None:
+        """Advance the rangefinder one step: age, dropouts, and a new sample when due."""
+        rc, dt = self.cfg.range, self.cfg.dt
+        self.range_age += dt
+        self.range_timer -= dt
+        self.range_drop_left = (self.range_drop_left - dt).clamp(min=0.0)
+        if rc.dropout_rate_hz > 0:
+            start = torch.as_tensor(self.range_rng.random(self.num_envs) < rc.dropout_rate_hz * dt,
+                                    device=self.device) & (self.range_drop_left <= 0)
+            if bool(start.any()):
+                k = int(start.sum())
+                self.range_drop_left[start] = torch.as_tensor(
+                    self.range_rng.uniform(*rc.dropout_s, size=k), dtype=self.dtype,
+                    device=self.device)
+        due = self.range_timer <= 0
+        self.range_timer = torch.where(due, self.range_timer + 1.0 / rc.rate_hz, self.range_timer)
+        take = due & (self.range_drop_left <= 0)
+        self._take_range(take, self._range_reading())
+
+    def _take_range(self, take: torch.Tensor, reading: torch.Tensor) -> None:
+        """New readings for the envs in ``take``, through the spike gate."""
+        self.range_meas = torch.where(take, reading, self.range_meas)
+        self.range_age = torch.where(take, torch.zeros_like(self.range_age), self.range_age)
+        gate = self.cfg.range.spike_gate_m
+        if gate <= 0:
+            return
+        wall = reading * self._beam_cos()
+        accept = (~torch.isfinite(self.range_accepted)
+                  | ((wall - self.range_accepted).abs() <= gate)
+                  | ((wall - self.range_pending).abs() <= gate))
+        self.range_accepted = torch.where(take & accept, wall, self.range_accepted)
+        self.range_pending = torch.where(take, torch.where(accept, math.nan, wall),
+                                         self.range_pending)
+        self.range_rejected = torch.where(take, ~accept, self.range_rejected)
+
+    def range_input(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """The wall-range input as the module computes it: (error, usable), each (N,).
+
+        The measured perpendicular distance is the newest reading times the beam's cosine
+        now (``WallGuard::apply``'s ``wall_m``); the error is the hold point's wall distance
+        (``range_ref``) minus it, so it has the sign of ``pos_err``'s x (positive toward the
+        wall) but is measured on the wall, not on the estimate. Zero while unusable."""
+        rc = self.cfg.range
+        cos = self._beam_cos()
+        ok = (self.range_present & ~self.range_rejected & (self.range_age <= rc.max_age_s + 1e-6)
+              & (self.range_meas >= rc.min_m) & (self.range_meas <= rc.max_m)
+              & (cos >= self.cos_range_off) & torch.isfinite(self.range_meas))
+        err = (self.range_ref - self.range_meas * cos).clamp(-rc.obs_clip_m, rc.obs_clip_m)
+        err = torch.where(ok, torch.nan_to_num(err), torch.zeros_like(err))
+        return err, ok
 
     def _cmd_per_newton(self, mass_scale: Any, tw_scale: Any, hover_err: Any) -> Any:
         """The module's normalised thrust per policy newton: ``hover_thrust / (MASS_KG * g)``
@@ -492,6 +612,8 @@ class StructureHoldEnv:
             extras["episode"] = ep
             self.reset_envs(done_ids)
         self.reengaged = self._reengage(~self.done_buf)
+        if cfg.range.active:
+            self._update_range()
         self._observe()
         return self.obs_buf, self.reward_buf, self.done_buf, extras
 
@@ -520,6 +642,7 @@ class StructureHoldEnv:
         hold[:, 0] = hold[:, 0].clamp(max=-cfg.hold_distance[0])
         hold[:, 2] = hold[:, 2].clamp(min=cfg.min_height_m + 0.5)
         self.hold_point[ids] = hold
+        self.range_ref[ids] = self.clearance(hold)
         self.last_action[ids] = 0.0
         self.engage_time[ids] = 0.0
         self.reengage_count += int(ids.numel())
@@ -550,6 +673,13 @@ class StructureHoldEnv:
         o[:, OBS["age"]] = self.estimate_age.clamp(max=1.0)[:, None]
         o[:, OBS["engage_time"]] = (self.engage_time / cfg.engage_obs_cap_s).clamp(
             max=1.0)[:, None]
+        if cfg.range.active:
+            err, ok = self.range_input()
+            o[:, OBS["wall_range"]] = err[:, None]
+            o[:, OBS["range_ok"]] = ok.to(self.dtype)[:, None]
+        else:
+            o[:, OBS["wall_range"]] = 0.0
+            o[:, OBS["range_ok"]] = 0.0
         if cfg.sensor_noise.active:
             self._add_sensor_noise(o)
         torch.nan_to_num_(o)

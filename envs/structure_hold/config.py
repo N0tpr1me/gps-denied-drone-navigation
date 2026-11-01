@@ -221,6 +221,75 @@ class SensorNoise:
 
 
 @dataclass(frozen=True)
+class RangeSensor:
+    """A forward rangefinder along the body x axis, read by policies with the wall-range
+    input (``env.OBS["wall_range"]``, ``"range_ok"``). The module's wall guard reads the same
+    sensor (``sim2real/px4/structure_hold/WallGuard.hpp``).
+
+    Per episode the vehicle has one with probability ``present_prob`` (0, the default, is
+    never: the inputs stay zero). It samples at ``rate_hz`` and the input holds the newest
+    sample; the beam meets the wall plane at ``clearance / cos(off-axis angle)``. Each sample
+    carries white noise (``noise_std_m`` plus ``noise_frac`` of the range) and a per-episode
+    scale error drawn in ``scale_error`` (a fraction), and with ``outlier_prob`` is replaced
+    by a reading drawn uniformly between ``min_m`` and ``max_m`` (a beam on something
+    else). Dropouts (``dropout_rate_hz``, lengths drawn in ``dropout_s``) stop the samples.
+    A reading counts while it is at most ``max_age_s`` old, inside ``min_m`` to ``max_m`` and
+    the body x axis is within ``max_off_axis_deg`` of the wall normal, the module's own test.
+
+    Spike rejection, in the module as here (``RangeReference``, ``WallGuard.hpp``): a reading
+    whose perpendicular distance is more than ``spike_gate_m`` from the last accepted one is
+    not used (the input goes unusable until the next accepted reading) unless the reading
+    before it, also rejected, agrees with it within the gate, so a real step is accepted at
+    the second reading. 0 turns it off. A single outlier would otherwise kick the policy for
+    a whole sample period: with 1 % outliers and no gate, v23's 2.2 to 6 Hz rate content
+    doubled in the Gazebo-like check (``docs/wall-range.md``).
+    """
+
+    present_prob: float = 0.0
+    rate_hz: float = 20.0  # the Gazebo bridge's rangefinder (sim2real/estimate_bridge)
+    noise_std_m: float = 0.01
+    noise_frac: float = 0.005
+    scale_error: tuple[float, float] = (0.0, 0.0)
+    outlier_prob: float = 0.0
+    dropout_rate_hz: float = 0.0
+    dropout_s: tuple[float, float] = (0.2, 1.0)
+    min_m: float = 0.1
+    max_m: float = 12.0
+    max_off_axis_deg: float = 35.0  # WallGuardLimits::max_off_axis_rad
+    max_age_s: float = 0.2  # WallGuardLimits::max_age_us
+    obs_clip_m: float = 1.0  # the input's clip: past 1 m off the hold point a reading is suspect
+    spike_gate_m: float = 0.25  # 5 m/s between two 20 Hz readings: no hover moves that fast
+
+    def __post_init__(self) -> None:
+        for name in ("scale_error", "dropout_s"):
+            object.__setattr__(self, name, _range(getattr(self, name), name))
+        if not 0.0 <= self.present_prob <= 1.0 or not 0.0 <= self.outlier_prob <= 1.0:
+            raise ValueError("range present_prob and outlier_prob must lie in [0, 1]")
+        if self.rate_hz <= 0 or self.max_age_s <= 0 or self.obs_clip_m <= 0:
+            raise ValueError("range rate_hz, max_age_s and obs_clip_m must be positive")
+        if min(self.noise_std_m, self.noise_frac, self.dropout_rate_hz) < 0:
+            raise ValueError("range noise and dropout rate must be >= 0")
+        if not 0 <= self.min_m < self.max_m:
+            raise ValueError("range needs 0 <= min_m < max_m")
+        if self.dropout_s[0] <= 0:
+            raise ValueError("range dropout_s must be positive")
+        if self.spike_gate_m < 0:
+            raise ValueError("range spike_gate_m must be >= 0")
+        if not 0 < self.max_off_axis_deg < 90:
+            raise ValueError("range max_off_axis_deg must be in (0, 90)")
+
+    @property
+    def active(self) -> bool:
+        return self.present_prob > 0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> RangeSensor:
+        d = dict(d or {})
+        _check_keys(cls, d, "range sensor")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
 class Actuation:
     """How PX4's normalised commands become force and torque on the airframe, between the
     rate loop and the simulator. The defaults are the placeholder's: PX4's unit torque is
@@ -334,6 +403,8 @@ class StructureHoldConfig:
     airframe_rand: AirframeRandomization = field(default_factory=AirframeRandomization)
     wall_yaw_torque: WallYawTorque = field(default_factory=WallYawTorque)
     sensor_noise: SensorNoise = field(default_factory=SensorNoise)
+    # A forward rangefinder for the wall-range input (RangeSensor; off by default).
+    range: RangeSensor = field(default_factory=RangeSensor)
     vision_offset_down_m: float = 0.0
     fusion: FusionConfig = field(default_factory=FusionConfig)
 
@@ -384,6 +455,7 @@ class StructureHoldConfig:
             "airframe_rand": AirframeRandomization.from_dict,
             "wall_yaw_torque": WallYawTorque.from_dict,
             "sensor_noise": SensorNoise.from_dict,
+            "range": RangeSensor.from_dict,
             "fusion": FusionConfig.from_dict,
         }
         for key, build in nested.items():

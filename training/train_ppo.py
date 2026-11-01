@@ -48,7 +48,7 @@ from typing import Any
 import torch
 
 from envs.structure_hold.config import StructureHoldConfig
-from envs.structure_hold.env import NUM_OBS_V1, StructureHoldEnv
+from envs.structure_hold.env import NUM_OBS_V1, OBS, StructureHoldEnv
 from eval.gate1 import check_not_held_out
 from training import evaluate
 from training.policy_io import export_policy, load_controller, policy_metadata
@@ -60,7 +60,7 @@ DEFAULTS: dict[str, Any] = {
     "iterations": 300,
     "num_steps_per_env": 48,
     "history": 3,
-    "num_obs": NUM_OBS_V1,  # inputs per step: NUM_OBS adds the engage time (21)
+    "num_obs": NUM_OBS_V1,  # inputs per step: 21 adds the engage time, 23 the wall range
     "sim": "torch",
     "save_interval": 50,
     "init_at_random_ep_len": True,
@@ -188,9 +188,11 @@ def init_actor_from_onnx(runner: Any, path: Path, history: int) -> None:
     the MLP's Gemm layers) into the runner's actor, and freeze the normaliser there.
 
     When the runner's actor reads more inputs per step than the ONNX did (the 21-input
-    layout from a 20-input release), each step's new inputs get zero weights, so the actor
-    starts out acting exactly as the release, with a normaliser of mean 0.5 and std 0.5 (the
-    engage time lies in [0, 1])."""
+    layout from a 20-input release, or the 23-input one from v22), each step's new inputs get
+    zero weights, so the actor starts out acting exactly as the release. Their normaliser:
+    mean 0.5 and std 0.5 for the inputs in [0, 1] (engage time, range usable); the wall-range
+    error takes the release's normaliser for the estimated x error, the quantity it measures
+    on the wall instead of on the estimate."""
     import onnx
     from onnx import numpy_helper
 
@@ -206,12 +208,23 @@ def init_actor_from_onnx(runner: Any, path: Path, history: int) -> None:
         if new_k < old_k or w0.shape[1] != history * old_k:
             raise ValueError(f"{path.name}: {w0.shape[1]} inputs cannot grow to "
                              f"{actor.mlp[0].in_features} over history {history}")
-        def pad(x: torch.Tensor, value: float) -> torch.Tensor:
+        names = {i: name for name, sl in OBS.items() for i in range(sl.start, sl.stop)}
+
+        def pad(x: torch.Tensor, fill: str) -> torch.Tensor:
+            """``fill``: "zero" (weights) or "norm" (the normaliser's mean or std)."""
             x = x.reshape(x.shape[0], history, old_k)
-            extra = torch.full((x.shape[0], history, new_k - old_k), value, dtype=x.dtype)
+            cols = []
+            for j in range(old_k, new_k):
+                if fill == "zero":
+                    cols.append(torch.zeros_like(x[..., 0]))
+                elif names[j] == "wall_range":
+                    cols.append(x[..., OBS["pos_err"].start])
+                else:
+                    cols.append(torch.full_like(x[..., 0], 0.5))
+            extra = torch.stack(cols, dim=-1)
             return torch.cat([x, extra], dim=-1).reshape(x.shape[0], history * new_k)
-        init["mlp.0.weight"] = pad(w0, 0.0)
-        mean, std = pad(mean, 0.5), pad(std, 0.5)
+        init["mlp.0.weight"] = pad(w0, "zero")
+        mean, std = pad(mean, "norm"), pad(std, "norm")
     with torch.no_grad():
         for name, q in actor.mlp.named_parameters():
             q.copy_(init[f"mlp.{name}"])
@@ -234,9 +247,12 @@ def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: Str
     every = int(e.get("select_every", 0) or 0)
     candidates = {last: None}  # the policy now in the runner
     if every > 0:
-        for it in range(first, last, every):
+        # Every ``every`` iterations from the start, or at multiples of it: saved
+        # checkpoints sit at multiples of the save interval, and a run resumed from one
+        # starts one past it, so counting from the start alone finds none.
+        for it in range(first, last):
             path = run_dir / "tb" / f"model_{it}.pt"
-            if path.exists() and it != last:
+            if ((it - first) % every == 0 or it % every == 0) and path.exists():
                 candidates[it] = path
     if len(candidates) == 1:
         return last

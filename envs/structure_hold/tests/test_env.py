@@ -17,7 +17,7 @@ from envs.structure_hold import (  # noqa: E402
     StructureHoldEnv,  # noqa: E402
 )
 from envs.structure_hold.baseline import CascadedPd  # noqa: E402
-from envs.structure_hold.config import RewardWeights  # noqa: E402
+from envs.structure_hold.config import RangeSensor, RewardWeights  # noqa: E402
 
 
 def still_air(**kw) -> StructureHoldConfig:
@@ -497,3 +497,92 @@ def test_engage_time_counts_up_from_the_start_and_saturates_at_its_cap():
     for _ in range(20):
         obs, *_ = env.step(hover_action(env))
     assert torch.all(obs[:, OBS["engage_time"]] == 1.0)
+
+
+def test_wall_range_input_is_zero_without_a_rangefinder():
+    env = StructureHoldEnv(StructureHoldConfig(), num_envs=8, seed=3)
+    for _ in range(20):
+        obs, *_ = env.step(hover_action(env))
+        assert torch.all(obs[:, OBS["wall_range"]] == 0.0)
+        assert torch.all(obs[:, OBS["range_ok"]] == 0.0)
+
+
+def test_wall_range_reads_the_true_error_toward_the_wall_whatever_the_estimate_says():
+    # A clean, noiseless rangefinder and a biased estimate: the range input carries the true
+    # x error (positive toward the wall), not the estimate's.
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=4, seed=5)
+    env.reset()
+    for _ in range(3):
+        obs, *_ = env.step(hover_action(env))
+    true_err = env.state.pos[:, 0] - env.hold_point[:, 0]
+    assert torch.all(obs[:, OBS["range_ok"]] == 1.0)
+    torch.testing.assert_close(obs[:, 21], true_err, atol=2e-3, rtol=0)
+    env.estimate_pos[:, 0] += 0.4  # an estimate jump toward the wall
+    env._observe()
+    torch.testing.assert_close(env.obs_buf[:, 21], true_err, atol=2e-3, rtol=0)
+    assert torch.all(env.obs_buf[:, 0] - true_err > 0.35)
+
+
+def test_wall_range_holds_samples_at_its_rate_and_goes_unusable_when_stale_or_off_axis():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=10.0,
+                     max_age_s=0.15)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=1)
+    env.reset()
+    ages = []
+    for _ in range(30):
+        env.step(hover_action(env))
+        ages.append(float(env.range_age[0]))
+    assert max(ages) < 0.1 + 1e-4 and min(ages) == 0.0  # a new sample every 0.1 s
+    env.range_age[:] = 0.2  # older than max_age_s
+    assert not env.range_input()[1].any()
+    env.range_age[:] = 0.0
+    env.sim.state.quat[:] = torch.tensor([math.cos(0.4), 0.0, 0.0, math.sin(0.4)])  # 46 deg yaw
+    assert not env.range_input()[1].any()
+
+
+def test_wall_range_presence_is_drawn_per_episode_and_leaves_other_draws_alone():
+    base = StructureHoldConfig()
+    with_range = dataclasses.replace(base, range=RangeSensor(present_prob=0.5))
+    a = StructureHoldEnv(base, num_envs=256, seed=4)
+    b = StructureHoldEnv(with_range, num_envs=256, seed=4)
+    assert 0.35 < float(b.range_present.float().mean()) < 0.65
+    torch.testing.assert_close(a.hold_point, b.hold_point)
+    for _ in range(5):
+        a.step(hover_action(a))
+        b.step(hover_action(b))
+    torch.testing.assert_close(a.estimate_pos, b.estimate_pos)
+    ok = b.obs_buf[:, OBS["range_ok"]].squeeze(-1) == 1.0
+    assert torch.equal(ok, b.range_present)
+
+
+def test_reengage_moves_the_range_reference_with_the_hold_point():
+    rc = RangeSensor(present_prob=1.0)
+    cfg = still_air(range=rc, reengage_rate_hz=50.0, reengage_min_s=0.0)
+    env = StructureHoldEnv(cfg, num_envs=16, seed=2)
+    for _ in range(10):
+        env.step(hover_action(env))
+    torch.testing.assert_close(env.range_ref, -env.hold_point[:, 0])
+
+
+def test_range_spike_gate_drops_one_outlier_and_accepts_a_real_step_at_its_second_reading():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    env.step(hover_action(env))
+    assert env.range_input()[1].all()
+    take = torch.ones(2, dtype=torch.bool)
+    wall = env.clearance()
+    env._take_range(take, wall + 5.0)  # an outlier: rejected, input unusable
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall + 0.01)  # back to normal: accepted
+    assert env.range_input()[1].all()
+    env._take_range(take, wall - 0.5)  # a real step: rejected once...
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall - 0.49)  # ...accepted at the second reading
+    ok = env.range_input()
+    assert ok[1].all()
+    off = StructureHoldEnv(still_air(range=dataclasses.replace(rc, spike_gate_m=0.0)),
+                           num_envs=2, seed=5)
+    off._take_range(take, off.clearance() + 5.0)
+    assert off.range_input()[1].all()  # no gate: the outlier is used (clipped)

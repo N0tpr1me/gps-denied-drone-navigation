@@ -100,6 +100,11 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     stale = rng.random(n) < 0.5
     age = np.where(stale, rng.uniform(0.2, 2.5, n), 0.0)  # the env's age: 0 while fresh
     engage = rng.uniform(0.0, 6.0, n)  # past the cap on some
+    # Forward range: a reading, its age (some too old) and the latched reference; the random
+    # attitudes put the beam off the wall on many, so both flag values occur.
+    range_meas = rng.uniform(0.3, 4.0, n)
+    range_age = np.where(rng.random(n) < 0.25, 0.5, rng.uniform(0.0, 0.1, n))
+    range_ref = rng.uniform(0.7, 3.0, n)
     pos[0] = hold[0] + np.array([-7.0, 0.3, 0.1])  # beyond the 5 m clip
     stale[0], age[0] = True, 3.0
 
@@ -112,6 +117,10 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     env.estimate_stale[:] = torch.as_tensor(stale)
     env.estimate_age[:] = t(age)
     env.engage_time[:] = t(engage)
+    env.range_present[:] = True
+    env.range_meas[:] = t(range_meas)
+    env.range_age[:] = t(range_age)
+    env.range_ref[:] = t(range_ref)
     env.last_action[:] = t(last_action)
     # On airframes with PX4's gyro filter the env observes the filtered rate the rate loop
     # last read (rate_pid.gyro). The module reads vehicle_angular_velocity, which is that
@@ -120,6 +129,11 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
     env.rate_pid.gyro[:] = t(ang_vel)
     env._observe()
     obs = env.obs_buf[:, :num_obs].clone()
+    # What the module hands the policy for the range: its usable flag (WallGuard::usable and
+    # the off-axis test) and the unclipped error, so the C++ clip is checked too.
+    _, range_ok = env.range_input()
+    range_ok = range_ok.numpy()
+    range_err = np.where(range_ok, range_ref - range_meas * env._beam_cos().numpy(), 0.0)
 
     rule = FallbackRule(threshold_s=0.5)
     acc = (-rule.brake_vel * obs[:, 3:6]).clamp(-rule.max_acc, rule.max_acc)
@@ -169,6 +183,9 @@ def make(onnx_path: Path, out_path: Path, n: int = 12, seed: int = 0) -> str:
         "static constexpr bool STALE[N] = {" + ", ".join(stale_words) + "};",
         _table("AGE_S[N]", age),
         _table("ENGAGE_S[N]", engage),
+        "static constexpr bool RANGE_OK[N] = {" + ", ".join(
+            "true" if x else "false" for x in range_ok) + "};",
+        _table("RANGE_ERR_M[N]", range_err),
         _table("OBS[N * NUM_OBS]", obs.numpy(), "StructureHoldEnv._observe"),
         _table("FALLBACK_ACTION[N * 4]", fallback, "acceleration_to_action"),
         "",

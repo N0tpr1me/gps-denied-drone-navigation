@@ -132,6 +132,7 @@ void StructureHold::updateParams()
 	WallGuardLimits wall{};
 	wall.min_standoff_m = _param_wall_min.get();
 	_wall_guard.setLimits(wall);
+	_range_ref.setSpikeGate(policy::RANGE_SPIKE_GATE_M);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -314,6 +315,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 
 	_wall_guard.engage();
 	_wall_out = WallGuardOutput{};
+	_range_ref.engage();
 
 	float hold[3];
 	_setpoint.pos.copyTo(hold);
@@ -605,6 +607,7 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 	const float body_x[3] = {r(0, 0), r(1, 0), r(2, 0)};
 	const bool shifted_before = _wall_guard.totalShift() > 0.f;
 	_wall_out = _wall_guard.apply(_range, now, pos_ned, normal, body_x, hold);
+	_range_ref.update(_wall_out, _range.timestamp_us);  // the wall-range input (WallGuard.hpp)
 
 	if (_wall_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);
@@ -734,6 +737,9 @@ void StructureHold::controlStep(const hrt_abstime now)
 		// Seconds since engage (read only by policies with the engage-time input, v22 on).
 		// A wall-guard move of the hold point is not an engage, as in the env.
 		sample.engage_s = now > _engaged_us ? (now - _engaged_us) * 1e-6f : 0.f;
+		// The wall-range input (read only by policies with it, v23 on): the latched
+		// reference minus the measured perpendicular distance, positive toward the wall.
+		sample.range_ok = _range_ref.error(_wall_out, sample.range_err_m);
 
 		const PolicyOutput out = _policy.step(sample, _stale_s, _hover_thrust);
 

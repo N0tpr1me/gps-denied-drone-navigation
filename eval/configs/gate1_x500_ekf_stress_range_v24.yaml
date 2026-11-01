@@ -1,0 +1,98 @@
+# gate1_x500_ekf_stress_v22.yaml for the v24 candidate with a forward rangefinder on every
+# episode (base_env.range); v22's rows from run 20261030-232614 are the comparison (same
+# draws). Two extra cells, outside the envelope, stress the rangefinder itself.
+#   python -m training.launch --config eval/configs/gate1_x500_ekf_stress_range_v24.yaml --device cpu
+name: gate1_x500_ekf_stress_range_v24
+entrypoint: eval.gate1
+seed: 9001  # unused: the protocol seeds are params.seeds
+expected_hours: 1.7  # 19 cells x 1536 episodes, two controllers, about 5 min a cell on 4 cores: over the 1 h limit, run the _p1 to _p3 parts
+gpus: 1
+params:
+  controllers:
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # candidate (wall-range input)
+  gate_controller: v24
+  seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
+  num_envs: 512
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    # A forward rangefinder on every episode (env.RangeSensor), as noisy as v24 trained on:
+    # 1 cm + 0.5 % noise, scale error up to 2 %, 1 % outlier readings, dropouts.
+    range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+            scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+            dropout_s: [0.2, 2.0]}
+    # EKF2-like fusion as gz_x500_sitl has it (envs/structure_hold/airframes.py).
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
+    # The standard estimate corruption (eval rates, not the 5x training rates), stated in
+    # full so a later change of a default cannot silently move the test set.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Held-out gust schedule: both gusts start inside the 20 s episode (training draws
+      # starts up to 50 s). Gust speed and length stay inside the training ranges.
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+      mean_speed: [0.0, 8.0]  # the nominal cells' range, drawn per episode
+    hold_distance: [1.0, 2.0]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.10
+  cells:
+    - {name: nominal, label: "nominal airframe"}
+    - {name: mass_0.7, label: "mass x0.7", env: {airframe_rand: {mass_scale: 0.7}}}
+    - {name: mass_1.5, label: "mass x1.5", env: {airframe_rand: {mass_scale: 1.5}}}
+    - {name: hover_err_15, label: "hover thrust error +/-15 %", env: {airframe_rand: {hover_thrust_error: [-0.15, 0.15]}}}
+    - {name: tw_1.5, label: "thrust/weight 1.5 (x0.89)", env: {airframe_rand: {thrust_to_weight_scale: 0.887}}}
+    - {name: inertia_0.5, label: "inertia x0.5", env: {airframe_rand: {inertia_scale: 0.5}}}
+    - {name: inertia_2, label: "inertia x2", env: {airframe_rand: {inertia_scale: 2.0}}}
+    - {name: motor_50ms, label: "motor lag 50 ms", env: {airframe_rand: {motor_tau_s: 0.05}}}
+    - {name: motor_80ms, label: "motor lag 80 ms", envelope: false, env: {airframe_rand: {motor_tau_s: 0.08}}}
+    # Through the fusion a later fix is fused as if 100 ms late (EKF2_EV_DELAY set wrong).
+    - {name: delay_250, label: "estimate delay 150-250 ms", env: {estimate: {delay_min_s: 0.15, delay_max_s: 0.25}}}
+    - {name: delay_350, label: "estimate delay 250-350 ms", envelope: false, env: {estimate: {delay_min_s: 0.25, delay_max_s: 0.35}}}
+    - {name: dropout_3s, label: "dropouts 2-3 s, 0.05 Hz, IMU error 0.1", env: {fusion: {imu_bias_mps2: 0.1}, estimate: {dropout_min_s: 2.0, dropout_max_s: 3.0, dropout_rate_hz: 0.05}}}
+    - {name: dropout_5s, label: "dropouts 3-5 s, 0.05 Hz, IMU error 0.1", envelope: false, env: {fusion: {imu_bias_mps2: 0.1}, estimate: {dropout_min_s: 3.0, dropout_max_s: 5.0, dropout_rate_hz: 0.05}}}
+    # Near-wall yaw moment (placeholder model), as a share of the x500's 0.185 N m yaw
+    # authority, at the wall in a 10 m/s wind.
+    - {name: yaw_25, label: "wall yaw moment 25 %", env: {wall_yaw_torque: {peak_nm: [0.0, 0.0463]}}}
+    - {name: yaw_50, label: "wall yaw moment 50 %", env: {wall_yaw_torque: {peak_nm: [0.0, 0.0926]}}}
+    - {name: yaw_100, label: "wall yaw moment 100 %", envelope: false, env: {wall_yaw_torque: {peak_nm: [0.0, 0.185]}}}
+    - name: combined
+      label: "combined, moderate"
+      env:
+        airframe_rand: {mass_scale: [0.8, 1.3], inertia_scale: [0.7, 1.5], hover_thrust_error: [-0.1, 0.1], motor_tau_s: [0.02, 0.05]}
+        estimate: {delay_min_s: 0.05, delay_max_s: 0.2}
+        wall_yaw_torque: {peak_nm: [0.0, 0.0463]}
+    # The rangefinder itself: many outliers (a beam catching railings or foliage), and long
+    # sensor dropouts. Not in the training ranges (1 % outliers, 0.2 to 2 s at 0.05 Hz).
+    - {name: range_outliers, label: "rangefinder 10 % outliers", envelope: false, env: {range: {outlier_prob: 0.1}}}
+    - {name: range_dropouts, label: "rangefinder dropouts 1-5 s, 0.2 Hz", envelope: false, env: {range: {dropout_rate_hz: 0.2, dropout_s: [1.0, 5.0]}}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9001]
+  base_env:
+    airframe: gz_x500
+    range: {present_prob: 1.0}
+    episode_length_s: 2.0
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}

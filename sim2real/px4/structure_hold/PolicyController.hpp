@@ -125,6 +125,11 @@ struct VehicleSample {
 	bool stale{false};  // no fresh position fix within the expected interval
 	float age_s{0.f};   // 0 while fresh, time since the last fix while stale (the env's age)
 	float engage_s{0.f};  // time since engage (the env's engage_time), s
+	// Forward rangefinder (the env's wall-range input): the hold point's latched wall
+	// distance minus the measured one, m, positive toward the wall; and whether a usable
+	// reading backs it this tick.
+	bool range_ok{false};
+	float range_err_m{0.f};
 };
 
 struct Setpoint {
@@ -177,6 +182,11 @@ inline void buildObservation(const StructureFrame &f, const VehicleSample &s, co
 	obs[OBS_AGE] = clampf(s.age_s, 0.f, 1.f);
 
 	if (HAS_ENGAGE_TIME) { obs[OBS_ENGAGE_TIME] = clampf(s.engage_s / ENGAGE_OBS_CAP_S, 0.f, 1.f); }
+
+	if (HAS_WALL_RANGE) {
+		obs[OBS_WALL_RANGE] = s.range_ok ? clampf(finiteOrZero(s.range_err_m), -RANGE_OBS_CLIP_M, RANGE_OBS_CLIP_M) : 0.f;
+		obs[OBS_RANGE_OK] = s.range_ok ? 1.f : 0.f;
+	}
 
 	for (int i = 0; i < NUM_OBS; i++) { obs[i] = finiteOrZero(obs[i]); }
 }

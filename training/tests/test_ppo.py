@@ -16,7 +16,13 @@ pytest.importorskip("rsl_rl")
 pytest.importorskip("onnxruntime")
 
 from envs.structure_hold.config import StructureHoldConfig  # noqa: E402
-from envs.structure_hold.env import NUM_OBS, NUM_OBS_V1, OBS, StructureHoldEnv  # noqa: E402
+from envs.structure_hold.env import (  # noqa: E402
+    NUM_OBS,
+    NUM_OBS_V1,
+    NUM_OBS_V22,
+    OBS,
+    StructureHoldEnv,
+)
 from training import train_ppo  # noqa: E402
 from training.policy_io import export_policy, load_controller, policy_metadata  # noqa: E402
 from training.ppo_env import (  # noqa: E402
@@ -192,6 +198,28 @@ def test_a_20_input_release_grows_to_the_engage_time_layout_unchanged(trained, t
         got = new(TensorDict({"policy": x.reshape(16, -1)}, batch_size=[16]))
         np.testing.assert_allclose(got.detach().numpy(), want.detach().numpy(),
                                    rtol=1e-4, atol=1e-5)
+
+
+def test_the_v22_release_grows_to_the_wall_range_layout_unchanged(tmp_path):
+    import onnxruntime as ort
+    from tensordict import TensorDict
+
+    v22 = REPO / "training" / "policies" / "structure_hold_v22.onnx"
+    p = smoke_params(num_obs=NUM_OBS, history=15)
+    runner, *_ = train_ppo.make_runner(p, 1, "cpu", tmp_path / "tb", RunWriter(tmp_path))
+    train_ppo.init_actor_from_onnx(runner, v22, 15)
+    sess = ort.InferenceSession(str(v22), providers=["CPUExecutionProvider"])
+    x = torch.randn(16, 15, NUM_OBS)
+    want = sess.run(None, {"obs": x[..., :NUM_OBS_V22].reshape(16, -1).numpy()})[0]
+    new = runner.get_inference_policy("cpu")
+    for err, ok in ((0.0, 0.0), (0.7, 1.0)):  # no effect until training gives them one
+        x[..., OBS["wall_range"]] = err
+        x[..., OBS["range_ok"]] = ok
+        got = new(TensorDict({"policy": x.reshape(16, -1)}, batch_size=[16]))
+        np.testing.assert_allclose(got.detach().numpy(), want, rtol=1e-4, atol=1e-5)
+    norm = runner.alg.get_policy().obs_normalizer
+    mean = norm._mean.reshape(15, NUM_OBS)
+    assert torch.equal(mean[:, OBS["wall_range"].start], mean[:, OBS["pos_err"].start])
 
 
 def test_onnx_and_pt_controllers_agree_on_the_env(trained):

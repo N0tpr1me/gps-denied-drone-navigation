@@ -1,0 +1,96 @@
+# Policy v23 candidate, second chunk: continues run 20261031-233843 (structure_hold_ppo_v23.yaml,
+# 1200 iterations) from its last checkpoint for 300 more, under the 1 h rule. That run's
+# selection (256 episodes) kept iteration 200 (v22 itself) over late checkpoints that were
+# better on 512 episodes and crash-free (experiments/LOG.md); this chunk selects on 1024.
+# Exploration std is left where training brought it (no resume_std).
+#   python -m training.launch --config training/configs/structure_hold_ppo_v23_resume.yaml --smoke --device cpu
+name: structure_hold_ppo_v23_resume
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.6
+gpus: 1
+params:
+  num_envs: 1024
+  resume: runs/20261031-233843_structure_hold_ppo_v23_s0_31f3845/tb/model_1199.pt
+  iterations: 300
+  num_obs: 23  # the 21 of v22 plus the wall range and its usable flag
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0  # the Gazebo benchmark's hover; the drift needs 20 to 40 s to grow
+    reengage_rate_hz: 0.05  # as v14 to v19 (v21: 0.2)
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0  # times |thrust / weight - 1|, clipped at 1
+      ang_vel: 0.2  # times body-rate norm, clipped at 10 rad/s (v12 to v17: 0.1), against the ring
+      pos: 2.0  # times 1 - exp(-error / 0.5 m): 4 per metre near zero (v10: 1.5 over 1 m)
+      pos_scale_m: 0.5
+      toward_wall: 2.0  # times the error toward the wall clipped at 1 m (v13 to v15; v16, v17: 4.0)
+      height: 0.5  # times 1 - exp(-|height error| / 0.1 m), for the clean-estimate sag (v15)
+      height_scale_m: 0.1
+      action_band: 5.0  # times the 1 to 6 Hz rate-command power, clipped at 0.2: v18's 3.3 Hz ring
+    # Extra rate-setpoint lag up to 30 ms, drawn per episode, as for v6 (the tick itself is
+    # now in the preset).
+    rate_lag_s: [0.0, 0.06]  # as v12 (v11: [0.0, 0.03])
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.1  # five times vio_default's 0.02, as for v10 and v17 (v11 to v16: 0.04)
+      dropout_rate_hz: 0.1
+    # Around the x500: payload and battery (mass), build (inertia), worn or other motors and
+    # props (thrust/weight, motor lag), and PX4's hover-thrust estimate off by up to 20 %.
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]  # a tenth of the x500's 0.19 N m yaw authority
+    range:
+      present_prob: 0.7  # 30 % of episodes fly without one, as v22
+      rate_hz: 20.0
+      noise_std_m: 0.01
+      noise_frac: 0.005
+      scale_error: [-0.02, 0.02]
+      outlier_prob: 0.01
+      dropout_rate_hz: 0.05
+      dropout_s: [0.2, 2.0]
+      spike_gate_m: 0.0  # these runs predate the spike gate (docs/wall-range.md)
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 50
+    select_envs: 1024
+smoke:
+  num_obs: 23
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0  # a few in the 2 s smoke episodes
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    range: {present_prob: 0.7, outlier_prob: 0.01, dropout_rate_hz: 0.5}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

@@ -30,6 +30,11 @@ static constexpr int OBS_ENGAGE_TIME = 20;  // size 1
 static constexpr float OBS_POS_CLIP_M = 5.0f;
 static constexpr bool HAS_ENGAGE_TIME = true;
 static constexpr float ENGAGE_OBS_CAP_S = 4.0f;
+static constexpr int OBS_WALL_RANGE = 0;  // unused: no wall-range input
+static constexpr int OBS_RANGE_OK = 0;  // unused: no wall-range input
+static constexpr bool HAS_WALL_RANGE = false;
+static constexpr float RANGE_OBS_CLIP_M = 1.0f;
+static constexpr float RANGE_SPIKE_GATE_M = 0.25f;
 
 // Action scaling and the airframe the policy was trained on (mock sim).
 static constexpr float MAX_RATE_RAD_S = 2.0f;

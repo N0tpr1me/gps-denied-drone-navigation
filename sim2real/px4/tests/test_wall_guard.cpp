@@ -245,6 +245,100 @@ int main()
 		CHECK(near(hold[0], 0.5f));
 	}
 
+	// Wall-range input reference: latched at the first usable range after engage, moved by
+	// the guard's shifts, and the error is measured on the wall, not on the estimate.
+	{
+		WallGuard g = guard(0.7f);
+		RangeReference ref{};
+		float err = 99.f;
+		CHECK(!ref.error(WallGuardOutput{}, err) && near(err, 0.f));  // nothing latched yet
+
+		// Engage at the vehicle, wall 1.5 m ahead: reference 1.5 m, error 0.
+		float hold[3] = {0.f, 0.f, -2.5f};
+		WallGuardOutput o = g.apply(range(1.5f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 1u);
+		CHECK(ref.valid() && near(ref.reference(), 1.5f));
+		CHECK(ref.error(o, err) && near(err, 0.f));
+
+		// The estimate jumps 0.4 m toward the wall (the vehicle has not moved): the guard's
+		// clearance follows the estimate, the reference and the error do not.
+		const float jumped[3] = {0.4f, 0.f, -2.5f};
+		o = g.apply(range(1.5f), NOW, jumped, n_north, bx_north, hold);
+		ref.update(o, 2u);
+		CHECK(near(o.clearance_m, 1.9f));
+		CHECK(near(ref.reference(), 1.5f));
+		CHECK(ref.error(o, err) && near(err, 0.f));
+
+		// The vehicle really moves 0.3 m toward the wall: error +0.3 m.
+		o = g.apply(range(1.2f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 3u);
+		CHECK(ref.error(o, err) && near(err, 0.3f));
+
+		// The guard shifts the hold point back 0.4 m: the reference moves with it.
+		float near_hold[3] = {1.f, 0.f, -2.5f};  // hold point 1 m ahead, wall 1.3 m ahead
+		o = g.apply(range(1.3f), NOW, origin, n_north, bx_north, near_hold);
+		ref.update(o, 4u);
+		CHECK(near(o.shift_m, 0.4f));
+		CHECK(near(ref.reference(), 1.9f));
+
+		// No usable range: no input; a new engage forgets the reference.
+		RangeSample stale = range(1.5f);
+		stale.timestamp_us = NOW - 500000;
+		o = g.apply(stale, NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 5u);
+		CHECK(!ref.error(o, err) && near(err, 0.f));
+		ref.engage();
+		CHECK(!ref.valid());
+
+		// Pitched 20 deg: the perpendicular distance is range x cos, as in the env.
+		const float a = 0.349066f;
+		const float bx_pitch[3] = {std::cos(a), 0.f, -std::sin(a)};
+		float hold2[3] = {0.f, 0.f, -2.5f};
+		o = g.apply(range(2.f), NOW, origin, n_north, bx_pitch, hold2);
+		ref.update(o, 6u);
+		CHECK(near(ref.reference(), 2.f * std::cos(a)));
+	}
+
+	// Spike rejection: one outlier is not used and does not move the reference; a real step
+	// is accepted at its second reading; repeats of the same reading are decided once.
+	{
+		WallGuard g = guard(0.f);
+		RangeReference ref{};
+		ref.setSpikeGate(0.25f);
+		float err = 0.f;
+		float hold[3] = {0.f, 0.f, -2.5f};
+		WallGuardOutput o = g.apply(range(1.5f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 1u);
+		CHECK(ref.error(o, err) && near(err, 0.f));
+
+		o = g.apply(range(6.0f), NOW, origin, n_north, bx_north, hold);  // an outlier
+		ref.update(o, 2u);
+		CHECK(!ref.error(o, err));
+		ref.update(o, 2u);  // the same reading on the next tick: still rejected
+		CHECK(!ref.error(o, err));
+
+		o = g.apply(range(1.52f), NOW, origin, n_north, bx_north, hold);  // back to normal
+		ref.update(o, 3u);
+		CHECK(ref.error(o, err) && near(err, -0.02f));
+
+		o = g.apply(range(1.0f), NOW, origin, n_north, bx_north, hold);  // a real 0.5 m step
+		ref.update(o, 4u);
+		CHECK(!ref.error(o, err));
+		o = g.apply(range(1.01f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 5u);
+		CHECK(ref.error(o, err) && near(err, 0.49f));
+		CHECK(near(ref.reference(), 1.5f));
+
+		// A latch is never taken on a rejected reading.
+		ref.engage();
+		o = g.apply(range(8.0f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 6u);
+		CHECK(!ref.valid());
+		o = g.apply(range(1.02f), NOW, origin, n_north, bx_north, hold);
+		ref.update(o, 7u);
+		CHECK(ref.valid() && near(ref.reference(), 1.02f));
+	}
+
 	if (failures == 0) {
 		std::printf("wall guard tests: all passed\n");
 		return 0;
