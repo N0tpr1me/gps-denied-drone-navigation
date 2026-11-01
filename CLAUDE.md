@@ -62,7 +62,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
 | `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error), `settle_split.py` (settle vs steady hold), `baselines/` (tuned PX4, `run_baseline.py`) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
