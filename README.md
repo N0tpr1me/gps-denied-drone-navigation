@@ -1,6 +1,6 @@
 # GPS-Denied Drone Navigation
 
-Navigation software that lets a small quadrotor fly reliably without GPS (indoors, tunnels, under bridges, confined spaces) using onboard sensors such as a camera and IMU.
+Navigation software that lets a small quadrotor fly reliably without GPS (indoors, tunnels, under bridges, confined spaces) on the position estimate the drone already has (for example camera + IMU visual-inertial odometry), even when that estimate is noisy, late, jumpy or briefly missing. We do not build the estimate itself.
 
 Focus: civilian inspection and logistics.
 
@@ -8,7 +8,7 @@ Focus: civilian inspection and logistics.
 
 1. **Simulation training** — flight control policies trained with reinforcement learning in simulation.
 2. **PX4 SITL** — policies validated in PX4 software-in-the-loop.
-3. **Real flight** — deployed and flown on a small real drone.
+3. **Real flight** — planned on a design partner's drone (nothing has flown on real hardware yet; the evidence so far is simulation and Gazebo SITL against tuned PX4, `docs/baseline.md`).
 
 ## What we are building first
 
