@@ -163,6 +163,8 @@ int main()
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateStale)) == "estimate_stale");
 	CHECK(std::string_view(Watchdog::name(Trip::PositionError)) == "position_error");
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateReset)) == "estimate_reset");
+	CHECK(std::string_view(Watchdog::name(Trip::Landed)) == "landed");
+	CHECK(static_cast<int>(Trip::Landed) == 7);  // structure_hold_status TRIP_LANDED
 
 	if (failures == 0) {
 		std::printf("watchdog tests: all passed\n");

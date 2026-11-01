@@ -29,6 +29,9 @@ dev = [
 ]
 # Reading PX4 .ulg flight logs (eval/ulog.py). Pure Python.
 ulog = ["pyulog>=1.0"]
+# Host side of the Gazebo SITL runners (sim2real.px4.run_gazebo scores the flight with
+# sitl_test.check_ulog, which imports pymavlink). The GPU server installs it; CI does not.
+sitl = ["pyulog>=1.0", "pymavlink>=2.4.41"]
 
 [tool.setuptools.packages.find]
 include = ["envs*", "training*", "eval*"]

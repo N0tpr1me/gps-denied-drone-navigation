@@ -21,11 +21,15 @@ StructureHold::StructureHold() :
 StructureHold::~StructureHold()
 {
 	perf_free(_loop_perf);
+	perf_free(_tick_perf);
 }
 
 bool StructureHold::init()
 {
-	// Run() on every angular-velocity sample; the control step itself is decimated to 100 Hz.
+	// Run() on angular-velocity samples at most every WAKE_INTERVAL; the control step itself
+	// is decimated to 100 Hz.
+	_angular_velocity_sub.set_interval_us(WAKE_INTERVAL);
+
 	if (!_angular_velocity_sub.registerCallback()) {
 		PX4_ERR("callback registration failed");
 		return false;
@@ -34,15 +38,68 @@ bool StructureHold::init()
 	return true;
 }
 
+// A parameter outside its range is replaced in the module's cached copy only (set(), never
+// committed), so the stored value stays what the operator wrote and is checked again at the
+// next update (ParamLimits.hpp).
+template<typename P>
+static void sanitizeParam(P &param, const FloatRange &range, const char *name)
+{
+	const float v = param.get();
+
+	if (!inRange(v, range)) {
+		const float s = sanitize(v, range);
+		PX4_WARN("%s %.3f outside [%.2f, %.2f], flying %.3f", name, (double)v, (double)range.min,
+			 (double)range.max, (double)s);
+		param.set(s);
+	}
+}
+
+template<typename P>
+static void sanitizeParam(P &param, const IntRange &range, const char *name)
+{
+	const int32_t v = param.get();
+
+	if (!inRange(v, range)) {
+		PX4_WARN("%s %d outside [%d, %d], flying the default %d", name, (int)v, (int)range.min, (int)range.max,
+			 (int)range.def);
+		param.set(range.def);
+	}
+}
+
 void StructureHold::updateParams()
 {
 	ModuleParams::updateParams();
+
+	sanitizeParam(_param_wd_est_to, param_limits::SH_WD_EST_TO, "SH_WD_EST_TO");
+	sanitizeParam(_param_wd_pos_err, param_limits::SH_WD_POS_ERR, "SH_WD_POS_ERR");
+	sanitizeParam(_param_wd_tilt, param_limits::SH_WD_TILT, "SH_WD_TILT");
+	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
+	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
+	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
+	sanitizeParam(_param_p_vel, param_limits::SH_P_VEL, "SH_P_VEL");
+	sanitizeParam(_param_p_att, param_limits::SH_P_ATT, "SH_P_ATT");
+	sanitizeParam(_param_v_max, param_limits::SH_V_MAX, "SH_V_MAX");
+	sanitizeParam(_param_vel_src, param_limits::SH_VEL_SRC, "SH_VEL_SRC");
+	sanitizeParam(_param_ctrl, param_limits::SH_CTRL, "SH_CTRL");
+	sanitizeParam(_param_fb_en, param_limits::SH_FB_EN, "SH_FB_EN");
+	sanitizeParam(_param_fb_t, param_limits::SH_FB_T, "SH_FB_T");
+	sanitizeParam(_param_fb_k, param_limits::SH_FB_K, "SH_FB_K");
+	sanitizeParam(_param_fb_tilt, param_limits::SH_FB_TILT, "SH_FB_TILT");
+	sanitizeParam(_param_fix_src, param_limits::SH_FIX_SRC, "SH_FIX_SRC");
+	sanitizeParam(_param_fix_gap, param_limits::SH_FIX_GAP, "SH_FIX_GAP");
+	sanitizeParam(_param_yaw_guard, param_limits::SH_YAW_GUARD, "SH_YAW_GUARD");
+	sanitizeParam(_param_yaw_p, param_limits::SH_YAW_P, "SH_YAW_P");
+	sanitizeParam(_param_rate_max, param_limits::SH_RATE_MAX, "SH_RATE_MAX");
+	sanitizeParam(_param_wall_min, param_limits::SH_WALL_MIN, "SH_WALL_MIN");
+	sanitizeParam(_param_wall_req, param_limits::SH_WALL_REQ, "SH_WALL_REQ");
+	sanitizeParam(_param_land_en, param_limits::SH_LAND_EN, "SH_LAND_EN");
+	sanitizeParam(_param_hb_guard, param_limits::SH_HB_GUARD, "SH_HB_GUARD");
 
 	WatchdogLimits limits{};
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
 	limits.max_position_error_m = _param_wd_pos_err.get();
 	limits.max_tilt_rad = math::radians(_param_wd_tilt.get());
-	limits.reset_holdoff_us = static_cast<uint64_t>(math::max(_param_rst_hold.get(), 0.f) * 1e6f);
+	limits.reset_holdoff_us = static_cast<uint64_t>(_param_rst_hold.get() * 1e6f);
 	_watchdog.setLimits(limits);
 
 	_gains.p_pos = _param_p_pos.get();
@@ -73,7 +130,7 @@ void StructureHold::updateParams()
 	_policy.setLimits(limits_sp);
 
 	WallGuardLimits wall{};
-	wall.min_standoff_m = math::max(_param_wall_min.get(), 0.f);
+	wall.min_standoff_m = _param_wall_min.get();
 	_wall_guard.setLimits(wall);
 }
 
@@ -202,8 +259,10 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 	// Commander refuses to switch into the mode while a trip is latched or for SH_RST_HOLD
 	// after an EKF position reset (Watchdog.hpp).
 	// With SH_WALL_REQ set, also while no forward range is coming in (WallGuard.hpp).
+	// Never while disarmed, so the vehicle cannot be armed into it on the ground: the hold
+	// point would be the ground and the policy never learned a take-off.
 	const hrt_abstime now = hrt_absolute_time();
-	reply.can_arm_and_run = _watchdog.latched() == Trip::None && !_watchdog.inResetHoldoff(now)
+	reply.can_arm_and_run = _armed && _watchdog.latched() == Trip::None && !_watchdog.inResetHoldoff(now)
 				&& (_param_wall_req.get() == 0 || rangeFresh(now));
 	reply.mode_req_angular_velocity = true;
 	reply.mode_req_attitude = true;
@@ -259,10 +318,37 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	float hold[3];
 	_setpoint.pos.copyTo(hold);
 	_policy.engage(hold, _setpoint.yaw);  // structure x = the heading at engage
+
+	if (_landed) {
+		PX4_WARN("engaged on the ground (SH_BENCH 1): props off only");
+	}
 	PX4_INFO("engaged (%s): holding N %.2f E %.2f D %.2f m, yaw %.0f deg",
 		 _param_ctrl.get() == 1 ? "policy" : "cascade",
 		 (double)_setpoint.pos(0), (double)_setpoint.pos(1), (double)_setpoint.pos(2),
 		 (double)math::degrees(_setpoint.yaw));
+}
+
+Trip StructureHold::entryRefusal(const hrt_abstime now) const
+{
+	// Commander's arming check covers the latch, the reset hold-off and SH_WALL_REQ, but it
+	// polls every 300 ms and knows nothing of the ground or a broken estimate; these are
+	// checked again at the switch itself.
+	// SH_BENCH lifts this for the props-off bench test only.
+	if (_landed && _param_bench.get() == 0) {
+		return Trip::Landed;
+	}
+
+	// A NaN heading would make the structure frame NaN, and the policy would then fly on an
+	// observation of zeros (buildObservation) until the 2 m hold-error trip.
+	if (!estimateFinite() || !PX4_ISFINITE(_local_position.heading)) {
+		return Trip::EstimateInvalid;
+	}
+
+	if (_watchdog.inResetHoldoff(now)) {
+		return Trip::EstimateReset;
+	}
+
+	return Trip::None;
 }
 
 void StructureHold::disengage(const char *why)
@@ -283,6 +369,8 @@ void StructureHold::engageGuarded(const vehicle_local_position_s &lpos, bool des
 	_state = descend ? structure_hold_status_s::STATE_LANDING : structure_hold_status_s::STATE_HOVER;
 	_active_mode_id = descend ? _land_mode_id : _hover_mode_id;
 	_land_xy_reset_counter = lpos.xy_reset_counter;
+	_land_z_reset_counter = lpos.z_reset_counter;
+	_land_heading_reset_counter = lpos.heading_reset_counter;
 	_guard_speed = 0.f;
 	_last_control_us = 0;
 	_fallback_active = false;
@@ -311,15 +399,30 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 
 	// A trip in Structure Hold next to a measured wall goes to Structure Hover first, and a
 	// trip in Structure Land to stock Land first, since the landing was already asked for;
-	// a trip in Hover, or a refusal at entry, goes straight to Position mode and on.
-	_handback_guarded = latch && xy_valid && _active_mode_id == _mode_id
-			    && guardedHandbackAvailable(hrt_absolute_time());
-	_handback_landing = latch && _land_mode_id != -1 && _active_mode_id == _land_mode_id;
+	// a trip in Hover, or a refusal at entry, goes straight to Position mode and on
+	// (Handback.hpp, decided rows of 2026-10-21 and 2026-10-28).
+	HandbackFrom from = HandbackFrom::Hold;
+
+	if (_land_mode_id != -1 && _active_mode_id == _land_mode_id) {
+		from = HandbackFrom::Land;
+
+	} else if (_hover_mode_id != -1 && _active_mode_id == _hover_mode_id) {
+		from = HandbackFrom::Hover;
+	}
+
+	_handback_plan = planHandback(from, latch, xy_valid, guardedHandbackAvailable(hrt_absolute_time()));
 	_state = structure_hold_status_s::STATE_HANDBACK;
 	_handback_step = 0;
-	_handback_xy_valid = xy_valid;
+	_handback_logged_last = false;
 	PX4_WARN("watchdog %s: %s, handing back", latch ? "trip" : "refusal", Watchdog::name(trip));
 	requestHandbackMode();
+}
+
+void StructureHold::endHandback(const char *why)
+{
+	PX4_INFO("handback ended: %s", why);
+	_state = structure_hold_status_s::STATE_STANDBY;
+	_active_mode_id = -1;
 }
 
 bool StructureHold::guardedHandbackAvailable(const hrt_abstime now) const
@@ -332,46 +435,33 @@ void StructureHold::requestHandbackMode()
 {
 	// Preferred target first; commander may refuse (no manual control for Position mode,
 	// no position for Hold), so each step falls through to the next after a short wait.
+	const HandbackTarget target = _handback_plan.target(_handback_step);
 	uint8_t main_mode = PX4_CUSTOM_MAIN_MODE_POSCTL;
 	uint8_t sub_mode = 0;
-	const char *name = "Position mode";
 
-	const bool first_target = _handback_guarded || _handback_landing;
-
-	if (_handback_guarded && _handback_step == 0) {
+	switch (target) {
+	case HandbackTarget::StructureHover:
 		// External modes' custom sub modes follow their nav_states (px4_custom_mode.h).
 		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
 		sub_mode = PX4_CUSTOM_SUB_MODE_EXTERNAL1 + (_hover_mode_id - vehicle_status_s::NAVIGATION_STATE_EXTERNAL1);
-		name = HOVER_MODE_NAME;
-
-	} else if (_handback_landing && _handback_step == 0) {
-		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
-		sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LAND;
-		name = "Land";
-	}
-
-	switch (_handback_step - (first_target ? 1 : 0)) {
-	case -1:
 		break;
 
-	case 0:
-		if (!_handback_xy_valid) {
-			main_mode = PX4_CUSTOM_MAIN_MODE_ALTCTL;
-			name = "Altitude mode";
-		}
-
+	case HandbackTarget::Position:
 		break;
 
-	case 1:
+	case HandbackTarget::Altitude:
+		main_mode = PX4_CUSTOM_MAIN_MODE_ALTCTL;
+		break;
+
+	case HandbackTarget::Hold:
 		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
 		sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LOITER;
-		name = "Hold";
 		break;
 
-	default:
+	case HandbackTarget::StockLand:
+	case HandbackTarget::Land:
 		main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
 		sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LAND;
-		name = "Land";
 		break;
 	}
 
@@ -390,7 +480,13 @@ void StructureHold::requestHandbackMode()
 	_vehicle_command_pub.publish(cmd);
 	_handback_request_us = cmd.timestamp;
 
-	PX4_INFO("handback: requesting %s", name);
+	// The last target is asked for again until it takes; say so once.
+	const bool last = _handback_step >= _handback_plan.lastStep();
+
+	if (!last || !_handback_logged_last) {
+		PX4_INFO("handback: requesting %s%s", handbackTargetName(target), last ? " (repeated until it takes)" : "");
+		_handback_logged_last = last;
+	}
 }
 
 void StructureHold::handbackStep(const hrt_abstime now)
@@ -402,19 +498,46 @@ void StructureHold::handbackStep(const hrt_abstime now)
 		publishTrajectorySetpoint(NAN, Vector3f(0.f, 0.f, 0.f));
 
 	} else {
-		vehicle_rates_setpoint_s sp{};
-		sp.timestamp = hrt_absolute_time();
-		sp.roll = 0.f;
-		sp.pitch = 0.f;
-		sp.yaw = 0.f;
-		sp.thrust_body[2] = -_hover_thrust;
-		_rates_setpoint_pub.publish(sp);
+		// After a refusal on the ground, idle thrust: hover thrust there would lift off.
+		publishRates(Vector3f(0.f, 0.f, 0.f), _last_trip == Trip::Landed ? 0.f : _hover_thrust);
 	}
 
-	if (now - _handback_request_us > HANDBACK_RETRY && _handback_step < (_handback_guarded || _handback_landing ? 3 : 2)) {
-		++_handback_step;
+	if (now - _handback_request_us > HANDBACK_RETRY) {
+		_handback_step = static_cast<uint8_t>(_handback_plan.next(_handback_step));
 		requestHandbackMode();
 	}
+}
+
+bool StructureHold::estimateFinite() const
+{
+	return PX4_ISFINITE(_local_position.x) && PX4_ISFINITE(_local_position.y) && PX4_ISFINITE(_local_position.z)
+	       && PX4_ISFINITE(_local_position.vx) && PX4_ISFINITE(_local_position.vy)
+	       && PX4_ISFINITE(_local_position.vz);
+}
+
+void StructureHold::publishRates(const Vector3f &rates, float thrust)
+{
+	// Every rate setpoint goes through the same last check (PolicyController.hpp).
+	float r[3] = {rates(0), rates(1), rates(2)};
+
+	const bool ok = sanitizeSetpoint(r, thrust, _hover_thrust, _gains.thrust_min, _gains.thrust_max);
+
+	if (!ok && !_setpoint_replaced) {
+		PX4_WARN("non-finite rate setpoint replaced");  // once per episode, not at 100 Hz
+	}
+
+	_setpoint_replaced = !ok;
+
+	vehicle_rates_setpoint_s sp{};
+	sp.timestamp = hrt_absolute_time();
+	sp.roll = r[0];
+	sp.pitch = r[1];
+	sp.yaw = r[2];
+	sp.thrust_body[0] = 0.f;
+	sp.thrust_body[1] = 0.f;
+	sp.thrust_body[2] = -thrust;
+	sp.reset_integral = false;
+	_rates_setpoint_pub.publish(sp);
 }
 
 bool StructureHold::useOdometryFix() const
@@ -505,9 +628,13 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 	WatchdogInputs in{};
 	in.now_us = now;
 	in.estimate_timestamp_us = math::min(_last_fix_us, static_cast<hrt_abstime>(_local_position.timestamp));
-	in.xy_valid = _local_position.xy_valid;
-	in.z_valid = _local_position.z_valid;
-	in.v_xy_valid = _local_position.v_xy_valid;
+	// EKF2 does not publish NaN with a valid flag, but a NaN in any of these would reach
+	// the controllers unchecked, so it counts as invalid (vz with the horizontal velocity:
+	// the policy reads all three).
+	in.xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x) && PX4_ISFINITE(_local_position.y);
+	in.z_valid = _local_position.z_valid && PX4_ISFINITE(_local_position.z);
+	in.v_xy_valid = _local_position.v_xy_valid && PX4_ISFINITE(_local_position.vx)
+			&& PX4_ISFINITE(_local_position.vy) && PX4_ISFINITE(_local_position.vz);
 	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
 	in.position_error_m = position_error_m;
 	in.test_fault = _param_test_fault.get() != 0;
@@ -529,17 +656,19 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 void StructureHold::controlStep(const hrt_abstime now)
 {
 	perf_begin(_loop_perf);
+	perf_count(_tick_perf);
 	const hrt_abstime start = hrt_absolute_time();
 
-	// Hover thrust from the estimator when it has one, else the parameter.
+	// Hover thrust from the estimator when it has one, else the parameter; both clamped to
+	// [0.1, 0.9] (ParamLimits.hpp), a NaN estimate falls back to the parameter.
 	hover_thrust_estimate_s hte;
 
 	if (_hover_thrust_sub.update(&hte) && hte.valid) {
-		_hover_thrust = hte.hover_thrust;
+		_hover_thrust = sanitizeHoverThrust(hte.hover_thrust, _param_mpc_thr_hover.get());
 		_hover_thrust_from_estimator = true;
 
 	} else if (!_hover_thrust_from_estimator) {
-		_hover_thrust = _param_mpc_thr_hover.get();
+		_hover_thrust = sanitizeHoverThrust(_param_mpc_thr_hover.get(), param_limits::HOVER_THRUST.def);
 	}
 
 	// Watchdog first: it decides whether the controller runs at all this tick.
@@ -635,18 +764,10 @@ void StructureHold::controlStep(const hrt_abstime now)
 		_fallback_active = false;
 	}
 
-	vehicle_rates_setpoint_s sp{};
-	sp.timestamp = hrt_absolute_time();
-	sp.roll = _last_output.rates(0);
-	sp.pitch = _last_output.rates(1);
-	sp.yaw = _last_output.rates(2);
-	sp.thrust_body[0] = 0.f;
-	sp.thrust_body[1] = 0.f;
-	sp.thrust_body[2] = -_last_output.thrust;
-	sp.reset_integral = false;
-	_rates_setpoint_pub.publish(sp);
+	publishRates(_last_output.rates, _last_output.thrust);
 
 	_last_loop_time_us = static_cast<uint32_t>(hrt_absolute_time() - start);
+	_max_loop_time_us = math::max(_max_loop_time_us, _last_loop_time_us);
 	perf_end(_loop_perf);
 }
 
@@ -664,6 +785,26 @@ void StructureHold::guardedStep(const hrt_abstime now)
 		if (PX4_ISFINITE(_local_position.delta_xy[0]) && PX4_ISFINITE(_local_position.delta_xy[1])) {
 			_setpoint.pos(0) += _local_position.delta_xy[0];
 			_setpoint.pos(1) += _local_position.delta_xy[1];
+		}
+	}
+
+	// Height and heading resets the same way (FlightTask's EKF reset handlers): Structure
+	// Hover's held height would otherwise climb or sink by the reset, and after a heading
+	// reset PX4 would turn the vehicle by the reset to meet the old yaw setpoint, with the
+	// wall normal (the same angle) left on the old, corrected heading.
+	if (_local_position.z_reset_counter != _land_z_reset_counter) {
+		_land_z_reset_counter = _local_position.z_reset_counter;
+
+		if (PX4_ISFINITE(_local_position.delta_z)) {
+			_setpoint.pos(2) += _local_position.delta_z;
+		}
+	}
+
+	if (_local_position.heading_reset_counter != _land_heading_reset_counter) {
+		_land_heading_reset_counter = _local_position.heading_reset_counter;
+
+		if (PX4_ISFINITE(_local_position.delta_heading)) {
+			_setpoint.yaw = matrix::wrap_pi(_setpoint.yaw + _local_position.delta_heading);
 		}
 	}
 
@@ -844,6 +985,12 @@ void StructureHold::Run()
 		_watchdog.noteReset(_local_position.xy_reset_counter, now);
 	}
 
+	vehicle_land_detected_s land_detected;
+
+	if (_land_detected_sub.update(&land_detected)) {
+		_landed = land_detected.landed;
+	}
+
 	_attitude_sub.update(&_attitude);
 	updateFix(now);
 	updateRange();
@@ -864,14 +1011,25 @@ void StructureHold::Run()
 				engageGuarded(_local_position, false);
 			}
 
-		} else if (_vehicle_status.nav_state == _mode_id) {
-			if (_watchdog.inResetHoldoff(now)) {
+		} else if (_vehicle_status.nav_state == _mode_id && _armed) {
+			// Disarmed in the mode (a kill switch in flight, or selected on the ground):
+			// nothing to fly, and the arming check keeps it from being armed into.
+			const Trip refusal = entryRefusal(now);
+
+			if (refusal == Trip::EstimateReset) {
 				// Commander normally refuses the switch (replyToArmingCheck), but its poll
 				// is 300 ms behind the reset: hand straight back, nothing latched.
 				PX4_WARN("engage refused: EKF reset its position %.1f s ago (SH_RST_HOLD %.1f s)",
 					 (double)_watchdog.resetAge(now), (double)_param_rst_hold.get());
+
+			} else if (refusal != Trip::None) {
+				PX4_WARN("engage refused: %s", Watchdog::name(refusal));
+			}
+
+			if (refusal != Trip::None) {
 				_active_mode_id = _mode_id;
-				handBack(Trip::EstimateReset, _local_position.xy_valid, false);
+				handBack(refusal, _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
+					 && PX4_ISFINITE(_local_position.y), false);
 
 			} else {
 				engage(_local_position);
@@ -883,6 +1041,11 @@ void StructureHold::Run()
 	case structure_hold_status_s::STATE_ENGAGED:
 		if (!mode_active) {
 			disengage("mode changed");
+
+		} else if (!_armed) {
+			// Otherwise the controller kept running on the ground, and a trip there stayed
+			// latched into the next flight (the latch clears on the disarm edge only).
+			disengage("disarmed");
 
 		} else if (now - _last_control_us >= CONTROL_INTERVAL) {
 			_last_control_us = now;
@@ -908,9 +1071,10 @@ void StructureHold::Run()
 
 	case structure_hold_status_s::STATE_HANDBACK:
 		if (!mode_active) {
-			PX4_INFO("handback complete: stock PX4 in charge");
-			_state = structure_hold_status_s::STATE_STANDBY;
-			_active_mode_id = -1;
+			endHandback("stock PX4 in charge");
+
+		} else if (!_armed) {
+			endHandback("disarmed");
 
 		} else if (now - _last_control_us >= CONTROL_INTERVAL) {
 			_last_control_us = now;
@@ -990,7 +1154,8 @@ static int runPolicyBench(int iterations)
 	// The budget is the 10 ms control tick; flag anything over a tenth of it. Short lines:
 	// PX4 cuts a log line at about 120 characters.
 	PX4_INFO("bench %s: %s, %d steps", worst_us < 1000 ? "ok" : "OVER 1 ms", policy::NAME, iterations);
-	PX4_INFO("bench: mean %.1f us, worst %u us (check %.1f)", (double)mean_us, worst_us, (double)sink);
+	PX4_INFO("bench: mean %.1f us, worst %u us (check %.1f)", (double)mean_us,
+		 static_cast<unsigned>(worst_us), (double)sink);
 	return worst_us < 1000 ? 0 : 1;
 }
 
@@ -1058,7 +1223,14 @@ int StructureHold::print_status()
 			 (double)_wall_out.wall_m, (double)_wall_out.clearance_m, (double)_wall_guard.totalShift());
 	}
 
+	if (_param_bench.get() != 0) {
+		PX4_WARN("SH_BENCH 1: engages on the ground (bench test, props off only)");
+	}
+
+	PX4_INFO("worst control step since boot: %u us (budget: the %u us tick)", (unsigned)_max_loop_time_us,
+		 (unsigned)CONTROL_INTERVAL);
 	perf_print_counter(_loop_perf);
+	perf_print_counter(_tick_perf);
 	return 0;
 }
 
