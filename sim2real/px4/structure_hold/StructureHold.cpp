@@ -677,7 +677,14 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
 	in.position_error_m = position_error_m;
 	in.test_fault = _param_test_fault.get() != 0;
-	in.fix_frozen_s = _fix_frozen_s;
+	// A frozen fix stops the policy. In Structure Land and Structure Hover PX4's own
+	// controller flies with the wall guard; handing back from there would put Position mode
+	// on the same frozen estimate without the guard (a Gazebo freeze flight drifted to
+	// 0.64 m from the wall that way), so it is no trip there. With SH_HB_RANGE the hover
+	// flies on the range instead (estimateGood()).
+	const bool guarded_mode = _state == structure_hold_status_s::STATE_HOVER
+				  || _state == structure_hold_status_s::STATE_LANDING;
+	in.fix_frozen_s = guarded_mode ? 0.f : _fix_frozen_s;
 	const bool xy_valid = in.xy_valid;
 
 	if (range_only) {
