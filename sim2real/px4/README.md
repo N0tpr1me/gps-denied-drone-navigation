@@ -168,6 +168,7 @@ sim2real/px4/
   tools/                 export_policy_header.py (onnx -> PolicyWeights.hpp),
                          make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
+  boards/                structurehold.px4board: multicopter-only variant that fits a 2 MB board
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
   bench_test.py          props-off bench checks on a flight controller (docs/bench-test.md)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
@@ -209,6 +210,31 @@ the module when you copied rather than linked.
 
 PX4's own build needs its Python packages (`Tools/setup/requirements.txt`; `empy<4`
 does not build on Python 3.13, use 3.10 to 3.12).
+
+### Real flight controllers
+
+The module is about 125 KB of flash (text plus data), most of it the policy's weights, and
+a stock 2 MB board does not have that spare: `px4_fmu-v6c_default` plus the module
+overflowed flash by 87 KB (2026-10-31). `boards/structurehold.px4board` is a board variant
+that drops the fixed-wing, VTOL and airspeed modules (as PX4's own
+`fmu-v6x/multicopter.px4board` does), SIH, the MSP OSD driver and the precision-landing
+target estimator, none of which a GPS-denied multicopter next to a wall uses, and turns the
+module on. With only the fixed-wing, VTOL and airspeed modules dropped, the fmu-v6x build
+still overflowed by 2 KB:
+
+```bash
+cp sim2real/px4/boards/structurehold.px4board /path/to/PX4-Autopilot/boards/px4/fmu-v6c/
+sim2real/px4/install.sh /path/to/PX4-Autopilot --board boards/px4/fmu-v6c/structurehold.px4board
+cd /path/to/PX4-Autopilot && make px4_fmu-v6c_structurehold
+```
+
+Checked in the cloud container with Ubuntu 24.04's `gcc-arm-none-eabi` 13.2.1 (`apt-get
+install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`; PX4's
+venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
+uses 95.8 % of flash, `px4_fmu-v6x_structurehold` 99.5 % (about 10 KB spare, so a partner
+adding drivers to a 6X drops something else they do not fly). The first such build also
+caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+`docs/partner-pack.md`.
 
 ## Fly it
 

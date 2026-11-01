@@ -8,8 +8,9 @@ wall, mocap or a pilot. **Props off for every step.**
 
 ## What you need
 
-- The flight controller with PX4 v1.17.0 built with the module (`sim2real/px4/install.sh
-  <PX4 tree> --board <board>`, then `make <board>_default upload`), on USB.
+- The flight controller with PX4 v1.17.0 built with the module, as the multicopter-only
+  `structurehold` variant (a stock build plus the module does not fit in 2 MB of flash;
+  `sim2real/px4/README.md`, "Real flight controllers"), on USB.
 - The forward rangefinder wired and configured, pointing along the body x axis
   (`distance_sensor` orientation 0, "forward facing"). Check its driver's `SENS_*` /
   `*_ROT` parameter says forward.
@@ -30,7 +31,7 @@ shell output of each command. The checks:
 | --- | --- |
 | `firmware_answers`, `px4_v1_17_0` | the shell answers and `ver all` says Release 1.17.0 (the pinned release) |
 | `module_registered` | `structure_hold status` says `state: standby` (the mode registered with commander) |
-| `policy_expected` | the compiled-in policy is the released one (`--policy`, default `structure_hold_v22`) |
+| `policy_expected` | the compiled-in policy is the released one (`--policy`, default the NAME in `structure_hold/PolicyWeights.hpp`, v22 today) |
 | `inference_within_budget` | `structure_hold bench` times 2000 policy steps; the worst is under 1 ms (the tick is 10 ms). Scored only on real hardware; SITL's lockstep clock moves in 4 ms steps |
 | `params_readable`, `param_*` | every `SH_` parameter reads back; each `--expect` matches |
 | `range_publishing`, `module_sees_range` | `distance_sensor` has a forward sample and the module calls it fresh. Move the board: `range_m` in the summary should follow |

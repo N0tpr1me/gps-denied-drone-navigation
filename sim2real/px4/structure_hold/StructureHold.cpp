@@ -1154,7 +1154,8 @@ static int runPolicyBench(int iterations)
 	// The budget is the 10 ms control tick; flag anything over a tenth of it. Short lines:
 	// PX4 cuts a log line at about 120 characters.
 	PX4_INFO("bench %s: %s, %d steps", worst_us < 1000 ? "ok" : "OVER 1 ms", policy::NAME, iterations);
-	PX4_INFO("bench: mean %.1f us, worst %u us (check %.1f)", (double)mean_us, worst_us, (double)sink);
+	PX4_INFO("bench: mean %.1f us, worst %u us (check %.1f)", (double)mean_us,
+		 static_cast<unsigned>(worst_us), (double)sink);
 	return worst_us < 1000 ? 0 : 1;
 }
 

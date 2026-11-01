@@ -61,7 +61,9 @@ Gazebo by both controllers before the first rig session.
 
 ## Procedure
 
-Before the first session: a real tuned-PX4 baseline (autotune on the real airframe, then the
+On a partner's drone (software only since 2026-10-30) the build, checks, safety limits and
+the session folder they send are in `docs/partner-pack.md`, and `eval/partner_session.py`
+scores the session. Before the first session: a real tuned-PX4 baseline (autotune on the real airframe, then the
 position-loop values of `eval/baselines/px4_tuned_v1.params`, saved as its own file), the
 logging flight done and the estimate model refitted (`docs/logging-flight.md`). Ready in
 code: `eval/ulog.py` scores against `vehicle_mocap_odometry` (`docs/metrics.md`), and the
