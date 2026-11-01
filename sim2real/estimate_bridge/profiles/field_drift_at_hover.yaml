@@ -1,0 +1,15 @@
+# Field-failure profile (docs/field-faults.md): vio_default's delay, noise and bias walk, its
+# random jumps and dropouts off, and one scripted failure 20 s into the scored window
+# (sim2real/estimate_bridge/field_faults.py).
+# A slow 0.6 m walk-off of the estimate away from the wall (-x in the wall1m scenarios), 3 cm/s
+# for 20 s: the controller follows it toward the wall. Scale drift or a spoofed source.
+# This copy is for the stock PX4 runner (keyed to the hover height); the _at_engage twin differs only in its anchor.
+name: field_drift_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null   # the stock runner fills it from the scenario
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+field_faults:
+  - {kind: drift, at_s: 20.0, duration_s: 20.0, rate_mps: 0.03, direction: [-1.0, 0.0, 0.0]}

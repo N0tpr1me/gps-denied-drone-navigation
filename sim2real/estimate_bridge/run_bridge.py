@@ -163,7 +163,7 @@ class Bridge:
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
             float(p[0]), float(p[1]), float(p[2]), [NAN, NAN, NAN, NAN],
             float(v[0]), float(v[1]), float(v[2]), NAN, NAN, NAN,
-            NAN21, NAN21, 0, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
+            NAN21, NAN21, sample.resets % 256, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )
 
     def send_range(self, t: float, pose) -> None:

@@ -44,6 +44,12 @@ rebuilt corruptor's bias is zero at it, so from the anchor on both runners meet 
 bias series (the seed's increments from fault clock ``fault_anchor_s`` on), and the stream
 is still continuous (0 to 0). The shipped ``vio_at_engage`` and ``vio_at_hover`` set it; old
 traces replay with the profile saved in their run folder, which does not.
+
+Field faults (``field_faults``, ``field_faults.py``): scripted failures copied from field
+reports (a VIO reset to its origin, a VIO restart, a long link loss, a frozen estimate, a slow
+drift), applied on top of the corruptor's output at a set time after the anchor. A reset that
+is signalled counts up ``BridgeSample.resets``, which ``run_bridge`` sends as ODOMETRY's
+``reset_counter``.
 """
 
 from __future__ import annotations
@@ -58,15 +64,16 @@ import numpy as np
 
 from envs.estimate import EstimateCorruptionConfig, EstimateCorruptor
 from envs.frames import enu_to_ned
+from sim2real.estimate_bridge.field_faults import FieldFault, FieldFaultInjector
 
 TRACE_COLUMNS = (
     "step", "t", "published", "stale", "jumped", "dropout_started", "age",
     "tx", "ty", "tz", "tvx", "tvy", "tvz",
     "ex", "ey", "ez", "evx", "evy", "evz",
-    "engaged",
+    "engaged", "resets",
 )
 # Trace columns added after the first flights; read as 0 when an old trace lacks them.
-OPTIONAL_TRACE_COLUMNS = ("engaged",)
+OPTIONAL_TRACE_COLUMNS = ("engaged", "resets")
 FAULT_ANCHORS = ("start", "engage", "altitude")
 NEVER_S = 1e9  # fault_start_s that holds every fault back for the whole flight
 
@@ -84,6 +91,7 @@ class BridgeSample:
     dropout_started: bool
     age: float
     engaged: bool = False  # the flight script reported Structure Hold engaged at this sample
+    resets: int = 0  # signalled frame resets so far (field faults): ODOMETRY reset_counter
 
     @property
     def publish(self) -> bool:
@@ -96,7 +104,7 @@ class BridgeSample:
             int(self.jumped), int(self.dropout_started), repr(float(self.age)),
             *(repr(float(v)) for v in self.truth_pos), *(repr(float(v)) for v in self.truth_vel),
             *(repr(float(v)) for v in self.est_pos), *(repr(float(v)) for v in self.est_vel),
-            int(self.engaged),
+            int(self.engaged), int(self.resets),
         ]
 
 
@@ -118,6 +126,7 @@ class EstimateBridge:
         fault_anchor_s: float = 25.0,
         fault_anchor_alt_m: float | None = None,
         bias_from_anchor: bool = False,
+        field_faults: tuple[FieldFault, ...] = (),
     ):
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
@@ -144,11 +153,13 @@ class EstimateBridge:
             self.corruptor = EstimateCorruptor(pre, 1, step_dt, self.seed)
         else:
             self.corruptor = EstimateCorruptor(cfg, 1, step_dt, self.seed)
+        self.field_faults = FieldFaultInjector(tuple(field_faults))
         self.anchor_step: int | None = None  # bridge step at which the schedule was anchored
         self.anchor_t: float | None = None
         self._last_t: float | None = None
         self._last_pos: np.ndarray | None = None
         self._first_z: float | None = None  # height reference for the altitude anchor
+        self._first_t: float | None = None
         self._received = 0
         self._steps = 0
 
@@ -166,8 +177,9 @@ class EstimateBridge:
         pos = np.asarray(pos_enu, dtype=np.float64).reshape(3)
         if self._last_pos is None:
             vel = np.zeros(3)
-            self._first_z = float(pos[2])
+            self._first_z, self._first_t = float(pos[2]), float(t)
             self.corruptor.reset(pos[None], vel[None])
+            self.field_faults.start(pos)
         else:
             span = float(t) - self._last_t
             if span <= 0:
@@ -184,12 +196,18 @@ class EstimateBridge:
         ):
             self._anchor(pos, vel, float(t))
         s = self.corruptor.step(pos[None], vel[None])
+        if self.fault_anchor == "start":
+            t_rel = float(t) - self._first_t
+        else:
+            t_rel = None if self.anchor_t is None else float(t) - self.anchor_t
+        est_pos, est_vel, stale = self.field_faults.apply(
+            np.asarray(s.pos[0]), np.asarray(s.vel[0]), bool(s.stale[0]), t_rel)
         sample = BridgeSample(
             step=self._steps, t=float(t), truth_pos=pos, truth_vel=vel,
-            est_pos=np.asarray(s.pos[0]), est_vel=np.asarray(s.vel[0]),
-            stale=bool(s.stale[0]), jumped=bool(s.jumped[0]),
+            est_pos=est_pos, est_vel=est_vel,
+            stale=stale, jumped=bool(s.jumped[0]),
             dropout_started=bool(s.dropout_started[0]), age=float(s.age[0]),
-            engaged=bool(engaged),
+            engaged=bool(engaged), resets=self.field_faults.resets,
         )
         self._steps += 1
         return sample

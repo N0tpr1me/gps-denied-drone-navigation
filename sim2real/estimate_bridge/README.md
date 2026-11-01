@@ -8,6 +8,7 @@ vision odometry, with GPS fusion off. This is what makes the SITL benchmark GPS-
 bridge.py          EstimateBridge: truth sample in, corrupted sample out; trace CSV
 run_bridge.py      the in-container process: gz pose/info -> bridge -> MAVLink ODOMETRY
 config.py          estimate profiles (profiles/clean.yaml, profiles/vio_default.yaml)
+field_faults.py    scripted field failures on top of the corruptor (docs/field-faults.md)
 params.py          QGC .params reader -> PX4_PARAM_* environment for the container
 ekf2_ev.params     EKF2 on vision, GPS off (loaded at PX4 start, before EKF2 runs)
 heartbeat.py       PX4 HEARTBEAT custom_mode -> is Structure Hold flying (for the fault anchor)
@@ -109,6 +110,15 @@ the scenario. The bridge then also sends a forward DISTANCE_SENSOR on its link, 
 truth pose (beam along body x to the wall plane, nothing sent when it misses), for the
 module's wall guard. It is not corruption: the estimate stream and `verify_trace` are the
 same with or without it.
+
+A profile can carry `field_faults` too (`field_faults.py`, `docs/field-faults.md`): scripted
+failures copied from field reports, timed from the anchor and applied on top of the
+corruptor's output: `reset_origin` (the VIO frame snaps back to where it started, signalled
+through ODOMETRY `reset_counter` unless `signal: false`), `restart` (a gap, then that snap),
+`silence` (nothing sent), `freeze` (the same position, zero velocity, still on time) and
+`drift` (a slow ramp). The trace gains a `resets` column, and `verify_trace` replays the
+faults from the profile. Each fault ships as a pair, `field_<fault>_at_engage` for the hold
+runner and `field_<fault>_at_hover` for the stock runner.
 
 ## Notes
 
