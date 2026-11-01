@@ -11,6 +11,7 @@ Full reasoning: the Structure Hold build plan and execution plan (project docs, 
 | Out of scope: VIO/SLAM, mapping, planning, obstacle avoidance, ground station, vision in the policy | Decided | 2026-10-21 | Use the drone's existing position source; accept position + covariance |
 | Classical watchdog (no learning) hands back to stock PX4 on any trip | Decided | 2026-10-21 | Non-negotiable for buyers' safety review |
 | Every result compared against tuned PX4 (`eval/baselines/px4_tuned_v1.params`), measured before any RL | Decided | 2026-10-21 | The benchmark is the asset |
+| Start a second capability, Route Follow (`docs/route-follow.md`): fly an operator-given route (PX4 mission waypoints) through tunnels and corridors without GPS, tracking a target that moves along the route on the existing position estimate, with optional 1D rangefinders to keep off the walls. Structure Hold stays the product and is unchanged. Route planning, mapping and obstacle avoidance stay out of scope: the route is fixed before flight | Decided | 2026-11-01 | Zain asked how to go beyond holding next to a structure and left the call to us ("whatever you think is best", 2026-11-01). It does not amend the 2026-10-21 one-flight-mode row: Route Follow becomes a module mode only if it beats tuned PX4 Mission mode in Gazebo, in a row of its own. Mock work runs on CPU now; full training waits for the GPU server. Revisit if it takes time from Structure Hold's gates |
 
 ## Technical
 

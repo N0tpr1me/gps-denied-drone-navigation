@@ -7,6 +7,11 @@ A small learned outer loop (RL, PPO) commands body rates + collective thrust to 
 rate controller. Customers: small/mid PX4 drone makers selling into civilian inspection.
 Every result is measured against a properly tuned stock PX4.
 
+**Route Follow** (second capability, started 2026-11-01, `docs/route-follow.md`): fly an
+operator-given route (PX4 mission waypoints) through tunnels and corridors on the same
+estimate, tracking a target moving along the route, with optional 1D rangefinders to keep
+off the walls. Mock and CPU only until the GPU server is up; Structure Hold is unchanged.
+
 Out of scope (docs/decisions.md): VIO/SLAM, mapping, planning, obstacle avoidance, ground
 station, vision in the policy. The module consumes the drone's existing position estimate.
 
@@ -70,7 +75,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker) |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker), `route-follow.md` (the second capability: route flying through tunnels and corridors) |
 
 ## Conventions (details in docs/conventions.md)
 
