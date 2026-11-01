@@ -131,6 +131,27 @@ hand-written controller does with the same sensors. Every mock result is reporte
 both. In SITL: stock PX4 Mission mode with the tuned parameters
 (`eval/baselines/px4_tuned_v1.params`) flying the same waypoints through the same estimate.
 
+## First results (mock, 2026-11-01)
+
+v0, the first policy: 30 minutes of PPO on the cloud container's 4 CPU cores (1024 drones,
+1000 iterations, run `20261101-174152`), rangefinders present on 70 % of the beams in
+training. Scored on 256 new routes per set (run `20261101-181304`; the yardsticks alone in
+run `20261101-173858`), x500 as SITL flies it, true position:
+
+| Set | v0 cross-track p95 | PD | PD + centring | v0 / PD / PD + centring done | crashes |
+| --- | --- | --- | --- | --- | --- |
+| corridor, no rangefinders | 0.28 m | 0.36 m | 0.36 m | 93 / 88 / 88 % | 1 / 4 / 4 % |
+| corridor, rangefinders | 0.24 m | 0.39 m | 0.34 m | 94 / 89 / 92 % | 3 / 4 / 3 % |
+| tunnel, no rangefinders | 0.26 m | 0.35 m | 0.35 m | 93 / 87 / 87 % | 3 / 7 / 7 % |
+| tunnel, rangefinders | 0.24 m | 0.36 m | 0.33 m | 97 / 86 / 92 % | 1 / 7 / 5 % |
+
+So v0 follows the route 22 to 38 % tighter than the PD on the estimate alone and 21 to 29 %
+tighter than the PD that centres on the walls, and finishes more routes. The crashes are
+contacts after estimate jumps in narrow corridors; at 256 routes a set, 1 to 7 % is 3 to 18
+flights, so the crash numbers are rough. This is the mock only: the lesson from Structure
+Hold is that the mock alone does not predict Gazebo, so nothing is claimed until a Gazebo
+tunnel flight against tuned PX4 Mission mode.
+
 ## Plan, and what needs the GPU server
 
 1. **Now, no GPU:** this design, the tunnel and corridor envs, the classical baselines and a

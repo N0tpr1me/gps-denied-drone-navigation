@@ -1,8 +1,7 @@
-# Route Follow v0 (run 20261101-174152, first CPU run) against the classical yardsticks on Route Follow (docs/route-follow.md): cascaded PD on the
-# estimate (the shape of PX4's position controller) and PD with range centring, on the x500
-# as SITL flies it, in corridors and tunnels, with and without rangefinders. Give
-# params.policy (a policy.onnx) to score a policy on the same conditions.
-#   python -m training.launch --config eval/configs/route_follow_baseline.yaml --device cpu
+# Route Follow v0 (run 20261101-174152, the first 30 min CPU run; its policy lives only in
+# that run folder) against the classical yardsticks, on the same four sets as
+# eval/configs/route_follow_baseline.yaml (docs/route-follow.md, "First results").
+#   python -m training.launch --config eval/configs/route_follow_v0.yaml --device cpu
 name: route_follow_v0
 entrypoint: eval.route_follow
 seed: 7300
