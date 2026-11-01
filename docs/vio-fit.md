@@ -149,6 +149,70 @@ on a mix of the fitted and the standard corruption. Gate 2 (v19 against tuned PX
 `docs/baseline.md`) is not touched by this: it ran on the standard corruption, and tuned
 PX4's own numbers there are far looser than this PD's.
 
+## v22 and v19 under the Basalt fit
+
+The same re-check with the second fit's numbers (noise 0, velocity noise 0.018 m/s, walk
+0.009 m/sqrt(s), cap 0.19 m, jumps 0.1 to 0.4 m at 0.01 Hz that stay; delay and dropouts
+kept), for v22 (released) with v19 alongside, against the cascaded PD on the same episodes.
+The mock has no tuned PX4: that comparison exists only in Gazebo, on the standard corruption
+(`docs/baseline.md`: v22 -54 to -55 % p95 against tuned PX4, v19 -47 to -48 %).
+
+Gate 1 x500 test set through the fusion (`eval/configs/gate1_x500_ekf_basalt_fit_v22.yaml`,
+run `20261101-020237`, 3072 paired episodes per cell):
+
+| Cell (wind, hold distance) | v22 p95 | v19 p95 | PD p95 | v22 vs PD |
+| --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.177 | 0.219 | 0.190 | -7 % |
+| 0 m/s, 2 m | 0.178 | 0.220 | 0.195 | -9 % |
+| 4 m/s, 1 m | 0.179 | 0.220 | 0.200 | -11 % |
+| 4 m/s, 2 m | 0.183 | 0.222 | 0.222 | -18 % |
+| 8 m/s, 1 m (headline) | 0.192 | 0.226 | 0.252 | -24 % |
+| 8 m/s, 2 m | 0.214 | 0.239 | 0.328 | -35 % |
+| Pooled | 0.187 | 0.224 | 0.231 | -19 % |
+
+No crashes for v22 or the PD; v19 crashed in 5 of 18,432 episodes. v22 beats the PD in every cell, with
+confidence intervals clear of zero; 5 of 6 cells pass the Gate 1 rules, the headline cell
+misses the -30 % bar (-24 %). v19 loses to the PD in calm and light wind, as under the first
+fit. So v22 fixed what the first re-check found: the time-since-engage input removed the slow
+settle (`docs/hold-offset.md`), and v22 now holds tighter than the PD even when the estimate
+is good, not only when it is bad.
+
+Stress set (`eval/configs/gate1_x500_ekf_stress_basalt_fit_v22.yaml`, run `20261101-023637`,
+1536 paired episodes per cell, each cell one change from the fitted base):
+
+| Cell | v22 p95 | v19 p95 | PD p95 | v22 vs PD |
+| --- | --- | --- | --- | --- |
+| nominal | 0.184 | 0.224 | 0.218 | pass |
+| mass x0.7 / x1.5 | 0.192 / 0.180 | 0.228 / 0.221 | 0.244 / 0.201 | pass |
+| hover thrust error +/-15 % | 0.186 | 0.224 | 0.346 | pass |
+| thrust/weight 1.5 | 0.184 | 0.225 | 0.218 | pass |
+| inertia x0.5 / x2 | 0.184 / 0.187 | 0.226 / 0.228 | 0.219 / 0.217 | pass |
+| motor lag 50 ms (80 ms outside) | 0.185 (0.188) | 0.218 (0.215) | 0.218 (0.217) | pass |
+| delay 150-250 ms (250-350 outside) | 0.191 (0.208) | 0.236 (0.255) | 0.222 (0.238) | pass |
+| **dropouts 2-3 s, IMU error 0.1** | **0.442** | 0.421 | **0.366** | **fail (+21 %)** |
+| (dropouts 3-5 s, outside) | 0.813 | 0.797 | 0.700 | crash 11.5 / 10.7 / 8.4 % |
+| wall yaw moment 25 / 50 % (100 % outside) | 0.184 / 0.184 (0.185) | 0.224 | 0.218 | pass |
+| combined, moderate | 0.186 | 0.224 | 0.283 | pass |
+| Pooled (13 envelope cells) | 0.205 | 0.240 | 0.245 | 12/13 |
+
+Crashes pooled: v22 0.04 %, v19 0.08 %, PD 0.03 %. The one miss is the capped dropout cell.
+Under the standard corruption v22 and v19 passed it (v19 0.44 vs PD 0.48 m, run
+`20261024-141925`); here the PD tightens to 0.37 m while v22 stays at 0.44 m. The policy's
+error while the fix is out is set by the dead-reckoning drift, which the fit does not change,
+so it does not gain from the cleaner estimate around the gaps; the PD, whose standard-model
+error was mostly chasing jumps and noise, does. Two things to keep in mind: no flight in
+either fit lost tracking, so this cell's dropouts are the standard model's, not measured; and
+the 3 to 5 s cell stays the known estimator limit where the 5 s watchdog takes over.
+
+Neither run is a new gate: Gate 1 stays judged on the standard corruption, where v22 passed
+(13/13 stress). What this adds is that v22's lead over the PD holds on a realistic estimate in
+every nominal cell, and that dead-reckoning through a 2 to 3 s dropout is the place where a
+simple controller does as well or better once the estimate is clean. That is the input for
+the next policy's training mix (fitted plus standard corruption, `docs/decisions.md`).
+
+The stress run took 73 min on the 4 cloud cores, over its 0.9 h estimate and over the 1 h
+limit; its config now says 1.25 h, so a re-run needs a go-ahead or a split into two halves.
+
 ## What is still open
 
 - **More raw datasets.** The second fit (Basalt on five EuRoC Vicon flights) added
