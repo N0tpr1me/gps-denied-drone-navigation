@@ -8,7 +8,7 @@
 name: structure_hold_eval_v22
 entrypoint: training.eval_policy
 seed: 1
-expected_hours: 0.5  # 8 min on 4 free CPU cores; the first run, sharing them with pytest, took over 36
+expected_hours: 0.5  # 8 min on 4 free CPU cores (36+ min when pytest shared them)
 gpus: 1
 params:
   policy: training/policies/structure_hold_v22.onnx
