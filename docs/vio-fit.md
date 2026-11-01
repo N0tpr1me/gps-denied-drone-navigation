@@ -59,6 +59,72 @@ The first 10 s of each flight (VIO start-up and take-off) are left out. Run
 In short: the made-up model was right about drift when hovering, pessimistic about noise and
 jumps, and somewhat optimistic about how far drift can build up over a minute.
 
+## Second fit: Basalt on raw EuRoC (2026-11-01)
+
+Our own VIO run on the raw dataset, on the Mac: Basalt (TUM, stereo-inertial, the EuRoC
+calibration and config shipped with it) built in Docker for arm64 (`eval/vio_basalt/`,
+pinned commit, patched to also write its velocity), run offline on the EuRoC ASL images and
+IMU, scored against the dataset's own `state_groundtruth_estimate0` by
+`eval/configs/vio_fit_basalt_euroc.yaml`. Ten of the eleven flights: all five machine-hall
+flights (Leica laser-tracker truth) and five Vicon-room flights; V2_01 never came through the
+ETH Research Collection's rate limit. Same fit settings as the first fit (first 10 s
+skipped). Run `20261101-035741_vio_fit_basalt_euroc_s0_be13ede` (`experiments/LOG.md`),
+1135 s of VIO. (A first pass on the five Vicon flights only, run
+`20261101-015732_vio_fit_basalt_euroc_s0_b49b1dc`, gave walk 0.009, cap 0.19 m, velocity
+noise 0.018 m/s and jumps at 0.010 Hz; the re-check in the next-but-one section uses those.)
+
+| Flight | ATE (m) | Mean speed (m/s) | Drift at 60 s, rms per axis (m) | Jumps | Gaps |
+| --- | --- | --- | --- | --- | --- |
+| MH_01_easy | 0.066 | 0.45 | 0.063 | 0 | 0 |
+| MH_02_easy | 0.069 | 0.50 | 0.064 | 0 | 0 |
+| MH_03_medium | 0.062 | 1.05 | 0.061 | 0 | 0 |
+| MH_04_difficult | 0.115 | 1.00 | 0.128 | 1 | 0 |
+| MH_05_difficult | 0.143 | 0.94 | 0.155 | 0 | 0 |
+| V1_01_easy | 0.045 | 0.43 | 0.041 | 0 | 0 |
+| V1_02_medium | 0.046 | 0.97 | 0.051 | 0 | 0 |
+| V1_03_difficult | 0.055 | 0.80 | 0.054 | 0 | 0 |
+| V2_02_medium | 0.045 | 0.73 | 0.045 | 0 | 0 |
+| V2_03_difficult | 0.254 | 0.79 | 0.176 | 5 | 0 |
+
+Tracking: no flight lost tracking or reset, and no flight has a gap in the VIO output. The
+hard flights cost accuracy, not tracking: MH_04 and MH_05 (fast, dark parts of the hall) are
+2 to 3 times the easy flights' error, and V2_03 (fast, with motion blur) five times; five of
+the six jumps come from V2_03.
+
+| Field | Current default | First fit (RPG examples) | Second fit (Basalt) | Reading |
+| --- | --- | --- | --- | --- |
+| Bias walk | 0.01 m/sqrt(s) | 0.010 near hover; 0.021 every window | 0.009 every window; 0.004 near hover (2 flights reach 20 s) | Agrees with the default and the first fit; a hovering Basalt drifts less still. |
+| Bias cap | 0.3 m | 0.41 m | 0.19 m | Every window, all ten flights reach 60 s. Basalt drifts less than the RPG example VIOs; the three hard flights make most of it. |
+| Position noise | 0.02 m | 0.001 m | 0.000 m | Smooth output again; the default stays pessimistic. |
+| Velocity noise | 0.05 m/s | not in the data | 0.017 m/s | New: Basalt writes its velocity. The default is about 3 times rougher. |
+| Jumps | 0.1 to 2 m at 0.02 Hz, decay 5 s | 0.1 to 0.2 m at 0.002 Hz, decay 9 s | 0.1 to 0.4 m at 0.005 Hz, no decay | Six in 1135 s, five in V2_03. They do not come back: a jump here is a lasting shift, not a blip. |
+| Dropouts | 0.2 to 3 s at 0.02 Hz | none seen | none seen | Offline, so no frame is ever dropped for time; kept. |
+| Delay | 50 to 150 ms | not measurable | see processing time below | Still not measured as latency; the processing time bounds part of it. |
+
+| Drift since engage, rms per axis (m) | 0.5 s | 1 s | 5 s | 20 s | 60 s |
+| --- | --- | --- | --- | --- | --- |
+| Basalt, every window | 0.008 | 0.013 | 0.034 | 0.064 | 0.085 |
+| Basalt, near-hover windows | 0.004 | 0.005 | 0.010 | 0.015 | (one flight) |
+| Fitted model (every window) | 0.006 | 0.009 | 0.020 | 0.039 | 0.068 |
+| Current default | 0.029 | 0.030 | 0.036 | 0.053 | 0.082 |
+
+**Processing time** (`stats_sums` from Basalt, 24,767 frames, one container on an Apple M4
+with 8 CPUs given to Docker): the back end (the sliding-window optimiser, from new tracked
+features to the state estimate) takes a median of 2.6 ms per frame, 95th percentile 6.1 ms,
+99th 8.6 ms, worst 25.8 ms. Per flight the median ranges from 1.3 to 3.5 ms and the 95th
+percentile from 3.6 to 7.8 ms (the machine hall, with more features, is the slower end). The
+whole pipeline, front end (optical flow) and image loading included, ran at 4.4 to 6.4 ms per
+frame on average (10 to 23 s per flight). So on this hardware the VIO itself adds only a few
+milliseconds; the 50 to 150 ms default delay would have to come from the camera, the
+transport into PX4 and EKF2's own buffering, not from the VIO. A small companion computer is
+several times slower than an M4, so this is a floor.
+
+What the two fits agree on: drift near 0.01 m/sqrt(s), smooth output, and fewer, smaller
+jumps than the default. Where they differ is the 60 s cap (0.19 m here, 0.41 m from the RPG
+examples, which include a monocular VIO). Adding the machine hall moved nothing but the jump
+rate (0.010 to 0.005 Hz) and the velocity noise (0.018 to 0.017 m/s). The defaults are not
+changed by this page; any change to `envs/estimate` defaults is its own decision.
+
 ## v19 under the fitted model
 
 `eval/configs/gate1_x500_ekf_vio_fit_v19.yaml` flies the Gate 1 x500 test set through the
@@ -93,13 +159,75 @@ on a mix of the fitted and the standard corruption. Gate 2 (v19 against tuned PX
 `docs/baseline.md`) is not touched by this: it ran on the standard corruption, and tuned
 PX4's own numbers there are far looser than this PD's.
 
+## v22 and v19 under the Basalt fit
+
+The same re-check with the second fit's numbers (noise 0, velocity noise 0.018 m/s, walk
+0.009 m/sqrt(s), cap 0.19 m, jumps 0.1 to 0.4 m at 0.01 Hz that stay; delay and dropouts
+kept), for v22 (released) with v19 alongside, against the cascaded PD on the same episodes.
+The mock has no tuned PX4: that comparison exists only in Gazebo, on the standard corruption
+(`docs/baseline.md`: v22 -54 to -55 % p95 against tuned PX4, v19 -47 to -48 %).
+
+Gate 1 x500 test set through the fusion (`eval/configs/gate1_x500_ekf_basalt_fit_v22.yaml`,
+run `20261101-020237`, 3072 paired episodes per cell):
+
+| Cell (wind, hold distance) | v22 p95 | v19 p95 | PD p95 | v22 vs PD |
+| --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.177 | 0.219 | 0.190 | -7 % |
+| 0 m/s, 2 m | 0.178 | 0.220 | 0.195 | -9 % |
+| 4 m/s, 1 m | 0.179 | 0.220 | 0.200 | -11 % |
+| 4 m/s, 2 m | 0.183 | 0.222 | 0.222 | -18 % |
+| 8 m/s, 1 m (headline) | 0.192 | 0.226 | 0.252 | -24 % |
+| 8 m/s, 2 m | 0.214 | 0.239 | 0.328 | -35 % |
+| Pooled | 0.187 | 0.224 | 0.231 | -19 % |
+
+No crashes for v22 or the PD; v19 crashed in 5 of 18,432 episodes. v22 beats the PD in every cell, with
+confidence intervals clear of zero; 5 of 6 cells pass the Gate 1 rules, the headline cell
+misses the -30 % bar (-24 %). v19 loses to the PD in calm and light wind, as under the first
+fit. So v22 fixed what the first re-check found: the time-since-engage input removed the slow
+settle (`docs/hold-offset.md`), and v22 now holds tighter than the PD even when the estimate
+is good, not only when it is bad.
+
+Stress set (`eval/configs/gate1_x500_ekf_stress_basalt_fit_v22.yaml`, run `20261101-023637`,
+1536 paired episodes per cell, each cell one change from the fitted base):
+
+| Cell | v22 p95 | v19 p95 | PD p95 | v22 vs PD |
+| --- | --- | --- | --- | --- |
+| nominal | 0.184 | 0.224 | 0.218 | pass |
+| mass x0.7 / x1.5 | 0.192 / 0.180 | 0.228 / 0.221 | 0.244 / 0.201 | pass |
+| hover thrust error +/-15 % | 0.186 | 0.224 | 0.346 | pass |
+| thrust/weight 1.5 | 0.184 | 0.225 | 0.218 | pass |
+| inertia x0.5 / x2 | 0.184 / 0.187 | 0.226 / 0.228 | 0.219 / 0.217 | pass |
+| motor lag 50 ms (80 ms outside) | 0.185 (0.188) | 0.218 (0.215) | 0.218 (0.217) | pass |
+| delay 150-250 ms (250-350 outside) | 0.191 (0.208) | 0.236 (0.255) | 0.222 (0.238) | pass |
+| **dropouts 2-3 s, IMU error 0.1** | **0.442** | 0.421 | **0.366** | **fail (+21 %)** |
+| (dropouts 3-5 s, outside) | 0.813 | 0.797 | 0.700 | crash 11.5 / 10.7 / 8.4 % |
+| wall yaw moment 25 / 50 % (100 % outside) | 0.184 / 0.184 (0.185) | 0.224 | 0.218 | pass |
+| combined, moderate | 0.186 | 0.224 | 0.283 | pass |
+| Pooled (13 envelope cells) | 0.205 | 0.240 | 0.245 | 12/13 |
+
+Crashes pooled: v22 0.04 %, v19 0.08 %, PD 0.03 %. The one miss is the capped dropout cell.
+Under the standard corruption v22 and v19 passed it (v19 0.44 vs PD 0.48 m, run
+`20261024-141925`); here the PD tightens to 0.37 m while v22 stays at 0.44 m. The policy's
+error while the fix is out is set by the dead-reckoning drift, which the fit does not change,
+so it does not gain from the cleaner estimate around the gaps; the PD, whose standard-model
+error was mostly chasing jumps and noise, does. Two things to keep in mind: no flight in
+either fit lost tracking, so this cell's dropouts are the standard model's, not measured; and
+the 3 to 5 s cell stays the known estimator limit where the 5 s watchdog takes over.
+
+Neither run is a new gate: Gate 1 stays judged on the standard corruption, where v22 passed
+(13/13 stress). What this adds is that v22's lead over the PD holds on a realistic estimate in
+every nominal cell, and that dead-reckoning through a 2 to 3 s dropout is the place where a
+simple controller does as well or better once the estimate is clean. That is the input for
+the next policy's training mix (fitted plus standard corruption, `docs/decisions.md`).
+
+The stress run took 73 min on the 4 cloud cores, over its 0.9 h estimate and over the 1 h
+limit; its config now says 1.25 h, so a re-run needs a go-ahead or a split into two halves.
+
 ## What is still open
 
-- **An own VIO run on the raw datasets.** With the hosts allowed (`research-collection.ethz.ch`
-  for EuRoC, `rpg.ifi.uzh.ch` for UZH-FPV, `cdn3.vision.in.tum.de` for TUM-VI), run an
-  open-source VIO (OpenVINS or Basalt) in the cloud. That adds what this fit lacks: latency
-  (processing time per frame), VIO velocity, tracking loss on the hard sequences (UZH-FPV's
-  fast flight, TUM-VI's dark rooms and outdoor parts), and a second and third VIO.
+- **More raw datasets.** The second fit (Basalt on ten EuRoC flights) added processing time
+  and VIO velocity. Still missing: EuRoC V2_01, tracking loss on genuinely hard data (UZH-FPV's fast flight, TUM-VI's dark rooms and outdoor parts,
+  `rpg.ifi.uzh.ch` and `cdn3.vision.in.tum.de`), and a third VIO (OpenVINS).
 - **Hover is under-sampled.** Dataset flights move most of the time; only 10 to 45 % of each
   flight is near hover, and 60 s near-hover windows exist in one flight only.
 - **A wall at 1 to 3 m.** No dataset flies a VIO this close to one surface. The first

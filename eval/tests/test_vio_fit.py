@@ -114,3 +114,19 @@ def test_tum_loader_reads_velocity_columns(tmp_path):
     traj = vio_fit.load_tum(path)
     assert traj.t.tolist() == [1.0, 2.0]
     assert traj.vel is not None and traj.vel[0].tolist() == [0.1, 0.2, 0.3]
+
+
+def test_euroc_csv_loader_reads_ns_and_velocity(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_text("#timestamp,p_x,p_y,p_z,q_w,q_x,q_y,q_z,v_x,v_y,v_z,bw_x,bw_y,bw_z,ba_x,ba_y,ba_z\n"
+                    "1000000000,1,2,3,1,0,0,0,0.1,0.2,0.3,0,0,0,0,0,0\n"
+                    "2000000000,1,2,3,1,0,0,0,0.1,0.2,0.3,0,0,0,0,0,0\n")
+    traj = vio_fit.load_euroc_csv(path)
+    assert traj.t.tolist() == [1.0, 2.0]
+    assert traj.pos[0].tolist() == [1.0, 2.0, 3.0]
+    assert traj.vel is not None and traj.vel[1].tolist() == [0.1, 0.2, 0.3]
+
+
+def test_dir_source_resolves_inside_the_repo(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        vio_fit.ensure_source({"name": "x", "dir": "runs/no_such_folder_for_test"})

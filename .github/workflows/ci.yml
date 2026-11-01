@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A new push to a PR branch cancels that branch's older run; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   python:
@@ -12,7 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         # 3.10 to 3.12: the core must import in Isaac Lab, the SITL image and the Mac.
-        python-version: ["3.10", "3.11", "3.12"]
+        # PRs (the merge gate) run all three; the after-merge run on main runs 3.11 only,
+        # to stay inside the monthly Actions minutes.
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.10", "3.11", "3.12"]' || '["3.11"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -67,5 +75,17 @@ jobs:
           g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
               -I../structure_hold test_wall_guard.cpp -o test_wall_guard
           ./test_wall_guard
+      - name: Parameter limit unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../structure_hold test_params.cpp -o test_params
+          ./test_params
+      - name: Handback sequence unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../structure_hold test_handback.cpp -o test_handback
+          ./test_handback
       - name: Shell scripts parse
         run: bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh

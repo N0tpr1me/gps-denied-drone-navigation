@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 
 using namespace structure_hold;
 
@@ -317,6 +318,180 @@ int main()
 		CHECK(a[2] > 0.f);
 		// Thrust: the vehicle is level, so the demanded vertical force is exactly the weight.
 		CHECK(near(a[3], 2.f * policy::MASS_KG * GRAVITY_MPS2 / policy::MAX_THRUST_N - 1.f, 1e-5f));
+	}
+
+	// 10. Re-engage mid-flight (mid-gust: moving, tilted, after a long hold with a full
+	//     history and a nonzero last action): the second engage must forget everything, so
+	//     the first output after it is bit for bit what a fresh controller gives on the same
+	//     sample. Nothing of the previous hold (history, last action, frame) leaks in.
+	{
+		PolicyController used{};
+		used.engage(&testvec::HOLD_NED[0], testvec::STRUCTURE_YAW_NED);
+
+		for (int k = 0; k < testvec::N; k++) {
+			used.step(sampleOf(k), 0.f, 0.5f);
+		}
+
+		VehicleSample gust = sampleOf(testvec::N - 1);
+		gust.vel_ned[0] = 1.2f;   // blown toward the wall at re-engage
+		gust.vel_ned[1] = -0.6f;
+		gust.rates_frd[0] = 0.8f;
+		gust.stale = false;
+		gust.age_s = 0.f;
+		gust.engage_s = 0.f;
+		const float hold[3] = {gust.pos_ned[0], gust.pos_ned[1], gust.pos_ned[2]};
+		const float yaw = testvec::STRUCTURE_YAW_NED + 0.3f;  // a different heading this time
+		used.engage(hold, yaw);
+		PolicyController fresh{};
+		fresh.engage(hold, yaw);
+		bool identical = true;
+
+		// Several ticks: the history refills the same way in both.
+		for (int t = 0; t < policy::HISTORY + 3; t++) {
+			gust.engage_s = 0.012f * static_cast<float>(t);
+			const PolicyOutput a = used.step(gust, 0.f, 0.5f);
+			const PolicyOutput b = fresh.step(gust, 0.f, 0.5f);
+
+			for (int i = 0; i < 4; i++) { identical = identical && same(a.action[i], b.action[i]); }
+
+			identical = identical && same(a.setpoint.thrust, b.setpoint.thrust);
+		}
+
+		CHECK(identical);
+		// The first observation after engage starts from zero position error and no action.
+		PolicyController again{};
+		again.engage(hold, yaw);
+		gust.engage_s = 0.f;
+		again.step(gust, 0.f, 0.5f);
+		const float *obs = again.lastObservation();
+
+		for (int i = 0; i < 3; i++) { CHECK(same(obs[policy::OBS_POS_ERR + i], 0.f)); }
+
+		for (int i = 0; i < 4; i++) { CHECK(same(obs[policy::OBS_LAST_ACTION + i], 0.f)); }
+
+		if (policy::HAS_ENGAGE_TIME) { CHECK(same(obs[policy::OBS_ENGAGE_TIME], 0.f)); }
+	}
+
+	// 11. Engage time input: 0 at engage, linear, capped at 1 from ENGAGE_OBS_CAP_S on, and a
+	//     clock that runs backwards (or a NaN) never leaves [0, 1].
+	if (policy::HAS_ENGAGE_TIME) {
+		StructureFrame f{};
+		const float zero[4] = {0.f, 0.f, 0.f, 0.f};
+		float obs[policy::NUM_OBS];
+		VehicleSample s{};
+		const float times[] = {0.f, 1.f, policy::ENGAGE_OBS_CAP_S, 100.f, -3.f, NAN};
+		const float expect[] = {0.f, 1.f / policy::ENGAGE_OBS_CAP_S, 1.f, 1.f, 0.f, 0.f};
+
+		for (int i = 0; i < 6; i++) {
+			s.engage_s = times[i];
+			buildObservation(f, s, zero, obs);
+			CHECK(near(obs[policy::OBS_ENGAGE_TIME], expect[i], 1e-6f));
+		}
+	}
+
+	// 12. Garbage in, finite setpoint out: NaN / inf in every input the module passes (a
+	//     broken estimate or attitude, NaN hover thrust) never produces a non-finite rate or
+	//     thrust, with or without the fallback. The module trips on such an estimate first
+	//     (EstimateInvalid / Tilt); this is the layer under that.
+	{
+		const float bad[] = {NAN, INFINITY, -INFINITY, 1e30f};
+
+		for (float b : bad) {
+			for (int fb = 0; fb < 2; fb++) {
+				for (int field = 0; field < 6; field++) {
+					PolicyController ctl{};
+					FallbackRule rule{};
+					rule.enabled = true;
+					rule.forced = fb != 0;
+					ctl.setRule(rule);
+					ctl.engage(&testvec::HOLD_NED[0], testvec::STRUCTURE_YAW_NED);
+					VehicleSample s = sampleOf(0);
+					float hover = 0.5f;
+
+					switch (field) {
+					case 0: s.pos_ned[0] = b; break;
+
+					case 1: s.vel_ned[2] = b; break;
+
+					case 2: s.R[2][2] = b; s.R[0][0] = b; break;
+
+					case 3: s.rates_frd[1] = b; break;
+
+					case 4: s.age_s = b; s.engage_s = b; break;
+
+					default: hover = b; break;
+					}
+
+					for (int t = 0; t < 3; t++) {
+						const PolicyOutput o = ctl.step(s, 0.f, hover);
+						bool finite = std::isfinite(o.setpoint.thrust);
+
+						for (int i = 0; i < 3; i++) { finite = finite && std::isfinite(o.setpoint.rates_frd[i]); }
+
+						for (int i = 0; i < 4; i++) { finite = finite && std::isfinite(o.action[i]); }
+
+						CHECK(finite);
+						CHECK(o.setpoint.thrust >= 0.08f && o.setpoint.thrust <= 0.9f);
+					}
+				}
+			}
+		}
+
+		// sanitizeSetpoint on its own: replaces only what is broken.
+		float rates[3] = {0.5f, NAN, -INFINITY};
+		float thrust = NAN;
+		CHECK(!sanitizeSetpoint(rates, thrust, 0.42f, 0.08f, 0.9f));
+		CHECK(same(rates[0], 0.5f) && same(rates[1], 0.f) && same(rates[2], 0.f) && same(thrust, 0.42f));
+		thrust = NAN;
+		CHECK(!sanitizeSetpoint(rates, thrust, NAN, 0.08f, 0.9f));
+		CHECK(same(thrust, 0.5f));
+		thrust = 0.3f;
+		CHECK(sanitizeSetpoint(rates, thrust, 0.42f, 0.08f, 0.9f) && same(thrust, 0.3f));
+	}
+
+	// 13. Fallback threshold: off just below T_FB, on at T_FB (to the microsecond the module
+	//     resolves), and a long dropout keeps it on.
+	{
+		PolicyController ctl{};
+		FallbackRule rule{};
+		rule.enabled = true;
+		rule.threshold_s = 0.5f;
+		ctl.setRule(rule);
+		ctl.engage(&testvec::HOLD_NED[0], testvec::STRUCTURE_YAW_NED);
+		const VehicleSample s = sampleOf(0);
+		CHECK(!ctl.step(s, 0.498f, 0.5f).fallback_active);
+		CHECK(ctl.step(s, 0.5f, 0.5f).fallback_active);
+		CHECK(ctl.step(s, 0.4999995f, 0.5f).fallback_active);
+		CHECK(ctl.step(s, 30.f, 0.5f).fallback_active);
+		CHECK(!ctl.step(s, 0.f, 0.5f).fallback_active);  // first fresh fix: the policy flies again
+	}
+
+	// 14. CPU budget on this machine (informational; the flight controller's number comes
+	//     from `structure_hold bench`, docs/bench-test.md). One step = observation, history
+	//     shift and the MLP: about 24.5k multiply-adds for v19/v22's 315-64-64-4 network.
+	{
+		PolicyController ctl{};
+		ctl.engage(&testvec::HOLD_NED[0], testvec::STRUCTURE_YAW_NED);
+		const int n = 20000;
+		float sink = 0.f;
+		const std::clock_t t0 = std::clock();
+
+		for (int i = 0; i < n; i++) {
+			const PolicyOutput o = ctl.step(sampleOf(i % testvec::N), 0.f, 0.5f);
+			sink += o.setpoint.thrust;
+		}
+
+		const double us = 1e6 * static_cast<double>(std::clock() - t0) / CLOCKS_PER_SEC / n;
+		long macs = 0;
+
+		for (int l = 0; l < policy::NET.num_layers; l++) {
+			macs += static_cast<long>(policy::NET.layers[l].in) * policy::NET.layers[l].out;
+		}
+
+		std::printf("policy step on this host: %.1f us mean over %d steps, %ld multiply-adds (check %.1f)\n", us, n,
+			    macs, static_cast<double>(sink));
+		CHECK(macs < 40000);  // a bigger network needs a new look at the flight controller budget
+		CHECK(us < 1000.0);   // a tenth of the 10 ms tick, as the bench test flags
 	}
 
 	if (failures == 0) {

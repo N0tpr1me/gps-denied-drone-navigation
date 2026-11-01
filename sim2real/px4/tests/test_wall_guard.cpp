@@ -153,6 +153,87 @@ int main()
 		}
 	}
 
+	// More of what real drivers and links send (MAVLink DISTANCE_SENSOR is centimetres in a
+	// uint16, so 0 and 65535 are common "no reading" values): infinities, zero, negative,
+	// a sensor that left its own min/max unset (0) or NaN, 0 cm. None may move the point.
+	{
+		WallGuard g = guard(0.7f);
+		RangeSample pinf = range(INFINITY);
+		RangeSample ninf = range(-INFINITY);
+		RangeSample zero = range(0.f);
+		RangeSample negative = range(-0.4f);
+		RangeSample max655 = range(655.35f);
+		RangeSample unset_limits = range(0.3f);
+		unset_limits.min_distance_m = 0.f;
+		unset_limits.max_distance_m = 0.f;
+		RangeSample nan_max = range(0.3f);
+		nan_max.max_distance_m = NAN;
+		RangeSample nan_min = range(0.3f);
+		nan_min.min_distance_m = NAN;
+		const RangeSample rejected[] = {pinf, ninf, zero, negative, max655, unset_limits, nan_max, nan_min};
+
+		for (const RangeSample &r : rejected) {
+			float hold[3] = {0.5f, 0.f, -2.5f};
+			const WallGuardOutput o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+			CHECK(!o.range_ok);
+			CHECK(near(hold[0], 0.5f) && near(hold[1], 0.f));
+			CHECK(near(g.totalShift(), 0.f));
+		}
+
+		// Signal quality: -1 (unknown) and 1..100 are used, only 0 (bad) is refused.
+		const int8_t qualities[] = {-1, 1, 50, 100};
+
+		for (int8_t q : qualities) {
+			RangeSample r = range(1.0f);
+			r.signal_quality = q;
+			CHECK(g.usable(r, NOW));
+		}
+
+		// Exactly at the sensor's limits counts (inclusive), just outside does not.
+		CHECK(g.usable(range(0.1f), NOW) && g.usable(range(12.f), NOW));
+		CHECK(!g.usable(range(0.099f), NOW) && !g.usable(range(12.01f), NOW));
+		// Exactly max_age old counts, one microsecond more does not.
+		RangeSample edge = range(1.f);
+		edge.timestamp_us = NOW - 200000;
+		CHECK(g.usable(edge, NOW));
+		edge.timestamp_us -= 1;
+		CHECK(!g.usable(edge, NOW));
+	}
+
+	// A broken estimate or attitude with a good range: no shift, and no NaN written into the
+	// hold point (the watchdog trips on the estimate itself).
+	{
+		const float nan_pos[3] = {NAN, 0.f, -2.5f};
+		const float nan_bx[3] = {NAN, 0.f, 0.f};
+		const float nan_n[2] = {NAN, 0.f};
+
+		for (int which = 0; which < 3; which++) {
+			WallGuard g = guard(0.7f);
+			float hold[3] = {0.5f, 0.f, -2.5f};
+			const WallGuardOutput o = g.apply(range(0.4f), NOW, which == 0 ? nan_pos : origin,
+							  which == 2 ? nan_n : n_north, which == 1 ? nan_bx : bx_north, hold);
+			CHECK(near(o.shift_m, 0.f));
+			CHECK(std::isfinite(hold[0]) && std::isfinite(hold[1]) && near(hold[0], 0.5f));
+			CHECK(near(g.totalShift(), 0.f));
+		}
+	}
+
+	// A burst of short glitches (a bird, spray) after a real back-off: the ratchet keeps the
+	// worst one only, it does not add them up while the vehicle stays where it is.
+	{
+		WallGuard g = guard(0.7f);
+		float hold[3] = {0.f, 0.f, -2.5f};
+		g.apply(range(0.4f), NOW, origin, n_north, bx_north, hold);  // 0.3 m back
+		const float after_first = hold[0];
+
+		for (int i = 0; i < 20; i++) {
+			g.apply(range(0.4f), NOW, origin, n_north, bx_north, hold);
+		}
+
+		CHECK(near(hold[0], after_first));
+		CHECK(near(g.totalShift(), 0.3f));
+	}
+
 	// Guard off (min standoff 0): distances are still reported, the point never moves.
 	{
 		WallGuard g = guard(0.f);
