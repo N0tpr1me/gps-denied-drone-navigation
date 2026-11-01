@@ -59,6 +59,62 @@ The first 10 s of each flight (VIO start-up and take-off) are left out. Run
 In short: the made-up model was right about drift when hovering, pessimistic about noise and
 jumps, and somewhat optimistic about how far drift can build up over a minute.
 
+## Second fit: Basalt on raw EuRoC (2026-11-01)
+
+Our own VIO run on the raw dataset, on the Mac: Basalt (TUM, stereo-inertial, the EuRoC
+calibration and config shipped with it) built in Docker for arm64 (`eval/vio_basalt/`,
+pinned commit, patched to also write its velocity), run offline on the EuRoC ASL images and
+IMU, scored against the dataset's own `state_groundtruth_estimate0` by
+`eval/configs/vio_fit_basalt_euroc.yaml`. Five Vicon-room flights so far (V1_01, V1_02,
+V1_03, V2_02, V2_03): the ETH Research Collection rate-limits downloads hard, and the
+machine-hall flights (MH_01 to MH_05) and V2_01 had not come through when this was run.
+Same fit settings as the first fit (first 10 s skipped). Run
+`20261101-015732_vio_fit_basalt_euroc_s0_b49b1dc` (`experiments/LOG.md`), 512 s of VIO:
+
+| Flight | ATE (m) | Mean speed (m/s) | Drift at 60 s, rms per axis (m) | Jumps | Gaps |
+| --- | --- | --- | --- | --- | --- |
+| V1_01_easy | 0.045 | 0.43 | 0.041 | 0 | 0 |
+| V1_02_medium | 0.046 | 0.97 | 0.051 | 0 | 0 |
+| V1_03_difficult | 0.055 | 0.80 | 0.054 | 0 | 0 |
+| V2_02_medium | 0.045 | 0.73 | 0.045 | 0 | 0 |
+| V2_03_difficult | 0.254 | 0.79 | 0.176 | 5 | 0 |
+
+Tracking: no flight lost tracking or reset, and no flight has a gap in the VIO output.
+V2_03 (fast, with motion blur) is the weak one: Basalt keeps going but its error is
+five times the others', and all five jumps come from it.
+
+| Field | Current default | First fit (RPG examples) | Second fit (Basalt) | Reading |
+| --- | --- | --- | --- | --- |
+| Bias walk | 0.01 m/sqrt(s) | 0.010 near hover; 0.021 every window | 0.009 every window; 0.006 near hover (short windows only) | Agrees with the default and the first fit: drift when hovering is about 0.01 m/sqrt(s). |
+| Bias cap | 0.3 m | 0.41 m | 0.19 m | Every window, all five flights reach 60 s. Basalt drifts less than the RPG example VIOs; V2_03 alone makes most of it. |
+| Position noise | 0.02 m | 0.001 m | 0.000 m | Smooth output again; the default stays pessimistic. |
+| Velocity noise | 0.05 m/s | not in the data | 0.018 m/s | New: Basalt writes its velocity. The default is about 3 times rougher. |
+| Jumps | 0.1 to 2 m at 0.02 Hz, decay 5 s | 0.1 to 0.2 m at 0.002 Hz, decay 9 s | 0.1 to 0.4 m at 0.010 Hz, no decay | All in V2_03. They do not come back: a jump here is a lasting shift, not a blip. |
+| Dropouts | 0.2 to 3 s at 0.02 Hz | none seen | none seen | Offline, so no frame is ever dropped for time; kept. |
+| Delay | 50 to 150 ms | not measurable | see processing time below | Still not measured as latency; the processing time bounds part of it. |
+
+| Drift since engage, rms per axis (m) | 0.5 s | 1 s | 5 s | 20 s | 60 s |
+| --- | --- | --- | --- | --- | --- |
+| Basalt, every window | 0.009 | 0.014 | 0.035 | 0.058 | 0.081 |
+| Basalt, near-hover windows | 0.005 | 0.007 | 0.023 | (too few) | (too few) |
+| Fitted model (every window) | 0.006 | 0.009 | 0.020 | 0.040 | 0.069 |
+| Current default | 0.029 | 0.030 | 0.036 | 0.053 | 0.082 |
+
+**Processing time** (`stats_sums` from Basalt, 11,040 frames, one container on an Apple M4
+with 8 CPUs given to Docker): the back end (the sliding-window optimiser, from new tracked
+features to the state estimate) takes a median of 2.1 ms per frame, 95th percentile 4.4 ms,
+99th 6.2 ms, worst 25.8 ms. Per flight the median ranges from 1.3 to 2.5 ms and the 95th
+percentile from 3.6 to 4.8 ms. The whole pipeline, front end (optical flow) and image loading
+included, ran at about 5 ms per frame on average (12 s for a 115 s flight). So on this
+hardware the VIO itself adds only a few milliseconds; the 50 to 150 ms default delay would
+have to come from the camera, the transport into PX4 and EKF2's own buffering, not from the
+VIO. A small companion computer is several times slower than an M4, so this is a floor.
+
+What the two fits agree on: drift near 0.01 m/sqrt(s), smooth output, and fewer, smaller
+jumps than the default. Where they differ is the 60 s cap (0.19 m here, 0.41 m from the RPG
+examples, which include a monocular VIO). The defaults are not changed by this page; any
+change to `envs/estimate` defaults is its own decision.
+
 ## v19 under the fitted model
 
 `eval/configs/gate1_x500_ekf_vio_fit_v19.yaml` flies the Gate 1 x500 test set through the
@@ -95,11 +151,10 @@ PX4's own numbers there are far looser than this PD's.
 
 ## What is still open
 
-- **An own VIO run on the raw datasets.** With the hosts allowed (`research-collection.ethz.ch`
-  for EuRoC, `rpg.ifi.uzh.ch` for UZH-FPV, `cdn3.vision.in.tum.de` for TUM-VI), run an
-  open-source VIO (OpenVINS or Basalt) in the cloud. That adds what this fit lacks: latency
-  (processing time per frame), VIO velocity, tracking loss on the hard sequences (UZH-FPV's
-  fast flight, TUM-VI's dark rooms and outdoor parts), and a second and third VIO.
+- **More raw datasets.** The second fit (Basalt on five EuRoC Vicon flights) added
+  processing time and VIO velocity. Still missing: the EuRoC machine-hall flights, tracking
+  loss on genuinely hard data (UZH-FPV's fast flight, TUM-VI's dark rooms and outdoor parts,
+  `rpg.ifi.uzh.ch` and `cdn3.vision.in.tum.de`), and a third VIO (OpenVINS).
 - **Hover is under-sampled.** Dataset flights move most of the time; only 10 to 45 % of each
   flight is near hover, and 60 s near-hover windows exist in one flight only.
 - **A wall at 1 to 3 m.** No dataset flies a VIO this close to one surface. The first
