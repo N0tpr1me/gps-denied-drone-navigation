@@ -12,12 +12,13 @@
  * A trip latches until clearLatch() (the module clears it on disarm), so a mode that
  * handed back cannot be re-engaged in the same flight without the pilot noticing.
  *
- * Entry can also be refused, without latching, for reset_holdoff_us after the estimator
- * reset its horizontal position (vehicle_local_position.xy_reset_counter changed;
- * noteReset()). A hold point captured while the estimate is still settling after a reset
- * is not where the vehicle is: policy v11 re-engaged 0.1 to 0.4 s after a 1.1 m vision
- * reset, captured a point on the wall face and struck it (docs/baseline.md, v11 section).
- * Off by default (reset_holdoff_us 0, PX4 param SH_RST_HOLD): stock PX4 captures the same
+ * Entry is also refused, without latching, on the ground (Trip::Landed: a hold point on
+ * the ground is no hold, and the policy was never trained on a take-off; the module checks
+ * the land detector), and for reset_holdoff_us after the estimator reset its horizontal
+ * position (vehicle_local_position.xy_reset_counter changed; noteReset()). A hold point
+ * captured while the estimate is still settling after a reset is not where the vehicle
+ * is: policy v11 re-engaged 0.1 to 0.4 s after a 1.1 m vision reset, captured a point
+ * on the wall face and struck it (docs/baseline.md, v11 section). Off by default (reset_holdoff_us 0, PX4 param SH_RST_HOLD): stock PX4 captures the same
  * settling estimate, so refusing the engage does not prevent that strike, it only chooses
  * who flies into it. Once the mode is flying, a reset is the policy's to handle (it is
  * trained on them), so check() ignores it.
@@ -41,6 +42,7 @@ enum class Trip : uint8_t {
 	Tilt = 4,             // vehicle tilt beyond the limit
 	PositionError = 5,    // hold error beyond the limit
 	EstimateReset = 6,    // entry refused: estimator reset its position too recently
+	Landed = 7,           // entry refused: the land detector says the vehicle is on the ground
 };
 
 struct WatchdogLimits {
@@ -158,6 +160,8 @@ public:
 		case Trip::PositionError: return "position_error";
 
 		case Trip::EstimateReset: return "estimate_reset";
+
+		case Trip::Landed: return "landed";
 		}
 
 		return "unknown";
