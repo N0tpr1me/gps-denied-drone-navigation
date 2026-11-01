@@ -1,23 +1,23 @@
-# gate1_x500_ekf_stress_v22.yaml for the v23 candidate with a forward rangefinder on every
+# gate1_x500_ekf_stress_v22.yaml for the v24 candidate with a forward rangefinder on every
 # episode (base_env.range); v22's rows from run 20261030-232614 are the comparison (same
 # draws). Two extra cells, outside the envelope, stress the rangefinder itself.
-#   python -m training.launch --config eval/configs/gate1_x500_ekf_stress_range_v23.yaml --device cpu
-name: gate1_x500_ekf_stress_range_v23
+#   python -m training.launch --config eval/configs/gate1_x500_ekf_stress_range_v24.yaml --device cpu
+name: gate1_x500_ekf_stress_range_v24
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
 expected_hours: 0.8  # 17 cells x 1536 episodes, two controllers, plus the fusion
 gpus: 1
 params:
   controllers:
-    - name: v23
-      policy: training/policies/structure_hold_v23.onnx  # candidate (wall-range input)
-  gate_controller: v23
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # candidate (wall-range input)
+  gate_controller: v24
   seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
   num_envs: 512
   bootstrap: 2000
   base_env:
     airframe: gz_x500
-    # A forward rangefinder on every episode (env.RangeSensor), as noisy as v23 trained on:
+    # A forward rangefinder on every episode (env.RangeSensor), as noisy as v24 trained on:
     # 1 cm + 0.5 % noise, scale error up to 2 %, 1 % outlier readings, dropouts.
     range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
             scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
