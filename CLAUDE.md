@@ -30,7 +30,7 @@ station, vision in the policy. The module consumes the drone's existing position
   Run it before saying anything works. Launch runs through `training/launch.py`.
 - Real runs are logged in `experiments/LOG.md` (date, commit, config, result, baseline),
   failures included; smoke runs never are. Every reported result is compared against the
-  tuned-PX4 baseline (`eval/baselines/px4_tuned_v1.params`), or in the mock against the
+  tuned-PX4 baseline (`eval/baselines/px4_tuned_v2.params`), or in the mock against the
   cascaded PD yardstick, saying which.
 - Run `nvidia-smi` before any GPU job; use only free GPUs. Ask before any run over 1 hour
   or on more than 1 GPU (`launch.py` enforces both; `--approved` overrides only with a yes).
@@ -126,9 +126,9 @@ bash training/server_setup.sh
 # SITL (needs Docker: the GPU server; --jobs auto flies many seeds at once on CPU cores)
 sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
 python -m eval.baselines.run_baseline --runner hold --label <name> --jobs auto \
-    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_engage    # policy
+    --params eval/baselines/px4_tuned_v2.params -- --profile vio_at_engage    # policy
 python -m eval.baselines.run_baseline --label tuned_v1 --jobs auto \
-    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_hover     # tuned PX4
+    --params eval/baselines/px4_tuned_v2.params -- --profile vio_at_hover     # tuned PX4
 ```
 
 CI (`.github/workflows/ci.yml`): ruff + pytest on 3.10/3.11/3.12 with CPU torch, the
