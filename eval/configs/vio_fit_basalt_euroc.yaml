@@ -1,0 +1,25 @@
+# Second fit of envs/estimate to real VIO error (eval/vio_fit.py, docs/vio-fit.md): our own
+# run of Basalt (TUM, stereo-inertial, eval/vio_basalt/) on raw EuRoC MAV flights, against the
+# dataset's ground truth (state_groundtruth_estimate0). Basalt's output carries velocity.
+# The VIO output is made on the Mac by eval/vio_basalt/run_euroc.sh into runs/vio_euroc/out/
+# (ignored by git): one folder per flight with stamped_traj_estimate.txt and truth.csv.
+#   python -m training.launch --config eval/configs/vio_fit_basalt_euroc.yaml --device cpu
+name: vio_fit_basalt_euroc
+entrypoint: eval.vio_fit
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.02
+gpus: 1
+params:
+  sources:
+    - name: basalt_euroc
+      dir: runs/vio_euroc/out
+      pattern: "*"
+      estimate: stamped_traj_estimate.txt
+      truth: truth.csv
+      truth_format: euroc
+  fit:
+    skip_start_s: 10.0  # VIO initialisation and take-off; a hold engages long after
+    hover_speed_max_mps: 0.3
+    walk_match_s: 20.0
+    cap_horizon_s: 60.0
+smoke: {}

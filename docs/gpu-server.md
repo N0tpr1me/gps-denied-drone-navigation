@@ -119,8 +119,9 @@ The plan in `docs/isaac-lab.md` fits this server as it is: the RTX 4500 Ada has 
 and 24 GB (Isaac Sim needs RT cores and 16 GB or more; A100 and H100 would not work),
 Ubuntu 22.04/24.04, driver 580.65.06+, Docker with the NVIDIA Container Toolkit, 32 GB+
 RAM. After `server_setup.sh` has pulled the image, follow its "First hour on the new
-server" (steps 3 to 9): parity check, then a smoke training run on one GPU. Isaac Lab and
-the SITL flights run in separate containers and do not clash.
+server" (steps 3 to 10): parity check, a smoke run of the v22 recipe on one GPU, then v22
+scored on Isaac against its mock numbers. Isaac Lab and the SITL flights run in separate
+containers and do not clash.
 
 ## Rules on the server (the same as everywhere)
 

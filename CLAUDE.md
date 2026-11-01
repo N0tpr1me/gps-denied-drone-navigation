@@ -62,14 +62,15 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
 | `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error), `settle_split.py` (settle vs steady hold), `baselines/` (tuned PX4, `run_baseline.py`) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `partner_session.py` (scores a partner's real flight session against tuned PX4), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
-| `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
+| `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts, `boards/structurehold.px4board` (multicopter-only variant that fits a 2 MB flight controller) |
+| `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `gpu-server.md` (server setup, Claude access, parallel SITL) |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker) |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -146,7 +147,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   old ending) and Structure Hover (ext3, `SH_HB_GUARD`: a trip next to a measured wall
   hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
-  `sitl_test.py --wall` with a simulated rangefinder. Safety hardening (Nov 2026): the
+  `sitl_test.py --wall` with a simulated rangefinder, and real flight controller firmware
+  (apt `gcc-arm-none-eabi`; stock fmu-v6c plus the module overflows flash, so build the
+  `structurehold` variant, `sim2real/px4/README.md`). Real flights follow
+  `docs/partner-pack.md` on a partner's drone and are scored by `eval/partner_session.py`. Safety hardening (Nov 2026): the
   module clamps its own parameters (`ParamLimits.hpp`; PX4 does not), refuses to engage on
   the ground (`SH_BENCH` 1 lifts it for the bench test only), stops on disarm, and the
   handback order lives in `Handback.hpp` (decided rows, pinned by `test_handback.cpp`);

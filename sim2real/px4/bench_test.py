@@ -10,7 +10,8 @@ Checks, each a boolean in the summary:
 
 1. the firmware answers and reports its version (v1.17.0 expected, the pinned release);
 2. the module is running and registered as a mode (``structure_hold status``: standby),
-   flying the expected policy (``--policy``, default the released one);
+   flying the expected policy (``--policy``, default the one in this checkout's
+   ``PolicyWeights.hpp``);
 3. policy inference fits the tick (``structure_hold bench``: worst step under 1 ms of the
    10 ms control interval);
 4. every SH_ parameter is readable, and the ones given with ``--expect NAME=VALUE`` match;
@@ -34,7 +35,20 @@ from pathlib import Path
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common as mavlink
 
-RELEASED_POLICY = "structure_hold_v22"
+HEADER = Path(__file__).resolve().parent / "structure_hold" / "PolicyWeights.hpp"
+
+
+def compiled_policy(header: Path = HEADER) -> str:
+    """The policy NAME in the module's generated header: what a build of this checkout flies.
+    Read rather than hardcoded, so the default follows each release (it said v19 after v22
+    went in)."""
+    m = re.search(r'NAME = "([^"]+)"', header.read_text())
+    if not m:
+        raise ValueError(f"no policy NAME in {header}")
+    return m.group(1)
+
+
+RELEASED_POLICY = compiled_policy()
 PROMPT = re.compile(r"(nsh|pxh)> ?$")
 
 
