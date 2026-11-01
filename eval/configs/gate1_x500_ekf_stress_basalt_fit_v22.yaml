@@ -6,7 +6,7 @@
 name: gate1_x500_ekf_stress_basalt_fit_v22
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
-expected_hours: 0.9  # 17 cells x 1536 episodes, three controllers, plus the fusion
+expected_hours: 1.25  # took 73 min on 4 cloud cores (run 20261101-023637): split it to re-run
 gpus: 1
 params:
   controllers:
