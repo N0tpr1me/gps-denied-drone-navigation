@@ -69,7 +69,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md` |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `gpu-server.md` (server setup, Claude access, parallel SITL) |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -107,18 +107,25 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
+# also test_params.cpp and test_handback.cpp, same flags (sim2real/px4/README.md "Unit tests")
 
-# SITL (needs Docker: the Mac)
+# GPU server, once (docs/gpu-server.md): env, tests, smoke runs, SITL image, parallel check
+bash training/server_setup.sh
+
+# SITL (needs Docker: the GPU server; --jobs auto flies many seeds at once on CPU cores)
 sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
-python -m eval.baselines.run_baseline --runner hold --label <name> \
+python -m eval.baselines.run_baseline --runner hold --label <name> --jobs auto \
     --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_engage    # policy
-python -m eval.baselines.run_baseline --label tuned_v1 \
+python -m eval.baselines.run_baseline --label tuned_v1 --jobs auto \
     --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_hover     # tuned PX4
 ```
 
 CI (`.github/workflows/ci.yml`): ruff + pytest on 3.10/3.11/3.12 with CPU torch, the
 launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribution check.
-`sitl-image.yml` builds the image and flies the hover test when `sim2real/` changes.
+`sitl-image.yml` builds the image and flies the hover test on PRs that change `sim2real/`.
+Actions minutes are capped monthly (they ran out late Oct 2026), so PRs run the full set,
+the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on main
+(`workflow_dispatch` to run it by hand), and a new push cancels a PR's older run.
 
 ## Current state (late Oct 2026; check docs before relying on it)
 
@@ -139,10 +146,14 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   old ending) and Structure Hover (ext3, `SH_HB_GUARD`: a trip next to a measured wall
   hands back to this guarded hover first, then Position mode). The cloud container can build
   PX4 v1.17.0 SITL itself (Python 3.12 venv for PX4's requirements) and fly SIH, including
-  `sitl_test.py --wall` with a simulated rangefinder.
+  `sitl_test.py --wall` with a simulated rangefinder. Safety hardening (Nov 2026): the
+  module clamps its own parameters (`ParamLimits.hpp`; PX4 does not), refuses to engage on
+  the ground (`SH_BENCH` 1 lifts it for the bench test only), stops on disarm, and the
+  handback order lives in `Handback.hpp` (decided rows, pinned by `test_handback.cpp`);
+  `sitl_test.py` checks ground engage always, `--range-faults` and `--moving-engage` on demand.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
-  hosts allowed in the cloud environment), harden the module (distance-to-wall input, bench test), Isaac Lab parity on the GPU
+  hosts allowed in the cloud environment), the distance-to-wall policy input, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
 
 ## Notes for future Claude sessions
@@ -154,11 +165,16 @@ launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribut
   `eval/configs/gazebo_check.yaml` before a Gazebo re-fly, and is released only if Gazebo
   confirms it. Then regenerate both module headers (`sim2real/px4/README.md`), update
   `training/policies/README.md`, and add the decision row.
-- Where things run: the cloud container has no Docker, Gazebo or GPU, so it does mock
-  training, scoring, C++ unit tests, docs and PX4 SIH flights (`sim2real/px4/sitl_test.sh`).
-  Gazebo SITL runs on Zain's Mac (Apple M4, Docker, ~40 min per controller); only one
-  session works in the Mac checkout at a time, and it is left clean on `main`. On a new GPU machine run `bash training/server_report.sh` and
-  `nvidia-smi` first, then follow the first-hour checklist in `docs/isaac-lab.md`.
+- Where things run: simulations go on the GPU server, not the Mac (Zain, 2026-10-31).
+  Until it is up, the cloud container (4 cores, no GPU) does mock training, scoring, C++
+  unit tests, docs and PX4 SIH flights (`sim2real/px4/sitl_test.sh`), and it can run Docker
+  too: `sudo dockerd &`, then `sim2real/docker/cloud_build.sh` builds the SITL image (PX4's
+  Gazebo base image, as the OSRF apt host is blocked) and Gazebo flights run one or two at
+  a time (`pip install -e .[dev,torch,sitl]`). The server's first hour is
+  `bash training/server_setup.sh` then `docs/isaac-lab.md` (`docs/gpu-server.md`). SITL
+  flights use CPU cores only; `run_baseline --jobs` pins each to its own. The Mac (Apple
+  M4) flew every Gazebo batch up to v22; only one session works in its checkout at a time,
+  left clean on `main`.
 - Keep runs under 1 h (split with `params.resume`), and use `--smoke` first. A release's
   `policy.pt` is gone with its run folder; continue a release with `params.init_actor_onnx`
   (actor from the ONNX, fresh critic warmed up first; `training/train_ppo.py`).

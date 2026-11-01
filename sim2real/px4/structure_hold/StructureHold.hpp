@@ -52,12 +52,15 @@
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/vehicle_control_mode.h>
+#include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_odometry.h>
 #include <uORB/topics/vehicle_rates_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 
+#include "Handback.hpp"
 #include "HoldController.hpp"
+#include "ParamLimits.hpp"
 #include "PolicyController.hpp"
 #include "WallGuard.hpp"
 #include "Watchdog.hpp"
@@ -87,6 +90,9 @@ public:
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
 	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Position, Hold, Land
+	// Run() is woken by vehicle_angular_velocity, which a flight controller can publish at
+	// 1 to 8 kHz; the control tick is 10 ms, so wake-ups closer than this are skipped.
+	static constexpr hrt_abstime WAKE_INTERVAL = 2_ms;
 
 private:
 	void Run() override;
@@ -100,8 +106,10 @@ private:
 
 	// Flight
 	void engage(const vehicle_local_position_s &lpos);
+	structure_hold::Trip entryRefusal(const hrt_abstime now) const;
 	void disengage(const char *why);
 	void handBack(structure_hold::Trip trip, bool xy_valid, bool latch = true);
+	void endHandback(const char *why);
 	void requestHandbackMode();
 	void handbackStep(const hrt_abstime now);
 	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m);
@@ -114,6 +122,8 @@ private:
 	void updateRange();
 	bool rangeFresh(const hrt_abstime now) const;
 	void applyWallGuard(const hrt_abstime now, const matrix::Vector3f &pos, const matrix::Dcmf &r);
+	bool estimateFinite() const;
+	void publishRates(const matrix::Vector3f &rates, float thrust);
 	bool useOdometryFix() const;
 	void publishStatus(const hrt_abstime now);
 	void updateParams() override;
@@ -128,6 +138,7 @@ private:
 	uORB::Subscription _attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _hover_thrust_sub{ORB_ID(hover_thrust_estimate)};
 	uORB::Subscription _visual_odometry_sub{ORB_ID(vehicle_visual_odometry)};
+	uORB::Subscription _land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::SubscriptionMultiArray<distance_sensor_s> _distance_sensor_subs{ORB_ID::distance_sensor};
 
 	// Publications
@@ -162,13 +173,15 @@ private:
 	float _hover_thrust{0.5f};
 	bool _hover_thrust_from_estimator{false};
 	bool _armed{false};
+	bool _landed{true};  // vehicle_land_detected; on the ground until it says otherwise
 
 	// Mode state
 	uint8_t _state{structure_hold_status_s::STATE_UNREGISTERED};
 	int8_t _active_mode_id{-1};    // the mode that is flying (or handing back): hold or land
-	uint8_t _land_xy_reset_counter{0};  // Structure Land and Structure Hover
-	bool _handback_guarded{false};      // this handback tries Structure Hover first
-	bool _handback_landing{false};      // this handback tries stock Land first (trip in Structure Land)
+	uint8_t _land_xy_reset_counter{0};  // Structure Land and Structure Hover: estimator resets
+	uint8_t _land_z_reset_counter{0};   // the setpoint follows, as in PX4's own modes
+	uint8_t _land_heading_reset_counter{0};
+	structure_hold::HandbackPlan _handback_plan{};  // targets of the running handback (Handback.hpp)
 	float _guard_speed{0.f};            // [m/s] the guard's recent push rate, away from the wall
 	uint8_t _config_resend{0};          // which mode's control config the next poll re-sends
 	structure_hold::Watchdog _watchdog{};
@@ -197,8 +210,8 @@ private:
 	uint8_t _trip_count{0};
 	structure_hold::Trip _last_trip{structure_hold::Trip::None};  // latched or not; cleared on disarm
 	uint8_t _handback_step{0};
-	bool _handback_xy_valid{true};
 	hrt_abstime _handback_request_us{0};
+	bool _handback_logged_last{false};  // "requesting Land" printed once, not at every repeat
 	matrix::Vector3f _prev_pos{};
 	matrix::Vector3f _vel_fd{};
 	hrt_abstime _prev_pos_us{0};
@@ -208,6 +221,9 @@ private:
 	hrt_abstime _last_status_us{0};
 
 	perf_counter_t _loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": control step")};
+	perf_counter_t _tick_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": control tick")};
+	uint32_t _max_loop_time_us{0};  // worst control step since boot (print_status, bench test)
+	bool _setpoint_replaced{false};  // the last rate setpoint needed sanitizeSetpoint
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::SH_WD_EST_TO>) _param_wd_est_to,
@@ -215,6 +231,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_TILT>) _param_wd_tilt,
 		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
+		(ParamInt<px4::params::SH_BENCH>) _param_bench,
 		(ParamFloat<px4::params::SH_P_POS>) _param_p_pos,
 		(ParamFloat<px4::params::SH_P_VEL>) _param_p_vel,
 		(ParamFloat<px4::params::SH_P_ATT>) _param_p_att,

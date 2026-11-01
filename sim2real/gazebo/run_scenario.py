@@ -56,6 +56,35 @@ def watch_url() -> str:
     return f"http://localhost:{WATCH_PORT}/vnc.html?autoconnect=1&resize=scale"
 
 
+def isolation_options(name: str, cpuset: str | None = None) -> list[str]:
+    """``docker run`` options that let several flights share one host.
+
+    Each container already has its own network namespace, so PX4's and the bridge's UDP
+    ports do not clash; Gazebo's discovery is multicast, though, and the default bridge
+    network carries it between containers, so every flight gets its own Gazebo partition
+    (named after the container). ``cpuset`` pins the flight to those host CPUs: PX4 runs in
+    lockstep with Gazebo, but the test scripts time the sequence on the wall clock, so a
+    starved flight would not be the same flight."""
+    opts = ["-e", f"GZ_PARTITION={name}"]
+    if cpuset:
+        opts += ["--cpuset-cpus", cpuset]
+    return opts
+
+
+def make_run_dir(runs_dir: Path, name: str) -> Path:
+    """Create ``runs_dir/name``, or ``name-2``, ``name-3``, ... when flights started in the
+    same second share the name (parallel batches)."""
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(1, 1000):
+        out = runs_dir / (name if i == 1 else f"{name}-{i}")
+        try:
+            out.mkdir()
+            return out
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free run folder name for {runs_dir / name}")
+
+
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
                    name: str) -> list[str]:
     return [
@@ -82,8 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     hover_s = args.hover_s if args.hover_s is not None else sc.hover.hover_s
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    out = args.runs_dir / f"{stamp}_sitl_wind_{sc.name}_{commit}"
-    out.mkdir(parents=True)
+    out = make_run_dir(args.runs_dir, f"{stamp}_sitl_wind_{sc.name}_{commit}")
 
     params = sample_scenario(sc)
     write_params(out / "wind_params.txt", params)

@@ -12,6 +12,9 @@ px4_add_module(
 		StructureHold.cpp
 		StructureHold.hpp
 		Watchdog.hpp
+		WallGuard.hpp
+		Handback.hpp
+		ParamLimits.hpp
 		HoldController.hpp
 		PolicyController.hpp
 		MlpPolicy.hpp
