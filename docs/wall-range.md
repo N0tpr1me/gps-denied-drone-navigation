@@ -103,4 +103,34 @@ was not kept, and its check with a rangefinder was stopped.
 | --- | --- | --- | --- | --- |
 | v22 (run `20261030-230516`) | 0.190 vs 0.358 m | -47 % | 0 vs 1.4 % | PASS 6/6 |
 | v23, no rangefinder (`20261101-025656`) | 0.210 vs 0.358 m | -41 % | 0 vs 1.4 % | PASS 6/6 |
-| v24, rangefinder on every episode (`20261101-062513`) | 0.170 vs 0.358 m | -56 % | 0 vs 1.4 % | PASS 6/6 |
+| v24, rangefinder on every episode (`20261101-062513`) | 0.167 vs 0.358 m | -53 % | 0.02 vs 1.4 % | PASS 6/6 |
+| v24, no rangefinder (`20261101-070002`) | 0.195 vs 0.358 m | -45 % | 0 vs 1.4 % | PASS 6/6 |
+
+## Gate 1 stress set with a rangefinder (`eval/configs/gate1_x500_ekf_stress_range_v24_p{1,2,3}.yaml`)
+
+The whole set takes about 100 min on 4 cores, so it runs as three parts under the 1 h limit
+(runs `20261101-082618`, `20261101-090418`, `20261101-093743`); pooled here by cell.
+
+| | Envelope cells | Pooled p95, policy vs PD | Crash, policy vs PD |
+| --- | --- | --- | --- |
+| v22, no rangefinder (run `20261030-232614`) | 13/13 | 0.209 vs 0.380 m | 0.05 vs 0.65 % |
+| v24, rangefinder on every episode | 13/13 | 0.181 vs 0.380 m | 0.02 vs 0.65 % |
+
+Outside the envelope v24 passes too: motor lag 80 ms (0.202 vs 0.356 m), estimate delay 250
+to 350 ms (0.190 vs 0.379 m), 3 to 5 s estimate dropouts (0.745 vs 0.792 m, crash 6.1 vs
+9.0 %), the full wall yaw moment, and the two cells that attack the rangefinder: 10 %
+outliers and 1 to 5 s sensor dropouts at 0.2 Hz both hold 0.164 m, the same as a clean one
+(0.162), so the spike gate and the usable flag do their job. The 2 to 3 s dropout cell is
+where the rangefinder helps least (0.388 vs 0.484 m): with no estimate the error along the
+wall drifts and the range only pins the normal axis.
+
+## Where it stands
+
+v24 beats v22 everywhere it was measured in the mock, most with a rangefinder (Gazebo-like
+check p95 ratio 0.77, seed 3 toward the wall 0.075 against 0.188 m, Gate 1 headline -53 %
+against -47 %, stress 13/13) and a little without one (check ratio 0.95; Gate 1 pooled
+0.195 against v22's 0.190 m, a tie). Its one miss is the check's lift rule: it sits about
+1.5 cm above the hold point where v22 sits 1.7 cm below. It is not released: the module
+header stays v22's (`HAS_WALL_RANGE` false), and v24 needs a Gazebo re-fly with
+`--rangefinder` on the GPU server, beating v22 there, before it can be. To fly it, generate
+the header from it (`sim2real/px4/README.md`); the module then reads the range on its own.
