@@ -1,8 +1,14 @@
 # Headless PX4 SITL + Gazebo Harmonic, gz_x500 airframe.
-# Builds natively on arm64 (Apple Silicon via Docker Desktop) and amd64 (CI).
-# The PX4 tag is pinned in docs/decisions.md; change both together, and re-tune the
-# baseline (eval/baselines/px4_tuned_v1.params) if the tag moves.
-FROM ubuntu:24.04
+# Builds natively on arm64 (Apple Silicon via Docker Desktop) and amd64 (CI, Linux GPU
+# servers). The PX4 tag is pinned in docs/decisions.md; change both together, and re-tune
+# the baseline (eval/baselines/px4_tuned_v1.params) if the tag moves.
+#
+# BASE_IMAGE / PX4_SETUP: the default runs PX4's own ubuntu.sh on plain Ubuntu 24.04, which
+# installs Gazebo Harmonic from packages.osrfoundation.org. Where that host is blocked (the
+# Claude cloud container), sim2real/docker/build_offline_gz.sh builds on PX4's published
+# Gazebo Harmonic dev image instead with PX4_SETUP=0. Benchmarks use the default.
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
 
 ARG PX4_TAG=v1.17.0
 # 4.x wheels fail to load on arm64 Ubuntu 24.04 (libstdc++ symbol mismatch); 3.x works.
@@ -26,7 +32,8 @@ RUN git clone --depth 1 --branch "${PX4_TAG}" --recurse-submodules --jobs 8 \
 WORKDIR ${PX4_DIR}
 
 # PX4's own setup script: build tools, Python deps and Gazebo Harmonic. No NuttX toolchain.
-RUN bash Tools/setup/ubuntu.sh --no-nuttx \
+ARG PX4_SETUP=1
+RUN if [ "${PX4_SETUP}" = "1" ]; then bash Tools/setup/ubuntu.sh --no-nuttx; fi \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
 # Structure Hold module (sim2real/px4/): wired into the tree before the build.

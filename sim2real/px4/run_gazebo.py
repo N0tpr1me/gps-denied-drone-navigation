@@ -28,7 +28,9 @@ Writes ``runs/<time>_sitl_hold_<scenario>_<profile>_<commit>/`` with the same fi
 (``SH_WALL_MIN``) acts; ``hold.json`` then reports what the guard did in each engaged
 stretch, and for every flight the closest the truth came to the wall after the scored hold
 (the re-engage, trip and landing, where seed 3's strikes happened) and over the landing
-itself (``landing``), and over the guarded hover the trip hands back into (``hover``). The
+itself (``landing``), and over the guarded hover the trip hands back into (``hover``), and
+for the re-engage where the truth was and how fast it was closing when the module took over
+(``reengage``; compare closest approaches only next to that entry state). The
 sequence lands through the module's Structure Land mode (``--land structure``, the default,
 which keeps the wall guard down to touchdown) or stock Land (``--land stock``, the sequence
 before 2026-10-28).
@@ -69,6 +71,8 @@ from sim2real.gazebo.run_scenario import (
     WATCH_IMAGE,
     WORLD,
     git_commit,
+    isolation_options,
+    make_run_dir,
     params_summary,
     watch_options,
     watch_url,
@@ -86,9 +90,9 @@ STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_HOVER = 1, 2,
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
-                   env: dict[str, str], watch: bool = False, land: str = "structure"
-                   ) -> list[str]:
-    cmd = ["docker", "run", "--rm", "--name", name,
+                   env: dict[str, str], watch: bool = False, land: str = "structure",
+                   cpuset: str | None = None) -> list[str]:
+    cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
@@ -202,6 +206,35 @@ def wall_guard_stats(status: dict[str, np.ndarray], start_us: int) -> list[dict[
     return out
 
 
+def reengage_entries(t: np.ndarray, pos: np.ndarray, surface: Surface,
+                     status: dict[str, np.ndarray], start_us: int,
+                     window_s: float = 3.0, lead_s: float = 0.2) -> list[dict[str, Any]]:
+    """Per engaged stretch after the first (the sequence's re-engage): where the truth was
+    when the module took over, how fast it was closing on the wall then, and the closest it
+    came in the next ``window_s``.
+
+    The re-engage is timed on the wall clock after 5 s of stock Position mode chasing a
+    jumped estimate, so it catches the vehicle at a different place and speed in every
+    flight. The closest approach after it is only comparable between controllers next to
+    this entry state: ``overrun_m`` (entry clearance minus the closest) is what the module
+    let the vehicle travel after it took over."""
+    ts = (np.asarray(status["timestamp"], dtype=np.int64) - start_us) * 1e-6
+    d = surface.distance(pos)
+    out = []
+    for a, b in engaged_stretches(status)[1:]:
+        t0 = float(ts[a])
+        if t0 - lead_s < t[0] or t0 > t[-1]:
+            continue
+        entry = float(np.interp(t0, t, d))
+        closing = (float(np.interp(t0 - lead_s, t, d)) - entry) / lead_s
+        t1 = min(t0 + window_s, float(ts[b - 1]))
+        inside = (t >= t0) & (t <= t1)
+        closest = min(entry, float(d[inside].min())) if inside.any() else entry
+        out.append({"t_s": t0, "entry_clearance_m": entry, "closing_mps": closing,
+                    "closest_m": closest, "overrun_m": entry - closest})
+    return out
+
+
 def landing_stretch(status: dict[str, np.ndarray], start_us: int,
                     state: int = STATE_LANDING) -> dict[str, Any] | None:
     """The Structure Land stretch (the last one; ``state=STATE_HOVER`` for Structure Hover
@@ -254,6 +287,7 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
         d = surface.distance(trace.pos[after])
         i = int(np.argmin(d))
         hold["after_hold"] = {"min_clearance_m": float(d[i]), "t_s": float(trace.t[after][i])}
+    hold["reengage"] = reengage_entries(trace.t, trace.pos, surface, status, start_us)
     for key, state in (("hover", STATE_HOVER), ("landing", STATE_LANDING)):
         stretch = landing_stretch(status, start_us, state)
         if stretch is not None:
@@ -315,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
                          "stock Land")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-hold")
+    ap.add_argument("--cpuset", help="host CPUs for this flight's container, e.g. 0-3 "
+                                     "(parallel batches: eval.baselines.run_baseline --jobs)")
     args = ap.parse_args(argv)
     if args.image is None:
         args.image = WATCH_IMAGE if args.watch else DEFAULT_IMAGE
@@ -332,8 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     px4_params = read_params(args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    out = args.runs_dir / f"{stamp}_sitl_hold_{sc.name}_{prof.name}_{commit}"
-    out.mkdir(parents=True)
+    out = make_run_dir(args.runs_dir, f"{stamp}_sitl_hold_{sc.name}_{prof.name}_{commit}")
 
     wind = sample_scenario(sc)
     write_params(out / "wind_params.txt", wind)
@@ -349,7 +384,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
-                         to_environment(px4_params), watch=args.watch, land=args.land)
+                         to_environment(px4_params), watch=args.watch, land=args.land,
+                         cpuset=args.cpuset)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:

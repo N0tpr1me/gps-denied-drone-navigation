@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from eval.baselines.run_baseline import (
     aggregate,
     compare,
@@ -163,3 +165,61 @@ def test_hold_runner_reads_the_window_where_hold_summary_keeps_it():
     r = row_from_summary(s, ekf([(0.0, "Hold")]), "External 1")
     assert r["window_s"] == [30.2, 89.0]
     assert not r["crash"] and not r["post_hold_fail"]
+
+
+def test_cpu_slots_hand_each_parallel_flight_its_own_cpus():
+    from eval.baselines.run_baseline import cpu_slots
+
+    cpus = list(range(10))
+    assert cpu_slots(1, 4, cpus) == [None]  # one at a time: no pinning, as before
+    assert cpu_slots(2, 4, cpus) == ["0,1,2,3", "4,5,6,7"]
+    assert cpu_slots("auto", 3, cpus) == ["0,1,2", "3,4,5", "6,7,8"]
+    assert cpu_slots("auto", 16, cpus) == [None]  # too few CPUs for one block: one flight
+    with pytest.raises(ValueError):
+        cpu_slots(3, 4, cpus)  # would oversubscribe
+    with pytest.raises(ValueError):
+        cpu_slots(0, 4, cpus)
+
+
+def test_parallel_batch_keeps_flight_order_and_pins_each_flight(tmp_path, monkeypatch):
+    import json
+    import random
+    import threading
+    import time
+    from argparse import Namespace
+    from pathlib import Path
+
+    import eval.baselines.run_baseline as rb
+
+    monkeypatch.setattr(rb, "REPO_ROOT", tmp_path)
+    (tmp_path / "p.params").write_text("")
+    calls, active, peak = [], [0], [0]
+    lock = threading.Lock()
+
+    def fake_fly(scenario, seed, params, extra, runner, cpuset, container):
+        with lock:
+            calls.append((scenario, seed, cpuset, container))
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(random.uniform(0.0, 0.05))  # finish out of order
+        folder = tmp_path / f"run_{scenario}_{seed}"
+        folder.mkdir()
+        (folder / "estimate_summary.json").write_text(json.dumps(summary(scenario, seed)))
+        (folder / "ekf.json").write_text(json.dumps(ekf(CLEAN)))
+        with lock:
+            active[0] -= 1
+        return Path(folder)
+
+    monkeypatch.setattr(rb, "fly", fake_fly)
+    monkeypatch.setattr(rb, "cpu_slots", lambda jobs, k: ["0,1", "2,3"])
+    args = Namespace(params=tmp_path / "p.params", label="t", runner="estimate", run_args=[],
+                     scenarios=["a", "b"], seeds=[1, 2, 3], jobs=2, cpus_per_job=2)
+    batch = rb.run_batch(args)
+    assert [(r["scenario"], r["seed"]) for r in batch["rows"]] == \
+        [("a", 1), ("a", 2), ("a", 3), ("b", 1), ("b", 2), ("b", 3)]
+    assert peak[0] <= 2 and batch["jobs"] == 2 and "2 flights in parallel" in batch["host"]
+    assert {c[2] for c in calls} <= {"0,1", "2,3"}
+    assert all(c[3] and c[3].startswith("px4-sitl-") for c in calls)
+    out = next(tmp_path.glob("runs/*_px4_baseline_t_*"))
+    lines = (out / "log_lines.md").read_text().splitlines()
+    assert len(lines) == 6 and "seed 1" in lines[0] and " b seed 3" in lines[-1].replace(":", "")
