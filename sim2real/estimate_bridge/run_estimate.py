@@ -46,6 +46,8 @@ from sim2real.gazebo.run_scenario import (
     WATCH_IMAGE,
     WORLD,
     git_commit,
+    isolation_options,
+    make_run_dir,
     params_summary,
     watch_options,
     watch_url,
@@ -59,8 +61,9 @@ DEFAULT_PARAMS = HERE / "ekf2_ev.params"
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
-                   name: str, env: dict[str, str], watch: bool = False) -> list[str]:
-    cmd = ["docker", "run", "--rm", "--name", name,
+                   name: str, env: dict[str, str], watch: bool = False,
+                   cpuset: str | None = None) -> list[str]:
+    cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
@@ -104,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hover-s", type=float, help="override the scenario's hover time")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-estimate")
+    ap.add_argument("--cpuset", help="host CPUs for this flight's container, e.g. 0-3 "
+                                     "(parallel batches: eval.baselines.run_baseline --jobs)")
     args = ap.parse_args(argv)
     if args.image is None:
         args.image = WATCH_IMAGE if args.watch else DEFAULT_IMAGE
@@ -119,8 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     hover_s = args.hover_s if args.hover_s is not None else sc.hover.hover_s
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    out = args.runs_dir / f"{stamp}_sitl_estimate_{sc.name}_{prof.name}_{commit}"
-    out.mkdir(parents=True)
+    out = make_run_dir(args.runs_dir, f"{stamp}_sitl_estimate_{sc.name}_{prof.name}_{commit}")
 
     wind = sample_scenario(sc)
     write_params(out / "wind_params.txt", wind)
@@ -135,7 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
-                         args.container_name, to_environment(px4_params), watch=args.watch)
+                         args.container_name, to_environment(px4_params), watch=args.watch,
+                         cpuset=args.cpuset)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:
