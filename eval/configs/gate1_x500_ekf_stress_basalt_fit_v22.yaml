@@ -23,19 +23,20 @@ params:
     # EKF2-like fusion as gz_x500_sitl has it (envs/structure_hold/airframes.py).
     fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
              vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
-    # The fitted estimate corruption, stated in full (FITTED VALUES PENDING).
+    # The estimate corruption fitted to Basalt on five raw EuRoC flights (docs/vio-fit.md,
+    # second fit; run 20261101-015732), stated in full.
     estimate:
-      delay_min_s: 0.05
+      delay_min_s: 0.05            # kept: Basalt itself takes ~2-6 ms a frame; the rest is camera, link, EKF2
       delay_max_s: 0.15
-      pos_noise_std_m: 0.02
-      vel_noise_std_mps: 0.05
-      bias_walk_std_m_per_sqrt_s: 0.01
-      bias_max_m: 0.3
-      jump_rate_hz: 0.02
-      jump_min_m: 0.1
-      jump_max_m: 2.0
-      jump_decay_s: 5.0
-      dropout_rate_hz: 0.02
+      pos_noise_std_m: 0.0         # fitted (standard 0.02): VIO output is smooth
+      vel_noise_std_mps: 0.018     # fitted from Basalt's velocity (standard 0.05)
+      bias_walk_std_m_per_sqrt_s: 0.009  # fitted (standard 0.01)
+      bias_max_m: 0.19             # fitted, 95th percentile of 60 s drift (standard 0.3)
+      jump_rate_hz: 0.01           # fitted: 5 in 512 s, all in V2_03 (standard 0.02)
+      jump_min_m: 0.1              # fitted: 0.1 to 0.4 m (standard 0.1 to 2)
+      jump_max_m: 0.4
+      jump_decay_s: null           # fitted: the jumps stay (standard 5 s)
+      dropout_rate_hz: 0.02        # kept: no tracking loss in these flights
       dropout_min_s: 0.2
       dropout_max_s: 3.0
       dropout_mode: dead_reckon
