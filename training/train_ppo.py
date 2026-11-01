@@ -247,7 +247,9 @@ def select_checkpoint(runner, run_dir: Path, meta: dict[str, Any], eval_cfg: Str
     every = int(e.get("select_every", 0) or 0)
     candidates = {last: None}  # the policy now in the runner
     if every > 0:
-        for it in range(first, last, every):
+        # Saved checkpoints sit at multiples of the save interval; a run resumed from one
+        # starts one past it, so align to the multiples or a resumed run finds none.
+        for it in range(first + (-first) % every, last, every):
             path = run_dir / "tb" / f"model_{it}.pt"
             if path.exists() and it != last:
                 candidates[it] = path
