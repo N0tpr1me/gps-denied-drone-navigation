@@ -65,7 +65,8 @@
     "thrust": "0.5 * (actions[3] + 1) * 34.19432 N collective",
     "max_rate_rad_s": 2.0,
     "max_thrust_n": 34.19432,
-    "yaw": "policy"
+    "yaw": "policy",
+    "fallback": "off"
   },
   "rate_hz": 83,
   "env_cfg": {
