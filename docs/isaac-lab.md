@@ -145,9 +145,12 @@ Run in order; stop and post the output in the project if a step fails.
    both simulators. While it runs, `nvidia-smi` should show the process on the GPU launch picked.
 9. **v22 scored on Isaac.**
    `$PY -m training.launch --config training/configs/structure_hold_eval_v22.yaml --sim isaac --device cuda`
-   (about half an hour on CPU, faster on the GPU). The same file on the mock is in `experiments/LOG.md` (see "M3: the first
-   Isaac training" below); Isaac's policy p95 and crash rate must land inside the mock's
-   seed spread.
+   (8 min on 4 CPU cores). On the mock (run `20261101-012947`, `experiments/LOG.md`), 3 seeds
+   x 512 identical 60 s episodes: v22 p95 0.211 / 0.206 / 0.202 m, crash 0 / 0.4 / 0 %
+   (pooled 0.206 m, 0.1 %); the PD 0.61 / 0.56 / 0.70 m, crash 1.6 / 1.6 / 2.0 %. The
+   scoring is deterministic: a second run gave the same numbers to the digit. On Isaac, v22's
+   p95 per seed must land within the mock's 0.20 to 0.21 m spread (a few mm either side is
+   the physics step, as in the parity check) and its crash rate stay under 1 %.
 10. **Tell Zain**: parity numbers, smoke steps/s on both backends, v22's score on both, and
    the image digest for the decisions row below. A real Isaac run (not smoke) follows the
    usual rules: logged in `experiments/LOG.md` by launch.py, compared against the PD and
