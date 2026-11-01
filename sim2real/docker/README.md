@@ -1,7 +1,9 @@
 # PX4 SITL image
 
 Headless PX4 SITL with Gazebo Harmonic and the `gz_x500` quadrotor, in one Linux
-container. Runs natively on Apple Silicon (arm64) through Docker Desktop and on amd64 in CI.
+container. Runs natively on Apple Silicon (arm64) through Docker Desktop and on amd64 (CI,
+the GPU server: `docs/gpu-server.md`). It needs no GPU: Gazebo runs server-only and nothing
+renders.
 
 - PX4 **v1.17.0**, pinned in `docs/decisions.md`. Moving the pin means re-tuning the
   baseline, so change the `PX4_TAG` build arg, the tag in `run.sh` and the decision row together.
@@ -35,6 +37,22 @@ them and copies the ulog to `/out`; `eval/baselines/autotune.py` uses it with th
 Pass means altitude within 0.5 m of target and horizontal drift under 1 m for the whole
 hover, then touchdown and auto-disarm. Thresholds are flags on `hover_test.py`
 (`./run.sh hover-test --hover-s 60`, for example).
+
+## Many flights at once (the GPU server)
+
+`python -m eval.baselines.run_baseline ... --jobs auto` flies several flights side by side,
+each container pinned to its own CPUs (`--cpus-per-job`, default 4), with its own name and
+its own Gazebo partition (`GZ_PARTITION`), so the Gazebo instances cannot discover each
+other over Docker's bridge network. Each container already has its own network namespace,
+so the MAVLink ports do not clash. The stock runner's rows record Gazebo's real-time factor
+(`rtf_min`); fewer jobs if it sags.
+
+## Building in the Claude cloud container
+
+The cloud container has Docker but blocks `packages.osrfoundation.org`, where `ubuntu.sh`
+gets Gazebo. `./cloud_build.sh` builds the same image on PX4's published Gazebo Harmonic
+dev image instead (`BASE_IMAGE`, `PX4_SETUP=0` build args) and trusts the cloud proxy's CA.
+For checking the runner and the amd64 path; benchmark numbers come from `run.sh build`.
 
 ## Watching a flight
 

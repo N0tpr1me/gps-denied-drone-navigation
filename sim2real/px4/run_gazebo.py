@@ -71,6 +71,8 @@ from sim2real.gazebo.run_scenario import (
     WATCH_IMAGE,
     WORLD,
     git_commit,
+    isolation_options,
+    make_run_dir,
     params_summary,
     watch_options,
     watch_url,
@@ -88,9 +90,9 @@ STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_HOVER = 1, 2,
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
-                   env: dict[str, str], watch: bool = False, land: str = "structure"
-                   ) -> list[str]:
-    cmd = ["docker", "run", "--rm", "--name", name,
+                   env: dict[str, str], watch: bool = False, land: str = "structure",
+                   cpuset: str | None = None) -> list[str]:
+    cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
@@ -347,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
                          "stock Land")
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
     ap.add_argument("--container-name", default="px4-sitl-hold")
+    ap.add_argument("--cpuset", help="host CPUs for this flight's container, e.g. 0-3 "
+                                     "(parallel batches: eval.baselines.run_baseline --jobs)")
     args = ap.parse_args(argv)
     if args.image is None:
         args.image = WATCH_IMAGE if args.watch else DEFAULT_IMAGE
@@ -364,8 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     px4_params = read_params(args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    out = args.runs_dir / f"{stamp}_sitl_hold_{sc.name}_{prof.name}_{commit}"
-    out.mkdir(parents=True)
+    out = make_run_dir(args.runs_dir, f"{stamp}_sitl_hold_{sc.name}_{prof.name}_{commit}")
 
     wind = sample_scenario(sc)
     write_params(out / "wind_params.txt", wind)
@@ -381,7 +384,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
-                         to_environment(px4_params), watch=args.watch, land=args.land)
+                         to_environment(px4_params), watch=args.watch, land=args.land,
+                         cpuset=args.cpuset)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:

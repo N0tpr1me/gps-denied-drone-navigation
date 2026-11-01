@@ -126,24 +126,61 @@ Run in order; stop and post the output in the project if a step fails.
    repo into Isaac's Python, record the image digest.
 4. **Isaac starts headless.** `$PY /workspace/isaaclab/scripts/tutorials/00_sim/log_time.py --headless`
    (the stock smoke test; it exits after a few seconds).
-5. **Repo tests in Isaac's Python.** `$PY -m pytest -rs envs/sims eval/tests/test_sim_parity.py`.
+5. **Repo tests in Isaac's Python.**
+   `$PY -m pytest -rs envs/sims eval/tests/test_sim_parity.py training/tests/test_isaac_ready.py`.
    The contract tests now include `isaac` (CPU physics pipeline) and
    `test_isaac_lab_matches_the_mock` runs on the GPU. Nothing in that list may say SKIPPED for
    an Isaac reason.
 6. **Parity report.** `$PY -m eval.sim_parity --a torch --b isaac --device cuda --out runs/parity_isaac.json`.
-   Open loop, then the closed loop on the nominal airframe and with the Gate 1 airframe
-   randomisation on. Must end `parity: PASS` (a minute or two). Keep the JSON; paste the printed table in the
-   project. `--a torch --b torch-fine` prints the reference gaps the limits come from.
+   Open loop on the placeholder airframe and on the x500, then three closed loops: the PD on
+   the nominal airframe, the PD with the Gate 1 airframe randomisation on, and v22 on its own
+   x500 task. Must end `parity: PASS` (a few minutes). Keep the JSON; paste the printed table
+   in the project. `--a torch --b torch-fine` prints the reference gaps the limits come from.
 7. **Mock on the GPU, for comparison.**
-   `$PY -m training.launch --config training/configs/structure_hold_ppo.yaml --sim torch --smoke --device cuda`
+   `$PY -m training.launch --config training/configs/structure_hold_ppo_v22.yaml --sim torch --smoke --device cuda`
 8. **Isaac training smoke run, 1 GPU, a few iterations.**
-   `$PY -m training.launch --config training/configs/structure_hold_ppo.yaml --sim isaac --smoke --device cuda`.
-   Must finish `launch: ok`; `runs/*-smoke/stdout.log` shows `env_steps_per_s` for both
-   simulators. While it runs, `nvidia-smi` should show the process on the GPU launch picked.
-9. **Tell Zain**: parity numbers, smoke steps/s on both backends, and the image digest for
-   the decisions row below. A real Isaac run (not smoke) follows the usual rules: logged in
-   `experiments/LOG.md` by launch.py, compared against the PD and tuned-PX4 baselines, and
-   anything over 1 hour or more than 1 GPU needs Zain's go-ahead.
+   `$PY -m training.launch --config training/configs/structure_hold_ppo_v22.yaml --sim isaac --smoke --device cuda`.
+   This is the released recipe (v22: x500, fusion, engage-time input, starting from v19's
+   ONNX). Must finish `launch: ok`; `runs/*-smoke/stdout.log` shows `env_steps_per_s` for
+   both simulators. While it runs, `nvidia-smi` should show the process on the GPU launch picked.
+9. **v22 scored on Isaac.**
+   `$PY -m training.launch --config training/configs/structure_hold_eval_v22.yaml --sim isaac --device cuda`
+   (8 min on 4 CPU cores). On the mock (run `20261101-012947`, `experiments/LOG.md`), 3 seeds
+   x 512 identical 60 s episodes: v22 p95 0.211 / 0.206 / 0.202 m, crash 0 / 0.4 / 0 %
+   (pooled 0.206 m, 0.1 %); the PD 0.61 / 0.56 / 0.70 m, crash 1.6 / 1.6 / 2.0 %. The
+   scoring is deterministic: a second run gave the same numbers to the digit. On Isaac, v22's
+   p95 per seed must land within the mock's 0.20 to 0.21 m spread (a few mm either side is
+   the physics step, as in the parity check) and its crash rate stay under 1 %.
+10. **Tell Zain**: parity numbers, smoke steps/s on both backends, v22's score on both, and
+   the image digest for the decisions row below. A real Isaac run (not smoke) follows the
+   usual rules: logged in `experiments/LOG.md` by launch.py, compared against the PD and
+   tuned-PX4 baselines, and anything over 1 hour or more than 1 GPU needs Zain's go-ahead.
+
+## M3: the first Isaac training
+
+Nothing about the task is ported, because nothing has to be: the Structure Hold env, the
+wind and near-wall flow, the estimate corruption and EKF2-like fusion, the airframe
+randomisation, re-engages and the engage-time input all sit above the seam and run
+unchanged on whichever backend is underneath (`training/tests/test_isaac_ready.py` steps the
+v22 task on the Isaac backend's own code and the mock side by side, crashes, resets and
+re-engages included, and they agree to float32 rounding). So M3 is the released recipe on
+the other backend, judged the way every candidate is:
+
+1. Train: `$PY -m training.launch --config training/configs/structure_hold_ppo_v22.yaml --sim isaac --device cuda`
+   (v22's own recipe, 1 GPU; on the mock it took ~25 min on 4 CPU cores, so it is under the
+   1 h rule; check the smoke run's steps/s first).
+2. Score the result with `structure_hold_eval_v22.yaml` pointed at the new `policy.onnx`,
+   on the mock (`--sim torch`): a policy trained on Isaac must hold the mock's task about as
+   well as v22 does. The mock score alone has never been enough to release a policy, so it
+   then goes through `eval/configs/gazebo_check.yaml` and a Gazebo re-fly like any candidate.
+3. Isaac is worth keeping if it trains as well per iteration and faster per hour; the
+   speed lets later runs use more envs or longer training inside the 1 h rule. If it does
+   not, the decided fallback stands (the batched PyTorch sim on the GPU).
+
+What may need attention on the GPU (cannot be measured on CPU): the env syncs the GPU with
+the CPU a few times per step (episode counters, `done` checks, re-engage draws in NumPy).
+That is correct but costs speed at thousands of envs; profile before changing it, and keep
+the results identical when changing it (`test_isaac_ready.py` checks it).
 
 ## Parity: what is checked and the tolerances
 
@@ -156,7 +193,8 @@ inputs and compares true state.
   all-axis sweep, the same kind of sweep on another airframe set with `set_airframe` (mass
   x1.3, unequal inertia scales, 50 ms motors, lower thrust and yaw limits it runs into), and
   an external body moment like the near-wall yaw moment on a rolled body. Worst difference
-  over the second, per scenario.
+  over the second, per scenario. It runs on the placeholder airframe and again on the x500
+  (below).
 - **Closed loop:** Structure Hold with the cascaded PD on the corrupted estimate, same seed,
   wind and estimate noise on both, 256 envs x 10 s. The env's crash rules are switched off
   for this run so no env resets (a reset draws new random numbers; one crash a step apart
@@ -167,7 +205,7 @@ inputs and compares true state.
   the nominal airframe, and with the airframe and wall yaw moment of the Gate 1 "combined"
   stress row on (`RANDOMISED`: mass x0.8 to 1.3, inertia x0.7 to 1.5, hover-thrust error
   +/-10 %, motors 20 to 50 ms, yaw moment up to 25 % of yaw authority), so every env flies its
-  own airframe through `set_airframe`.
+  own airframe through `set_airframe`. A third run flies v22 on its own x500 task (below).
 
 The tolerances come from one rule: Isaac must agree with the mock at least as well as the
 mock agrees with itself at an 8x finer physics step (the discretisation error every mock
@@ -204,10 +242,39 @@ airframe is marginal under the PD, so small step-size differences grow there. Th
 backend's own code, driven by the env (per-env airframes into the PhysX stand-in, the yaw
 moment through `step`), is within 1e-5 of the mock here too.
 
+On the x500 (added 2026-11-01). The open-loop scenarios run again on the PX4 Gazebo x500's
+rigid body (2.06 kg, 34 N, `envs/structure_hold/airframes.py`), with every fixed force
+scaled by the mass ratio and every fixed torque by the axis's inertia ratio, so each
+scenario asks the same accelerations of it (on the placeholder the scale is exactly 1 and
+nothing changed). Mock vs 8x finer, and the limits (twice it, same floors):
+
+| Scenario | Position | Velocity | Attitude | Body rate |
+| --- | --- | --- | --- | --- |
+| hover, free_fall, climb, yaw_spin, external_force | as the placeholder | | | |
+| roll_pulse, pitch_pulse | 2.1 mm | 1.2 mm/s | 2.1 mrad | 0.012 rad/s |
+| tilted_spinning_start | 10 mm | 17 mm/s | 6.2 mrad | 0.0040 rad/s |
+| saturated | 23 mm | 24 mm/s | 13 mrad | 0.12 rad/s |
+| aggressive | 41 mm | 38 mm/s | 24 mrad | 0.077 rad/s |
+| other_airframe | 51 mm | 52 mm/s | 37 mrad | 0.12 rad/s |
+| external_moment | 11 mm | 2.8 mm/s | 5.0 mrad | 0.0024 rad/s |
+
+The third closed loop (`X500_V22`) is the task the released policy trains on, flown by v22
+itself: `gz_x500_sitl` (12 ms tick, PX4's gyro and yaw filters, the bridge's lever arm, the
+EKF2-like fusion), v22's airframe randomisation and wall yaw moment, wind toward the wall,
+and the near-wall flow terms at their evaluation ranges. Everything Structure Hold sends
+through the seam is in it. Mock vs 8x finer, 256 envs x 10 s, seeds 0 to 3: median 2.0 mm,
+p95 6.8 to 8.1 mm, no crash mismatch, hold p95 within 0.07 % (v22 holds 0.28 to 0.32 m p95
+there). Limits: median 4.1 mm and p95 17 mm (twice the worst seed), crash mismatch 2 % and
+hold p95 within 1 % (the nominal run's floors). v22 on the x500 is much tighter than the PD
+on the placeholder because the x500 is heavier and slower to rotate, so a step-size
+difference moves it less. The Isaac backend's own code over the PhysX stand-in is within
+1 mm of the mock here.
+
 The check has teeth: in CI it fails a backend whose mass is 5 % off, whose roll inertia is
 10 % off, whose motor lag is doubled, that swaps the roll and pitch torque axes, that
 ignores `set_airframe` or only its motor lag, or that applies the external moment about the
-world axes (`test_parity_catches_a_wrong_backend`), and the Isaac backend's own code passes it at 1e-4
+world axes (`test_parity_catches_a_wrong_backend`; the x500 set catches a 5 % mass error and
+an ignored `set_airframe` too), and the Isaac backend's own code passes it at 1e-4
 over a PhysX stand-in that keeps state the way PhysX does (`envs/sims/tests/fake_physx.py`).
 
 ## If parity fails
@@ -242,7 +309,11 @@ PhysX stand-in, and driven by the Structure Hold env with the airframe randomisa
 glue; the lazy import (the repo never imports Isaac Lab unless asked); the parity check and
 its tolerances on the mock (`python -m eval.sim_parity --a torch --b torch-fine` passes);
 `launch.py --sim` (override, refusals, LOG line); the PPO smoke run through
-`launch --sim torch`.
+`launch --sim torch`. And, since 2026-11-01, over the PhysX stand-in with Isaac Lab's one
+scene per process enforced (`training/tests/test_isaac_ready.py`): the v22 task step for
+step against the mock, crashes, resets and re-engages included; the v22 training recipe
+with `sim: isaac` (critic warm-up, training, checkpoint selection, export, PD comparison,
+each building its envs one after another); the eval entry with `sim: isaac`.
 
 Not verified until the server: anything that touches Isaac Lab itself. The calls the
 backend makes were read from the v2.3.2 sources (`InteractiveScene`, `RigidObject`,

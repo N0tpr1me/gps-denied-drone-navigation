@@ -87,6 +87,20 @@ PARAM_DEFINE_FLOAT(SH_RST_HOLD, 0.0f);
 PARAM_DEFINE_INT32(SH_TEST_FAULT, 0);
 
 /**
+ * Bench test only: allow engaging on the ground
+ *
+ * Structure Hold refuses to engage while the land detector says the vehicle is on the
+ * ground (a hold point on the ground is no hold, and the policy never learned a take-off),
+ * and hands back at idle thrust. The props-off bench test (docs/bench-test.md) needs the
+ * mode engaged on the ground, so this lifts that refusal. Props off only; never fly with
+ * it set. The mode still cannot be armed into.
+ *
+ * @boolean
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_BENCH, 0);
+
+/**
  * Placeholder hold controller: position gain
  *
  * @unit 1/s

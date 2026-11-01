@@ -55,7 +55,28 @@ What it does today:
   can fly through dropouts; EKF2-invalid flags trip at once), too much tilt or too much
   hold error, in that priority order. A trip latches until disarm. On a trip the module hands back:
   Position mode (Altitude mode if the horizontal estimate is gone), then Hold, then Land
-  if the previous request was refused, holding level at hover thrust in between.
+  if the previous request was refused, holding level at hover thrust in between; Land is
+  asked for again every 0.3 s until commander takes it (`Handback.hpp`, unit-tested step by
+  step against the decided rows).
+- **Hardening (Phase 2, 2026-11)**, each with a unit test or an SIH check:
+  - every `SH_` parameter is clamped to its documented range by the module itself
+    (`ParamLimits.hpp`; PX4 does not enforce `@min`/`@max`), a NaN takes the default and an
+    out-of-range enum the default, with a warning; a negative `SH_YAW_P` or `SH_FB_K`, a NaN
+    `SH_FIX_GAP` or an `SH_CTRL` of 5 can no longer fly. The hover thrust (estimate or
+    `MPC_THR_HOVER`) is clamped to 0.1 to 0.9, a NaN estimate falls back to the parameter;
+  - the mode cannot be armed into, and a switch into it on the ground (land detector) is
+    refused and handed back at idle thrust (`trip_reason` `landed`, 7, not latched): the
+    hold point would be the ground and the policy never learned a take-off;
+  - a disarm while engaged (kill switch) or during a handback ends it; before, the
+    controller kept running on the ground and a trip there stayed latched into the next flight;
+  - a NaN in the position or velocity estimate counts as invalid (`estimate_invalid`), a
+    NaN heading or estimate at the switch refuses the engage, and every rate setpoint goes
+    through one last check (a non-finite rate becomes 0, a non-finite thrust the hover thrust);
+  - Structure Hover and Structure Land move their setpoint with EKF2's height and heading
+    resets as well as xy ones, as PX4's own modes do (Hover held the old height before);
+  - `Run()` wakes at most every 2 ms (a flight controller can publish the gyro at up to
+    8 kHz; the tick stays 10 ms), and `structure_hold status` prints the worst control step
+    since boot and the tick interval (`docs/bench-test.md`, CPU budget).
 - **Engage hold-off after an EKF reset** (`SH_RST_HOLD`, seconds; default 0 = off): for
   that long after EKF2 reset its horizontal position (`vehicle_local_position.xy_reset_counter`
   changed) the mode's arming check reports it unavailable, so commander keeps the current
@@ -127,7 +148,7 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD`, the test hook `SH_TEST_FAULT`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside
@@ -139,19 +160,22 @@ the estimate the policy sees.
 ```
 sim2real/px4/
   structure_hold/        the module: CMakeLists.txt, Kconfig, StructureHold.{hpp,cpp},
-                         Watchdog.hpp, WallGuard.hpp, PolicyController.hpp, MlpPolicy.hpp,
+                         Watchdog.hpp, WallGuard.hpp, Handback.hpp, ParamLimits.hpp,
+                         PolicyController.hpp, MlpPolicy.hpp,
                          PolicyWeights.hpp (generated), HoldController.hpp,
                          structure_hold_params.c
   msg/StructureHoldStatus.msg
   tools/                 export_policy_header.py (onnx -> PolicyWeights.hpp),
                          make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
+  boards/                structurehold.px4board: multicopter-only variant that fits a 2 MB board
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
   bench_test.py          props-off bench checks on a flight controller (docs/bench-test.md)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
   tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
-                         test_policy_header.py
+                         test_params.cpp, test_handback.cpp, test_policy_header.py,
+                         test_param_limits.py
 ```
 
 After a policy release, regenerate both headers and commit them:
@@ -187,6 +211,31 @@ the module when you copied rather than linked.
 PX4's own build needs its Python packages (`Tools/setup/requirements.txt`; `empy<4`
 does not build on Python 3.13, use 3.10 to 3.12).
 
+### Real flight controllers
+
+The module is about 125 KB of flash (text plus data), most of it the policy's weights, and
+a stock 2 MB board does not have that spare: `px4_fmu-v6c_default` plus the module
+overflowed flash by 87 KB (2026-10-31). `boards/structurehold.px4board` is a board variant
+that drops the fixed-wing, VTOL and airspeed modules (as PX4's own
+`fmu-v6x/multicopter.px4board` does), SIH, the MSP OSD driver and the precision-landing
+target estimator, none of which a GPS-denied multicopter next to a wall uses, and turns the
+module on. With only the fixed-wing, VTOL and airspeed modules dropped, the fmu-v6x build
+still overflowed by 2 KB:
+
+```bash
+cp sim2real/px4/boards/structurehold.px4board /path/to/PX4-Autopilot/boards/px4/fmu-v6c/
+sim2real/px4/install.sh /path/to/PX4-Autopilot --board boards/px4/fmu-v6c/structurehold.px4board
+cd /path/to/PX4-Autopilot && make px4_fmu-v6c_structurehold
+```
+
+Checked in the cloud container with Ubuntu 24.04's `gcc-arm-none-eabi` 13.2.1 (`apt-get
+install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`; PX4's
+venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
+uses 96.0 % of flash, `px4_fmu-v6x_structurehold` 99.7 % (about 6 KB spare, so a partner
+adding drivers to a 6X drops something else they do not fly). The first such build also
+caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+`docs/partner-pack.md`.
+
 ## Fly it
 
 ```bash
@@ -194,7 +243,9 @@ pip install pymavlink pyulog
 sim2real/px4/sitl_test.sh /path/to/PX4-Autopilot          # writes runs/<time>_sitl_structure_hold_<commit>/
 ```
 
-The flight: take off to 2.5 m in stock PX4, engage Structure Hold over MAVLink (DO_SET_MODE,
+The flight: on the ground, check the mode cannot be armed into and that a switch into it
+after arming is refused without lifting off (`trip_reason` `landed` in the ulog); take off
+to 2.5 m in stock PX4, engage Structure Hold over MAVLink (DO_SET_MODE,
 auto / external 1), hold 20 s, disengage to Position mode, re-engage, trip the watchdog
 with `SH_TEST_FAULT`, confirm the handback and that a further engage is refused, land
 through Structure Land (`--land stock` for stock Land).
@@ -211,6 +262,12 @@ side); the hover must stay at least 0.55 m from it. The landing gets the same cr
 its clearance is reported, not checked: SIH's EKF velocity is unusable (below), so PX4's
 own xy loop, which flies Structure Land, tracks too poorly here to judge it (0.26 to 0.67 m
 over runs; stock Land 0.15 m). Gazebo judges the landing.
+
+`--range-faults` (with `--wall`) streams 6 s of broken ranges before the wall jump (0 cm,
+5 cm, beyond the maximum, 65535 cm, a 50 cm reading flagged invalid); the vehicle must not
+back off. `--moving-engage` pushes the vehicle sideways in Position mode (about 2 m/s in
+SIH) and engages while it moves, the re-engage mid-gust case; it must stop and hold with no
+trip.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
 Structure Land, `commander mode ext3` hovers in Structure Hover, `commander mode posctl` disengages,
@@ -242,14 +299,23 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_params.cpp -o test_params && ./test_params
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_handback.cpp -o test_handback && ./test_handback
 python -m pytest sim2real/px4/tests
 ```
 
-CI runs all four; they need no PX4 tree. `test_policy.cpp` checks the compiled-in MLP
+CI runs all of them; they need no PX4 tree. `test_policy.cpp` checks the compiled-in MLP
 against onnxruntime (within 1e-6), and the observation and fallback action against values
 recorded from the Python env (within 3e-7), plus the hand-back, the yaw guard, the
-action-to-setpoint mapping and the parameter resolution against the policy's defaults. The
-c++14 flags mirror PX4's own build.
+action-to-setpoint mapping and the parameter resolution against the policy's defaults, a
+re-engage mid-flight (bit for bit a fresh controller), NaN and inf in every input (always a
+finite setpoint) and the policy step time on the host. `test_wall_guard.cpp` covers the
+broken readings real drivers and MAVLink send (inf, 0, negative, 65535 cm, unset or NaN
+limits, bad quality, the age and range edges). `test_handback.cpp` walks every handback
+sequence of the decided rows; `test_params.cpp` and `test_param_limits.py` keep the
+module's limits equal to `structure_hold_params.c`. The c++14 flags mirror PX4's own build.
 
 ## SIH flights (2026-10-22, cloud)
 
