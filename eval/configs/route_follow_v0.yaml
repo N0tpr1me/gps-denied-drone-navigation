@@ -1,0 +1,32 @@
+# Route Follow v0 (run 20261101-174152, the first 30 min CPU run; its policy lives only in
+# that run folder) against the classical yardsticks, on the same four sets as
+# eval/configs/route_follow_baseline.yaml (docs/route-follow.md, "First results").
+#   python -m training.launch --config eval/configs/route_follow_v0.yaml --device cpu
+name: route_follow_v0
+entrypoint: eval.route_follow
+seed: 7300
+expected_hours: 0.3
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  policy: runs/20261101-174152_route_follow_ppo_s0_cdbaa61/policy.onnx
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+  sets:
+    - name: corridor
+      env: {route: {tunnel_prob: 0.0}}
+    - name: corridor_ranges
+      env: {route: {tunnel_prob: 0.0}, ranges: {present_prob: 1.0}}
+    - name: tunnel
+      env: {route: {tunnel_prob: 1.0}}
+    - name: tunnel_ranges
+      env: {route: {tunnel_prob: 1.0}, ranges: {present_prob: 1.0}}
+smoke:
+  num_envs: 8
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40

@@ -1,0 +1,42 @@
+# Route Follow v0: the first route-following policy (docs/route-follow.md), on the Gazebo
+# x500 as SITL flies it, through corridors and tunnels, with rangefinders in 70 % of the
+# beams. Full training belongs on the GPU server; on the cloud CPUs keep runs under 1 h and
+# chain them with params.resume.
+#   python -m training.launch --config training/configs/route_follow_ppo.yaml --smoke --device cpu
+name: route_follow_ppo
+entrypoint: training.train_route_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  iterations: 1000  # about 45 min on the cloud container's 4 cores
+  num_steps_per_env: 48
+  history: 3
+  sim: torch
+  save_interval: 50
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40  # the x500's props (as eval/configs/gazebo_check.yaml)
+    ranges:
+      present_prob: 0.7
+      outlier_prob: 0.01
+  eval:
+    num_envs: 128
+    episodes: 1
+    env: {}
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  eval:
+    num_envs: 8
+    episodes: 1
+    env: {}

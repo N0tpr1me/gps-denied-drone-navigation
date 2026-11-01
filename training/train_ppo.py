@@ -130,7 +130,10 @@ def make_curriculum(p: dict[str, Any]) -> DropoutCurriculum | None:
                              iterations)
 
 
-def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer: RunWriter):
+def build_runner(vec: Any, train_cfg: dict[str, Any], log_dir: Path, device: str,
+                 writer: RunWriter, dt: float):
+    """rsl_rl's runner on any of our vec envs (``vec.cfg``, ``vec.curriculum_state()``),
+    logging one ``metrics.jsonl`` row per iteration. Route Follow uses it too."""
     from rsl_rl.runners import OnPolicyRunner
     from rsl_rl.utils.logger import Logger
 
@@ -142,7 +145,7 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
             crash = [float(e["crash_rate"]) for e in self.ep_extras if "crash_rate" in e]
             row = {
                 "reward_mean": statistics.mean(self.rewbuffer) if self.rewbuffer else None,
-                "length_s_mean": (statistics.mean(self.lenbuffer) * env_cfg.dt
+                "length_s_mean": (statistics.mean(self.lenbuffer) * dt
                                   if self.lenbuffer else None),
                 "crash_rate": statistics.mean(crash) if crash else None,
                 "action_std": float(action_std.detach().mean()),
@@ -171,6 +174,10 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
                 gpu_global_rank=self.gpu_global_rank, device=self.device,
             )
 
+    return Runner(vec, train_cfg, str(log_dir), device)
+
+
+def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer: RunWriter):
     env_cfg = StructureHoldConfig.from_dict(p.get("env"))
     torch.manual_seed(seed)
     env = StructureHoldEnv(env_cfg, int(p["num_envs"]), seed=seed, device=device,
@@ -179,7 +186,7 @@ def make_runner(p: dict[str, Any], seed: int, device: str, log_dir: Path, writer
                               steps_per_iteration=int(p["num_steps_per_env"]),
                               num_obs=int(p["num_obs"]))
     train_cfg = build_train_cfg(p)
-    runner = Runner(vec, train_cfg, str(log_dir), device)
+    runner = build_runner(vec, train_cfg, log_dir, device, writer, env_cfg.dt)
     return runner, vec, env_cfg, train_cfg
 
 

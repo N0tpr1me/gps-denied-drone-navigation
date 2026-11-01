@@ -25,8 +25,9 @@ body rates and collective thrust to PX4's stock rate controller, a small MLP on 
 observation history, exported as ONNX and compiled into the module as a header.
 
 **The target.** A point moves along the route's centreline (straight segments between the
-waypoints) at the route speed, with a speed ramp at the start and the end, and stops on the
-last waypoint. The policy is asked to stay on that moving point. A moving target, rather
+waypoints) at the route speed: it starts from rest, slows for each corner (a 90 degree
+corner at a fifth of the cruise speed, a straight joint at full speed, as PX4 Mission mode
+slows for a corner), and stops on the last waypoint. The policy is asked to stay on that moving point. A moving target, rather
 than "fly to the next waypoint", gives the policy one well-defined error to close at all
 times and is the same shape as PX4's own position controller tracking a trajectory setpoint,
 so the classical baseline is a fair copy of what PX4 does.
@@ -90,6 +91,29 @@ Gazebo (below).
 - **Airframe:** the Gazebo x500 presets (`gz_x500`, `gz_x500_sitl`), so the numbers carry
   over to SITL as they did for Structure Hold.
 
+## The code
+
+| Piece | Where |
+| --- | --- |
+| Config (route, rangefinders, reward; airframes as Structure Hold) | `envs/route_follow/config.py` |
+| Random routes and the target's speed plan (NumPy) | `envs/route_follow/routes.py` |
+| Walls, target, route frame, rangefinder beams (sphere-traced) on tensors | `envs/route_follow/geometry.py` |
+| The env (38 inputs per step, table in its docstring) | `envs/route_follow/env.py` |
+| PD yardsticks (estimate only; with range centring) | `envs/route_follow/baseline.py` |
+| Scoring and the yardstick run | `eval/route_follow.py`, `eval/configs/route_follow_baseline.yaml` |
+| PPO training (smoke mode, exports `policy.onnx`) | `training/train_route_ppo.py`, `training/configs/route_follow_ppo.yaml` |
+
+Defaults worth knowing: 4 segments with turns up to 90 degrees and slopes up to 10 degrees
+(a short route turns less, one piece per 3 m at most); corridors 2 to 4 m wide and 2.4 to 4 m
+tall, tunnels 1.1 to 2 m in radius; cruise 0.5 to 1.5 m/s at 0.5 m/s^2; 30 s episodes with
+the last 5 s a hold on the last waypoint; draft up to 3 m/s along the tunnel; the estimate's
+drift walk and cap raised to 0.02 m/sqrt(s) and 0.5 m (a guess until a tunnel VIO fit).
+
+```
+python -m training.launch --config training/configs/route_follow_ppo.yaml --smoke --device cpu
+python -m training.launch --config eval/configs/route_follow_baseline.yaml --device cpu
+```
+
 ## How it is scored
 
 Always on the true position, never the estimate:
@@ -106,6 +130,27 @@ same PD with a classical wall-centring term from the left/right/up/down ranges, 
 hand-written controller does with the same sensors. Every mock result is reported against
 both. In SITL: stock PX4 Mission mode with the tuned parameters
 (`eval/baselines/px4_tuned_v1.params`) flying the same waypoints through the same estimate.
+
+## First results (mock, 2026-11-01)
+
+v0, the first policy: 30 minutes of PPO on the cloud container's 4 CPU cores (1024 drones,
+1000 iterations, run `20261101-174152`), rangefinders present on 70 % of the beams in
+training. Scored on 256 new routes per set (run `20261101-181304`; the yardsticks alone in
+run `20261101-173858`), x500 as SITL flies it, true position:
+
+| Set | v0 cross-track p95 | PD | PD + centring | v0 / PD / PD + centring done | crashes |
+| --- | --- | --- | --- | --- | --- |
+| corridor, no rangefinders | 0.28 m | 0.36 m | 0.36 m | 93 / 88 / 88 % | 1 / 4 / 4 % |
+| corridor, rangefinders | 0.24 m | 0.39 m | 0.34 m | 94 / 89 / 92 % | 3 / 4 / 3 % |
+| tunnel, no rangefinders | 0.26 m | 0.35 m | 0.35 m | 93 / 87 / 87 % | 3 / 7 / 7 % |
+| tunnel, rangefinders | 0.24 m | 0.36 m | 0.33 m | 97 / 86 / 92 % | 1 / 7 / 5 % |
+
+So v0 follows the route 22 to 38 % tighter than the PD on the estimate alone and 22 to 29 %
+tighter than the PD that centres on the walls, and finishes more routes. Every crash, for
+all three, is a wall contact; at 256 routes a set, 1 to 7 % is 2 to 19 flights, so the crash
+numbers are rough. This is the mock only: the lesson from Structure
+Hold is that the mock alone does not predict Gazebo, so nothing is claimed until a Gazebo
+tunnel flight against tuned PX4 Mission mode.
 
 ## Plan, and what needs the GPU server
 

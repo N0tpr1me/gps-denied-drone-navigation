@@ -65,9 +65,10 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning) and the EKF2-like fusion (`ekf.py`) |
 | `envs/sims/` | Simulator backends behind one seam (thrust, body torque, external force in; `QuadState` out), PX4-shaped rate PID |
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback |
+| `envs/route_follow/` | Route Follow (second capability): random corridor and tunnel routes (`routes.py`), walls, target and rangefinder beams on tensors (`geometry.py`), the env, the PD yardsticks (estimate only, and with range centring) |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
-| `training/` | `launch.py`, `train_ppo.py`, `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `partner_session.py` (scores a partner's real flight session against tuned PX4), `baselines/` (tuned PX4, `run_baseline.py`) |
+| `training/` | `launch.py`, `train_ppo.py`, `train_route_ppo.py` (Route Follow), `eval_policy.py`, configs, released `policies/` (README lists each version) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `partner_session.py` (scores a partner's real flight session against tuned PX4), `route_follow.py` (scores Route Follow controllers on true position against the PD yardsticks), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...) |
@@ -105,6 +106,10 @@ python -m training.launch --config training/configs/selfcheck.yaml --smoke --dev
 python -m training.launch --config training/configs/structure_hold_ppo_v19.yaml --smoke --device cpu
 python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu        # ~25 min, release gate
 python -m training.launch --config eval/configs/gate1_x500_ekf_v19.yaml --device cpu  # Gate 1, x500 fused
+
+# Route Follow (mock, CPU; docs/route-follow.md)
+python -m training.launch --config training/configs/route_follow_ppo.yaml --smoke --device cpu
+python -m training.launch --config eval/configs/route_follow_baseline.yaml --device cpu  # yardsticks
 
 # PX4 module unit tests (as CI runs them)
 cd sim2real/px4/tests

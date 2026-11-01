@@ -1,0 +1,33 @@
+# The classical yardsticks on Route Follow (docs/route-follow.md): cascaded PD on the
+# estimate (the shape of PX4's position controller) and PD with range centring, on the x500
+# as SITL flies it, in corridors and tunnels, with and without rangefinders. Give
+# params.policy (a policy.onnx) to score a policy on the same conditions.
+#   python -m training.launch --config eval/configs/route_follow_baseline.yaml --device cpu
+name: route_follow_baseline
+entrypoint: eval.route_follow
+seed: 7300
+expected_hours: 0.3
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  policy: null
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+  sets:
+    - name: corridor
+      env: {route: {tunnel_prob: 0.0}}
+    - name: corridor_ranges
+      env: {route: {tunnel_prob: 0.0}, ranges: {present_prob: 1.0}}
+    - name: tunnel
+      env: {route: {tunnel_prob: 1.0}}
+    - name: tunnel_ranges
+      env: {route: {tunnel_prob: 1.0}, ranges: {present_prob: 1.0}}
+smoke:
+  num_envs: 8
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
