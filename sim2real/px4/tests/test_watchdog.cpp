@@ -158,6 +158,59 @@ int main()
 		CHECK(w.mayEnter(at(t0 + 40'000'000)));
 	}
 
+	// Frozen fix (SH_WD_FRZ_T): off by default, so a fix that never moves trips nothing.
+	{
+		Watchdog off{};
+		auto in = healthy();
+		in.fix_frozen_s = 100.f;
+		CHECK(off.check(in) == Trip::None);
+	}
+
+	// On: trips once the fix has not moved for the limit, refuses entry while it is so,
+	// and sits after the stale trip (a fix that stopped arriving is stale, not frozen).
+	{
+		WatchdogLimits frz{};
+		frz.max_fix_frozen_s = 1.f;
+		Watchdog wdf(frz);
+		auto in = healthy();
+		in.fix_frozen_s = 0.9f;
+		CHECK(wdf.check(in) == Trip::None);
+		in.fix_frozen_s = 1.f;
+		CHECK(wdf.check(in) == Trip::EstimateFrozen);
+		CHECK(!wdf.mayEnter(in));
+		in.fix_frozen_s = NAN;
+		CHECK(wdf.check(in) == Trip::EstimateFrozen);
+		in.fix_frozen_s = 5.f;
+		in.estimate_timestamp_us = in.now_us - 2'000'000;
+		CHECK(wdf.check(in) == Trip::EstimateStale);
+	}
+
+	// FrozenFix: timed by the fixes' own sample times; any axis moving more than 0.1 mm
+	// restarts it; a sample time going backwards (a VIO restart) restarts it too.
+	{
+		FrozenFix f;
+		CHECK(f.frozenSeconds() <= 0.f);
+		f.update(1'000'000, 1.f, 2.f, -2.5f);
+		CHECK(f.frozenSeconds() <= 0.f);
+		f.update(1'500'000, 1.f, 2.f, -2.5f);
+		f.update(2'000'000, 1.00005f, 2.f, -2.5f);  // inside the tolerance
+		CHECK(std::fabs(f.frozenSeconds() - 1.f) < 1e-6f);
+		f.update(2'020'000, 1.f, 2.f, -2.5003f);  // z moved 0.3 mm
+		CHECK(f.frozenSeconds() <= 0.f);
+		f.update(4'020'000, 1.f, 2.f, -2.5003f);
+		CHECK(std::fabs(f.frozenSeconds() - 2.f) < 1e-6f);
+		f.update(3'000'000, 1.f, 2.f, -2.5003f);  // time went backwards
+		CHECK(f.frozenSeconds() <= 0.f);
+		// A real VIO's noise: a few mm per sample never freezes.
+		FrozenFix noisy;
+		for (int k = 0; k < 500; k++) {
+			noisy.update(1'000'000 + 20'000ULL * k, 0.003f * std::sin(0.7f * k), 0.f, -2.5f);
+		}
+		CHECK(noisy.frozenSeconds() < 0.05f);
+		f.reset();
+		CHECK(f.frozenSeconds() <= 0.f);
+	}
+
 	// Names are stable (they end up in logs and the status topic).
 	CHECK(std::string_view(Watchdog::name(Trip::None)) == "none");
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateStale)) == "estimate_stale");
@@ -167,6 +220,8 @@ int main()
 	CHECK(static_cast<int>(Trip::Landed) == 7);  // structure_hold_status TRIP_LANDED
 	CHECK(std::string_view(Watchdog::name(Trip::RangeLost)) == "range_lost");
 	CHECK(static_cast<int>(Trip::RangeLost) == 8);  // structure_hold_status TRIP_RANGE_LOST
+	CHECK(std::string_view(Watchdog::name(Trip::EstimateFrozen)) == "estimate_frozen");
+	CHECK(static_cast<int>(Trip::EstimateFrozen) == 9);  // structure_hold_status TRIP_ESTIMATE_FROZEN
 
 	if (failures == 0) {
 		std::printf("watchdog tests: all passed\n");

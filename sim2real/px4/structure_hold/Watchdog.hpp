@@ -23,12 +23,21 @@
  * who flies into it. Once the mode is flying, a reset is the policy's to handle (it is
  * trained on them), so check() ignores it.
  *
+ * A frozen fix (Proposed, off by default: max_fix_frozen_s 0, PX4 param SH_WD_FRZ_T): a
+ * stuck camera pipeline or VIO process can keep republishing its last pose on time, so the
+ * stale trip never sees it and EKF2 keeps it valid (docs/field-faults.md, the freeze fault).
+ * A real VIO on a flying vehicle never repeats its position to a tenth of a millimetre for a
+ * second: noise and the vehicle's own motion move it. FrozenFix measures how long the fix
+ * has stayed inside that tolerance, timed by the fixes' own sample times, so a fix that
+ * stops arriving is the stale trip's, not this one's.
+ *
  * This header is deliberately free of PX4 dependencies so it compiles and runs in a plain
  * g++ unit test (tests/test_watchdog.cpp) without a PX4 tree.
  */
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace structure_hold
@@ -44,6 +53,7 @@ enum class Trip : uint8_t {
 	EstimateReset = 6,    // entry refused: estimator reset its position too recently
 	Landed = 7,           // entry refused: the land detector says the vehicle is on the ground
 	RangeLost = 8,        // Structure Hover on the range alone (SH_HB_RANGE) lost its range
+	EstimateFrozen = 9,   // the position fix arrives on time but has not moved (SH_WD_FRZ_T)
 };
 
 struct WatchdogLimits {
@@ -51,6 +61,7 @@ struct WatchdogLimits {
 	float max_tilt_rad{0.785f};            // 45 deg
 	float max_position_error_m{2.0f};
 	uint64_t reset_holdoff_us{0};          // entry hold-off after an estimator reset; 0 = off
+	float max_fix_frozen_s{0.f};           // frozen-fix trip after this long; 0 = off
 };
 
 struct WatchdogInputs {
@@ -62,6 +73,46 @@ struct WatchdogInputs {
 	float tilt_rad{0.f};
 	float position_error_m{0.f};
 	bool test_fault{false};
+	float fix_frozen_s{0.f};  // how long the fix has not moved (FrozenFix)
+};
+
+/** How long the position fix has stayed put: see the header comment. */
+class FrozenFix
+{
+public:
+	static constexpr float TOLERANCE_M = 1e-4f;
+
+	/** Every fix sample: its own sample time and position. */
+	void update(uint64_t sample_us, float x, float y, float z)
+	{
+		const bool moved = !_have || !(std::fabs(x - _ref[0]) <= TOLERANCE_M)
+				   || !(std::fabs(y - _ref[1]) <= TOLERANCE_M) || !(std::fabs(z - _ref[2]) <= TOLERANCE_M)
+				   || sample_us < _last_us;
+
+		if (moved) {
+			_ref[0] = x;
+			_ref[1] = y;
+			_ref[2] = z;
+			_since_us = sample_us;
+			_have = true;
+		}
+
+		_last_us = sample_us;
+	}
+
+	/** Seconds between the first and the latest fix at the same position. */
+	float frozenSeconds() const
+	{
+		return _have && _last_us >= _since_us ? static_cast<float>(_last_us - _since_us) * 1e-6f : 0.f;
+	}
+
+	void reset() { _have = false; _since_us = _last_us = 0; }
+
+private:
+	float _ref[3] {0.f, 0.f, 0.f};
+	uint64_t _since_us{0};
+	uint64_t _last_us{0};
+	bool _have{false};
 };
 
 class Watchdog
@@ -87,6 +138,10 @@ public:
 		if (in.now_us < in.estimate_timestamp_us
 		    || in.now_us - in.estimate_timestamp_us > _limits.estimate_timeout_us) {
 			return Trip::EstimateStale;
+		}
+
+		if (_limits.max_fix_frozen_s > 0.f && !(in.fix_frozen_s < _limits.max_fix_frozen_s)) {
+			return Trip::EstimateFrozen;
 		}
 
 		if (!(in.tilt_rad <= _limits.max_tilt_rad)) {  // also catches NaN
@@ -165,6 +220,8 @@ public:
 		case Trip::Landed: return "landed";
 
 		case Trip::RangeLost: return "range_lost";
+
+		case Trip::EstimateFrozen: return "estimate_frozen";
 		}
 
 		return "unknown";

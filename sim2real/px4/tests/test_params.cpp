@@ -24,7 +24,8 @@ static int failures = 0;
 static bool same(float a, float b) { return !(a < b) && !(a > b); }
 
 static const FloatRange FLOATS[] = {
-	param_limits::SH_WD_EST_TO, param_limits::SH_WD_POS_ERR, param_limits::SH_WD_TILT, param_limits::SH_RST_HOLD,
+	param_limits::SH_WD_EST_TO, param_limits::SH_WD_POS_ERR, param_limits::SH_WD_TILT, param_limits::SH_WD_FRZ_T,
+	param_limits::SH_RST_HOLD,
 	param_limits::SH_P_POS, param_limits::SH_P_VEL, param_limits::SH_P_ATT, param_limits::SH_V_MAX,
 	param_limits::SH_FB_T, param_limits::SH_FIX_GAP, param_limits::SH_YAW_P, param_limits::SH_RATE_MAX,
 	param_limits::SH_FB_K, param_limits::SH_FB_TILT, param_limits::SH_WALL_MIN, param_limits::HOVER_THRUST,
@@ -33,6 +34,7 @@ static const FloatRange FLOATS[] = {
 static const IntRange INTS[] = {
 	param_limits::SH_VEL_SRC, param_limits::SH_CTRL, param_limits::SH_FB_EN, param_limits::SH_FIX_SRC,
 	param_limits::SH_YAW_GUARD, param_limits::SH_WALL_REQ, param_limits::SH_LAND_EN, param_limits::SH_HB_GUARD,
+	param_limits::SH_HB_RANGE,
 };
 
 int main()
