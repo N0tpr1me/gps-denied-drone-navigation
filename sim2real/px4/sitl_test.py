@@ -6,8 +6,9 @@ Runs against a PX4 built with install.sh, started separately (see sitl_test.sh):
 
 Steps, each a check in the summary:
 
-0. on the ground: Structure Hold cannot be selected while disarmed, and once armed a switch
-   into it is refused (land detector) and handed back without lifting off;
+0. on the ground (skip with ``--no-ground-checks``): Structure Hold cannot be armed into,
+   and once armed a switch into it is refused (land detector) and handed back without
+   lifting off;
 1. take off to ``--altitude`` in stock PX4 and hover ``--settle-s``;
 2. engage the external mode "Structure Hold" over MAVLink (DO_SET_MODE, auto/external),
    hold ``--hold-s``: drift from the engage point stays under ``--drift-tol``;
@@ -320,6 +321,8 @@ def parse_args() -> argparse.Namespace:
                    help="with --wall: how far the wall creeps in during the landing, m")
     p.add_argument("--land-creep-mps", type=float, default=0.1,
                    help="with --wall: creep speed, m/s (Gazebo seed 3 crept 0.05-0.07 m/s)")
+    p.add_argument("--no-ground-checks", action="store_true",
+                   help="skip step 0 (arm-into and ground-engage refusals) before take-off")
     p.add_argument("--range-faults", action="store_true",
                    help="with --wall: broken range readings before the wall jump; no back-off")
     p.add_argument("--range-faults-s", type=float, default=6.0)
@@ -405,38 +408,9 @@ def fly(args: argparse.Namespace) -> dict:
     # then disarm again: from here a refused arm can only be the mode's doing.
     v.wait_for(try_arm, args.ready_timeout_s, "arming")
     result["ready_s"] = round(time.monotonic() - start, 1)
-    v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
-    v.wait_for(lambda: not v.tel.armed, 5, "disarm before the ground checks")
-    # Disarmed, the mode reports itself unavailable: commander lets it be selected, but not
-    # armed into (a hold point on the ground; the policy never learned a take-off).
-    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
-    v.pump(1.0)
-    arm_ack = v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
-    v.pump(1.0)
-    result["ground_arm_in_mode"] = {"selected": in_structure_hold(v), "arm_ack": arm_ack}
-    checks["arm_into_mode_refused"] = arm_ack != mavlink.MAV_RESULT_ACCEPTED and not v.tel.armed
-    if v.tel.armed:
-        v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
-        v.wait_for(lambda: not v.tel.armed, 5, "disarm")
-    v.set_mode(stock[0], stock[1])
-    v.wait_for(try_arm, 10, "arming in the stock mode")
+    if not args.no_ground_checks:
+        ground_checks(v, args, result, stock, try_arm)
     ground_down = v.tel.down
-    # Armed on the ground, after commander's next arming-check poll (300 ms): commander takes
-    # the switch, the module refuses it (land detector) and hands back at idle thrust; the
-    # vehicle must stay on the ground (land detector, not the estimate's height, which
-    # moves 0.1 to 0.2 m on the ground in SIH).
-    v.pump(1.0)
-    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
-    stayed_landed = True
-    end = time.monotonic() + 2.5
-    while time.monotonic() < end:
-        v.pump(0.1)
-        stayed_landed = stayed_landed and v.tel.landed
-    result["ground_engage"] = {"mode_after": mode_name(v), "stayed_landed": stayed_landed}
-    checks["ground_engage_refused"] = not in_structure_hold(v) and stayed_landed and v.tel.armed
-    if not in_stock(v):
-        v.set_mode(stock[0], stock[1])
-        v.pump(0.5)
     nan = float("nan")
     assert v.command(mavlink.MAV_CMD_NAV_TAKEOFF, nan, 0, 0, nan, nan, nan, nan) \
         == mavlink.MAV_RESULT_ACCEPTED, "takeoff rejected"
@@ -591,6 +565,47 @@ def fly(args: argparse.Namespace) -> dict:
         # here (minimum 0.28-0.67 m over runs). Gazebo judges the landing (run_gazebo).
     result["wall_s"] = round(time.monotonic() - start, 1)
     return result
+
+
+def ground_checks(v: Vehicle, args: argparse.Namespace, result: dict,
+                  stock: tuple[int, int, str], try_arm) -> None:
+    """Step 0: the mode cannot be armed into, and is refused on the ground once armed."""
+    checks = result["checks"]
+
+    def in_stock(v: Vehicle) -> bool:
+        return v.tel.main_mode == stock[0] and (stock[1] == 0 or v.tel.sub_mode == stock[1])
+
+    v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
+    v.wait_for(lambda: not v.tel.armed, 5, "disarm before the ground checks")
+    # Disarmed, the mode reports itself unavailable: commander lets it be selected, but not
+    # armed into (a hold point on the ground; the policy never learned a take-off).
+    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    v.pump(1.0)
+    arm_ack = v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+    v.pump(1.0)
+    result["ground_arm_in_mode"] = {"selected": in_structure_hold(v), "arm_ack": arm_ack}
+    checks["arm_into_mode_refused"] = arm_ack != mavlink.MAV_RESULT_ACCEPTED and not v.tel.armed
+    if v.tel.armed:
+        v.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0)
+        v.wait_for(lambda: not v.tel.armed, 5, "disarm")
+    v.set_mode(stock[0], stock[1])
+    v.wait_for(try_arm, 10, "arming in the stock mode")
+    # Armed on the ground, after commander's next arming-check poll (300 ms): commander takes
+    # the switch, the module refuses it (land detector) and hands back at idle thrust; the
+    # vehicle must stay on the ground (land detector, not the estimate's height, which
+    # moves 0.1 to 0.2 m on the ground in SIH).
+    v.pump(1.0)
+    v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
+    stayed_landed = True
+    end = time.monotonic() + 2.5
+    while time.monotonic() < end:
+        v.pump(0.1)
+        stayed_landed = stayed_landed and v.tel.landed
+    result["ground_engage"] = {"mode_after": mode_name(v), "stayed_landed": stayed_landed}
+    checks["ground_engage_refused"] = not in_structure_hold(v) and stayed_landed and v.tel.armed
+    if not in_stock(v):
+        v.set_mode(stock[0], stock[1])
+        v.pump(0.5)
 
 
 def moving_engage_step(v: Vehicle, args: argparse.Namespace, result: dict,
