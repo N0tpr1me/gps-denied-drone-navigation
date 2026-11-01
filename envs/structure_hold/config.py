@@ -235,6 +235,14 @@ class RangeSensor:
     else). Dropouts (``dropout_rate_hz``, lengths drawn in ``dropout_s``) stop the samples.
     A reading counts while it is at most ``max_age_s`` old, inside ``min_m`` to ``max_m`` and
     the body x axis is within ``max_off_axis_deg`` of the wall normal, the module's own test.
+
+    Spike rejection, in the module as here (``RangeReference``, ``WallGuard.hpp``): a reading
+    whose perpendicular distance is more than ``spike_gate_m`` from the last accepted one is
+    not used (the input goes unusable until the next accepted reading) unless the reading
+    before it, also rejected, agrees with it within the gate, so a real step is accepted at
+    the second reading. 0 turns it off. A single outlier would otherwise kick the policy for
+    a whole sample period: with 1 % outliers and no gate, v23's 2.2 to 6 Hz rate content
+    doubled in the Gazebo-like check (``docs/wall-range.md``).
     """
 
     present_prob: float = 0.0
@@ -250,6 +258,7 @@ class RangeSensor:
     max_off_axis_deg: float = 35.0  # WallGuardLimits::max_off_axis_rad
     max_age_s: float = 0.2  # WallGuardLimits::max_age_us
     obs_clip_m: float = 1.0  # the input's clip: past 1 m off the hold point a reading is suspect
+    spike_gate_m: float = 0.25  # 5 m/s between two 20 Hz readings: no hover moves that fast
 
     def __post_init__(self) -> None:
         for name in ("scale_error", "dropout_s"):
@@ -264,6 +273,8 @@ class RangeSensor:
             raise ValueError("range needs 0 <= min_m < max_m")
         if self.dropout_s[0] <= 0:
             raise ValueError("range dropout_s must be positive")
+        if self.spike_gate_m < 0:
+            raise ValueError("range spike_gate_m must be >= 0")
         if not 0 < self.max_off_axis_deg < 90:
             raise ValueError("range max_off_axis_deg must be in (0, 90)")
 

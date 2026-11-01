@@ -75,6 +75,7 @@ void StructureHold::updateParams()
 	WallGuardLimits wall{};
 	wall.min_standoff_m = math::max(_param_wall_min.get(), 0.f);
 	_wall_guard.setLimits(wall);
+	_range_ref.setSpikeGate(policy::RANGE_SPIKE_GATE_M);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -483,7 +484,7 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 	const float body_x[3] = {r(0, 0), r(1, 0), r(2, 0)};
 	const bool shifted_before = _wall_guard.totalShift() > 0.f;
 	_wall_out = _wall_guard.apply(_range, now, pos_ned, normal, body_x, hold);
-	_range_ref.update(_wall_out);  // the wall-range input's reference (WallGuard.hpp)
+	_range_ref.update(_wall_out, _range.timestamp_us);  // the wall-range input (WallGuard.hpp)
 
 	if (_wall_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);

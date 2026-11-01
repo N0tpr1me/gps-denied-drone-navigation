@@ -199,6 +199,10 @@ def render_header(net: dict, meta: dict, onnx_path: Path, json_path: Path, sha: 
     range_clip = float((env.get("range") or {}).get("obs_clip_m", 1.0))
     out.append(f"static constexpr bool HAS_WALL_RANGE = {str(has_range).lower()};")
     out.append(f"static constexpr float RANGE_OBS_CLIP_M = {range_clip!r}f;")
+    # Spike gate for the module's RangeReference: RangeSensor's default (0.25 m) unless
+    # policy.json says (v23's predates the gate; it is scored with it, docs/wall-range.md).
+    gate = float((env.get("range") or {}).get("spike_gate_m", 0.25))
+    out.append(f"static constexpr float RANGE_SPIKE_GATE_M = {gate!r}f;")
     out.append("")
     out.append("// Action scaling and the airframe the policy was trained on (mock sim).")
     max_rate = float(meta["output"]["max_rate_rad_s"])

@@ -204,6 +204,11 @@ class StructureHoldEnv:
         self.range_timer = torch.zeros(n, dtype=dt, device=dev)
         self.range_drop_left = torch.zeros(n, dtype=dt, device=dev)
         self.range_ref = torch.zeros(n, dtype=dt, device=dev)
+        # Spike rejection (cfg.range.spike_gate_m): the last accepted perpendicular distance,
+        # the last rejected one (NaN: none pending) and whether the newest reading was rejected.
+        self.range_accepted = torch.full((n,), math.nan, dtype=dt, device=dev)
+        self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
+        self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
         self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
         self.reset()
 
@@ -337,7 +342,11 @@ class StructureHoldEnv:
         self.range_age[env_ids] = t(age)
         self.range_timer[env_ids] = t(period - age)
         self.range_drop_left[env_ids] = 0.0
-        self.range_meas[env_ids] = self._range_reading()[env_ids]
+        self.range_accepted[env_ids] = math.nan  # a new flight: the first reading is accepted
+        self.range_pending[env_ids] = math.nan
+        take = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        take[env_ids] = True
+        self._take_range(take, self._range_reading())
 
     def _range_reading(self) -> torch.Tensor:
         """What the rangefinder would read now for every env, (N,): the beam's distance to
@@ -374,9 +383,23 @@ class StructureHoldEnv:
         due = self.range_timer <= 0
         self.range_timer = torch.where(due, self.range_timer + 1.0 / rc.rate_hz, self.range_timer)
         take = due & (self.range_drop_left <= 0)
-        reading = self._range_reading()
+        self._take_range(take, self._range_reading())
+
+    def _take_range(self, take: torch.Tensor, reading: torch.Tensor) -> None:
+        """New readings for the envs in ``take``, through the spike gate."""
         self.range_meas = torch.where(take, reading, self.range_meas)
         self.range_age = torch.where(take, torch.zeros_like(self.range_age), self.range_age)
+        gate = self.cfg.range.spike_gate_m
+        if gate <= 0:
+            return
+        wall = reading * self._beam_cos()
+        accept = (~torch.isfinite(self.range_accepted)
+                  | ((wall - self.range_accepted).abs() <= gate)
+                  | ((wall - self.range_pending).abs() <= gate))
+        self.range_accepted = torch.where(take & accept, wall, self.range_accepted)
+        self.range_pending = torch.where(take, torch.where(accept, math.nan, wall),
+                                         self.range_pending)
+        self.range_rejected = torch.where(take, ~accept, self.range_rejected)
 
     def range_input(self) -> tuple[torch.Tensor, torch.Tensor]:
         """The wall-range input as the module computes it: (error, usable), each (N,).
@@ -387,7 +410,7 @@ class StructureHoldEnv:
         wall) but is measured on the wall, not on the estimate. Zero while unusable."""
         rc = self.cfg.range
         cos = self._beam_cos()
-        ok = (self.range_present & (self.range_age <= rc.max_age_s + 1e-6)
+        ok = (self.range_present & ~self.range_rejected & (self.range_age <= rc.max_age_s + 1e-6)
               & (self.range_meas >= rc.min_m) & (self.range_meas <= rc.max_m)
               & (cos >= self.cos_range_off) & torch.isfinite(self.range_meas))
         err = (self.range_ref - self.range_meas * cos).clamp(-rc.obs_clip_m, rc.obs_clip_m)
