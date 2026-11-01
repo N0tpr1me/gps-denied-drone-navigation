@@ -1,0 +1,40 @@
+# Structure Hold flight parameters for a design partner's drone (docs/partner-pack.md).
+# Confidential. Copyright (c) 2026 Zain Ali. All rights reserved.
+# QGroundControl plain-text format (vehicle_id, component_id, name, value, type 6 int / 9 float).
+# Load with QGC > Parameters > Tools > Load from file, then reboot.
+#
+# Only logging and the module's own SH_ parameters. Estimator, rate loop and position loop
+# parameters stay what the drone already flies on (VIO into EKF2, GPS off), because the point
+# is to fly that drone as it is. Values are the module defaults the Gazebo benchmark flew,
+# written out so the session's parameter dump shows them, except two:
+#
+# SH_WALL_REQ 1: the mode refuses to engage without a usable forward range, so the wall guard
+#   (SH_WALL_MIN) is always under the hold point on a real drone.
+# SDLOG_PROFILE 147 = default (0) + estimator replay (1) + high rate (4) + computer vision (7):
+#   VIO and mocap odometry, IMU, distance_sensor and the rate setpoints at full rate. With
+#   wind sensors logged over MAVLink (fan rig, docs/fan-rig.md) use 179 (adds debug, bit 5).
+# SDLOG_MODE 1: log from boot to disarm, so the VIO start-up and the take-off are in the log
+#   (the scorer fits the EKF frame to mocap over the take-off).
+#
+# Set SH_WALL_MIN to the drone's prop reach (centre to prop tip) plus at least 0.3 m. 0.7 m is
+# the Gazebo x500's 0.36 m reach plus margin.
+1	1	SDLOG_MODE	1	6
+1	1	SDLOG_PROFILE	147	6
+1	1	SDLOG_DIRS_MAX	0	6
+1	1	SH_EN	1	6
+1	1	SH_CTRL	1	6
+1	1	SH_FB_EN	-1	6
+1	1	SH_YAW_GUARD	-1	6
+1	1	SH_RATE_MAX	0.0	9
+1	1	SH_FIX_SRC	0	6
+1	1	SH_FIX_GAP	0.1	9
+1	1	SH_WD_EST_TO	5.0	9
+1	1	SH_WD_POS_ERR	2.0	9
+1	1	SH_WD_TILT	45.0	9
+1	1	SH_RST_HOLD	0.0	9
+1	1	SH_WALL_MIN	0.7	9
+1	1	SH_WALL_REQ	1	6
+1	1	SH_LAND_EN	1	6
+1	1	SH_HB_GUARD	1	6
+1	1	SH_TEST_FAULT	0	6
+1	1	SH_BENCH	0	6
