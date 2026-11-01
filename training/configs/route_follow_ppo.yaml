@@ -6,11 +6,11 @@
 name: route_follow_ppo
 entrypoint: training.train_route_ppo
 seed: 0
-expected_hours: 0.9
+expected_hours: 0.8
 gpus: 1
 params:
-  num_envs: 512
-  iterations: 300
+  num_envs: 1024
+  iterations: 1000  # about 45 min on the cloud container's 4 cores
   num_steps_per_env: 48
   history: 3
   sim: torch
