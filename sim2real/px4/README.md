@@ -153,6 +153,15 @@ What it does today:
   The estimate back and fresh for 1 s: it holds a point on the estimate again. No usable
   range for 0.5 s trips it (`range_lost`) to Altitude mode, Hold, Land. Structure Hover then
   no longer needs a local position to be selected.
+- **Frozen-fix trip** (`SH_WD_FRZ_T`, seconds, default 0 = off; Proposed,
+  `docs/decisions.md` 2026-11-01). A stuck VIO pipeline can keep sending its last pose on
+  time: nothing goes stale and EKF2 keeps it valid (`docs/field-faults.md`, the freeze
+  fault). With a limit set, a VIO odometry fix that has not moved by 0.1 mm for that long
+  (timed by its own sample times; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
+  (`estimate_frozen`, trip 9) and refuses an engage. Not a trip in Structure Hover or
+  Land, where Position mode would only fly the same frozen estimate without the wall guard;
+  with `SH_HB_RANGE` 1 Structure Hover counts a frozen fix as no estimate and holds the wall
+  distance on the rangefinder until the fix moves again.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -165,7 +174,7 @@ What it does today:
   gap 2). `sitl_test.py` checks the trip and wall-guard messages arrive.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
-  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
+  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*` (the frozen-fix trip `SH_WD_FRZ_T` among them), the engage hold-off
   after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
@@ -347,6 +356,7 @@ limits, bad quality, the age and range edges). `test_handback.cpp` walks every h
 sequence of the decided rows (and the Proposed `SH_HB_RANGE` one); `test_range_hover.cpp`
 flies the range hover on a point mass with a tilt lag (a 4 m/s wind into the wall, with and
 without the wind feed-forward, a drifting entry, an entry inside the standoff);
+`test_watchdog.cpp` has one test per watchdog rule, the frozen fix included;
 `test_params.cpp` and `test_param_limits.py` keep the
 module's limits equal to `structure_hold_params.c`. The c++14 flags mirror PX4's own build.
 
