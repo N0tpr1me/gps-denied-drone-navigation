@@ -67,6 +67,7 @@ params:
       outlier_prob: 0.01
       dropout_rate_hz: 0.05
       dropout_s: [0.2, 2.0]
+      spike_gate_m: 0.0  # these runs predate the spike gate (docs/wall-range.md)
   curriculum:
     dropout_max_s: null
     fraction: 0.6

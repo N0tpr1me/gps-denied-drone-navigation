@@ -563,3 +563,26 @@ def test_reengage_moves_the_range_reference_with_the_hold_point():
     for _ in range(10):
         env.step(hover_action(env))
     torch.testing.assert_close(env.range_ref, -env.hold_point[:, 0])
+
+
+def test_range_spike_gate_drops_one_outlier_and_accepts_a_real_step_at_its_second_reading():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    env.step(hover_action(env))
+    assert env.range_input()[1].all()
+    take = torch.ones(2, dtype=torch.bool)
+    wall = env.clearance()
+    env._take_range(take, wall + 5.0)  # an outlier: rejected, input unusable
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall + 0.01)  # back to normal: accepted
+    assert env.range_input()[1].all()
+    env._take_range(take, wall - 0.5)  # a real step: rejected once...
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall - 0.49)  # ...accepted at the second reading
+    ok = env.range_input()
+    assert ok[1].all()
+    off = StructureHoldEnv(still_air(range=dataclasses.replace(rc, spike_gate_m=0.0)),
+                           num_envs=2, seed=5)
+    off._take_range(take, off.clearance() + 5.0)
+    assert off.range_input()[1].all()  # no gate: the outlier is used (clipped)

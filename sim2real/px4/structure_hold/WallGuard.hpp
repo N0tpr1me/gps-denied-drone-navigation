@@ -137,32 +137,60 @@ private:
  * does not move it. At an engage on the estimate the latch is the vehicle's own measured
  * distance (the clearance with the hold point where the vehicle is); the guard's own shifts
  * move the reference back with the hold point.
+ *
+ * Spike rejection (the env's RangeSensor.spike_gate_m): a new reading whose perpendicular
+ * distance is more than the gate from the last accepted one is not used, and the input goes
+ * unusable until the next accepted reading, unless the reading before it, also rejected,
+ * agrees with it within the gate (a real step is accepted at its second reading). The filter
+ * belongs to the sensor, so it carries across engages. Gate 0 turns it off.
  */
 class RangeReference
 {
 public:
+	void setSpikeGate(float gate_m) { _gate_m = gate_m; }
+
 	void engage() { _valid = false; }
 
-	/** One tick, after WallGuard::apply. */
-	void update(const WallGuardOutput &w)
+	/** One tick, after WallGuard::apply; ``sample_us`` is the reading's own timestamp. */
+	void update(const WallGuardOutput &w, uint64_t sample_us)
 	{
 		if (!w.range_ok) { return; }
 
+		if (sample_us != _sample_us) {  // a new reading: through the gate once
+			_sample_us = sample_us;
+			const bool first = !_have_accepted;
+			const bool near_accepted = _have_accepted && std::fabs(w.wall_m - _accepted_m) <= _gate_m;
+			const bool near_pending = _have_pending && std::fabs(w.wall_m - _pending_m) <= _gate_m;
+			_sample_ok = !(_gate_m > 0.f) || first || near_accepted || near_pending;
+
+			if (_sample_ok) {
+				_accepted_m = w.wall_m;
+				_have_accepted = true;
+				_have_pending = false;
+
+			} else {
+				_pending_m = w.wall_m;
+				_have_pending = true;
+			}
+		}
+
 		if (!_valid) {
-			_ref_m = w.clearance_m;  // after this tick's shift, if any
-			_valid = true;
+			if (_sample_ok) {
+				_ref_m = w.clearance_m;  // after this tick's shift, if any
+				_valid = true;
+			}
 
 		} else {
-			_ref_m += w.shift_m;
+			_ref_m += w.shift_m;  // the guard moved the hold point, whatever the gate said
 		}
 	}
 
-	/** True with ``err_m`` set when a usable reading backs the input this tick. */
+	/** True with ``err_m`` set when an accepted, usable reading backs the input this tick. */
 	bool error(const WallGuardOutput &w, float &err_m) const
 	{
 		err_m = 0.f;
 
-		if (!_valid || !w.range_ok) { return false; }
+		if (!_valid || !w.range_ok || !_sample_ok) { return false; }
 
 		err_m = _ref_m - w.wall_m;
 		return true;
@@ -172,8 +200,15 @@ public:
 	float reference() const { return _ref_m; }
 
 private:
+	float _gate_m{0.f};
 	float _ref_m{0.f};
 	bool _valid{false};
+	uint64_t _sample_us{0};
+	bool _sample_ok{false};
+	float _accepted_m{0.f};
+	bool _have_accepted{false};
+	float _pending_m{0.f};
+	bool _have_pending{false};
 };
 
 } // namespace structure_hold
