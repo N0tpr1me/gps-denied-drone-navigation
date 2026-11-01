@@ -145,6 +145,12 @@ What it does today:
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
   on the PX4 shell prints the policy's defaults and what is actually flying.
+- **Tells the ground station** (MAVLink STATUSTEXT through PX4's `mavlink_log`, shown by
+  QGroundControl) whenever a safety function acts: a watchdog trip or refusal with its
+  reason and an engage refusal (critical), a wall-guard push and the fallback braking
+  (warning), and each handback target (info). Regulators ask for exactly this: a failure of
+  a system the flight relies on must be shown to the pilot (`docs/market-research.md`,
+  gap 2). `sitl_test.py` checks the trip and wall-guard messages arrive.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off

@@ -322,7 +322,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_policy.engage(hold, _setpoint.yaw);  // structure x = the heading at engage
 
 	if (_landed) {
-		PX4_WARN("engaged on the ground (SH_BENCH 1): props off only");
+		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: engaged on the ground (SH_BENCH 1), props off only");
 	}
 	PX4_INFO("engaged (%s): holding N %.2f E %.2f D %.2f m, yaw %.0f deg",
 		 _param_ctrl.get() == 1 ? "policy" : "cascade",
@@ -416,7 +416,12 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 	_state = structure_hold_status_s::STATE_HANDBACK;
 	_handback_step = 0;
 	_handback_logged_last = false;
-	PX4_WARN("watchdog %s: %s, handing back", latch ? "trip" : "refusal", Watchdog::name(trip));
+	if (latch) {
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: watchdog trip: %s, handing back", Watchdog::name(trip));
+
+	} else {  // an engage refusal, already sent to the ground station with its reason
+		PX4_WARN("watchdog refusal: %s, handing back", Watchdog::name(trip));
+	}
 	requestHandbackMode();
 }
 
@@ -486,7 +491,8 @@ void StructureHold::requestHandbackMode()
 	const bool last = _handback_step >= _handback_plan.lastStep();
 
 	if (!last || !_handback_logged_last) {
-		PX4_INFO("handback: requesting %s%s", handbackTargetName(target), last ? " (repeated until it takes)" : "");
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: handing back to %s%s", handbackTargetName(target),
+				 last ? " (repeated until it takes)" : "");
 		_handback_logged_last = last;
 	}
 }
@@ -617,8 +623,8 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 		}
 
 		if (!shifted_before) {
-			PX4_WARN("wall guard: hold point %.2f m from the wall, moving it back to %.2f m",
-				 (double)(_wall_out.clearance_m - _wall_out.shift_m), (double)_wall_out.clearance_m);
+			mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: wall guard moved the hold point %.2f m back, to %.2f m from the wall",
+					    (double)_wall_out.shift_m, (double)_wall_out.clearance_m);
 		}
 	}
 }
@@ -744,11 +750,12 @@ void StructureHold::controlStep(const hrt_abstime now)
 		const PolicyOutput out = _policy.step(sample, _stale_s, _hover_thrust);
 
 		if (!out.ok) {
-			PX4_WARN("policy produced a non-finite action");
+			mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: policy produced a non-finite action");
 		}
 
 		if (out.fallback_active != _fallback_active) {
-			PX4_INFO("%s", out.fallback_active ? "fallback: braking, estimate stale" : "fallback: fresh fix, policy flies");
+			mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: %s",
+					    out.fallback_active ? "fallback, braking on a stale estimate" : "fresh fix, policy flies again");
 		}
 
 		_fallback_active = out.fallback_active;
@@ -1025,11 +1032,11 @@ void StructureHold::Run()
 			if (refusal == Trip::EstimateReset) {
 				// Commander normally refuses the switch (replyToArmingCheck), but its poll
 				// is 300 ms behind the reset: hand straight back, nothing latched.
-				PX4_WARN("engage refused: EKF reset its position %.1f s ago (SH_RST_HOLD %.1f s)",
+				mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: engage refused, EKF reset its position %.1f s ago (SH_RST_HOLD %.1f s)",
 					 (double)_watchdog.resetAge(now), (double)_param_rst_hold.get());
 
 			} else if (refusal != Trip::None) {
-				PX4_WARN("engage refused: %s", Watchdog::name(refusal));
+				mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: engage refused: %s", Watchdog::name(refusal));
 			}
 
 			if (refusal != Trip::None) {

@@ -18,8 +18,8 @@ Steps, each a check in the summary:
    case): it must stop and hold without a trip, then hand back to Position mode;
 4. re-engage, then trip the watchdog with the SH_TEST_FAULT hook: PX4 leaves Structure
    Hold within ``--handback-tol-s`` (measured from the ulog), the vehicle stays airborne in
-   a stock mode (Structure Hover with ``--wall``), and a further engage request is refused
-   (trip latched);
+   a stock mode (Structure Hover with ``--wall``), the ground station receives a critical
+   STATUSTEXT naming the trip, and a further engage request is refused (trip latched);
 
 A centred joystick (MANUAL_CONTROL at 20 Hz) is streamed throughout, because PX4 only
 offers Position mode when it has a manual control source. With ``--no-joystick`` the
@@ -33,7 +33,8 @@ forward facing) against a virtual wall placed ``--wall-m`` ahead of the first en
 along the engage heading. Mid-hold the wall jumps to ``--wall-close-m`` ahead of the hold
 point, which puts the hold point inside SH_WALL_MIN: the wall guard must move it back and
 the vehicle must end up at least SH_WALL_MIN (less ``--wall-tol``) from the wall
-(WallGuard.hpp). The ulog check then expects a nonzero standoff_shift_m.
+(WallGuard.hpp), and the ground station must get a "wall guard" warning. The ulog check
+then expects a nonzero standoff_shift_m.
 
 With ``--range-faults`` (needs ``--wall``) the rangefinder sends ``--range-faults-s`` of
 broken readings before the wall jump: 0 cm, 5 cm (below the sensor's minimum), beyond its
@@ -157,6 +158,10 @@ class Vehicle:
         self.stick_y = 0                # MANUAL_CONTROL y (roll), -1000..1000
         self.range_faults = False       # send RANGE_FAULTS instead of the wall's range
         self._fault_i = 0
+        # Autopilot STATUSTEXT as the ground station sees it: (time, severity, text), long
+        # texts reassembled from their chunks (MAVLink 2 ``id``).
+        self.statustext: list[tuple[float, int, str]] = []
+        self._text_index: dict[int, int] = {}
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
@@ -223,6 +228,20 @@ class Vehicle:
             self.tel.yaw, self.tel.pitch = msg.yaw, msg.pitch
         elif t == "EXTENDED_SYS_STATE":
             self.tel.landed = msg.landed_state == mavlink.MAV_LANDED_STATE_ON_GROUND
+        elif t == "STATUSTEXT" and msg.get_srcComponent() == mavlink.MAV_COMP_ID_AUTOPILOT1:
+            chunk_id = getattr(msg, "id", 0)
+            if chunk_id and chunk_id in self._text_index:
+                i = self._text_index[chunk_id]
+                when, severity, text = self.statustext[i]
+                self.statustext[i] = (when, severity, text + msg.text)
+            else:
+                if chunk_id:
+                    self._text_index[chunk_id] = len(self.statustext)
+                self.statustext.append((time.monotonic(), msg.severity, msg.text))
+
+    def texts_since(self, t0: float, max_severity: int = mavlink.MAV_SEVERITY_DEBUG) -> list[str]:
+        """STATUSTEXT received since ``t0`` at ``max_severity`` or more urgent."""
+        return [text for when, sev, text in self.statustext if when >= t0 and sev <= max_severity]
 
     def wait_for(self, predicate, timeout_s: float, what: str) -> float:
         start = time.monotonic()
@@ -489,6 +508,12 @@ def fly(args: argparse.Namespace) -> dict:
     result["handback_seen_s"] = round(time.monotonic() - t_trip, 2)
     result["handback_mode"] = mode_name(v)
     checks["handback_to_stock_mode"] = not in_structure_hold(v) and not v.tel.landed
+    # The pilot is told why (docs/market-research.md, gap 2): a critical STATUSTEXT naming
+    # the trip, which QGroundControl shows as a warning.
+    trip_texts = [t for t in v.texts_since(t_trip, mavlink.MAV_SEVERITY_CRITICAL)
+                  if "watchdog trip" in t]
+    result["trip_warning"] = trip_texts[0] if trip_texts else None
+    checks["trip_warning_sent"] = bool(trip_texts)
     if args.wall:
         # Next to a measured wall the trip hands back to Structure Hover. The wall creeps in
         # as the estimate's recovery would walk stock Position mode toward it.
@@ -664,6 +689,7 @@ def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, flo
         checks["range_faults_ignored"] = backoff <= args.range_fault_tol and in_structure_hold(v)
     v.wall = VirtualWall((hold[0], hold[1]), v.wall.yaw, args.wall_close_m)
     n0 = len(v.ranges)
+    t_close = time.monotonic()
     v.pump(args.wall_s)
     after = v.ranges[n0:]
     tail = after[-int(3.0 / 0.05):] or [math.nan]
@@ -676,6 +702,8 @@ def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, flo
     }
     checks["wall_backed_off"] = sum(tail) / len(tail) >= args.wall_min - args.wall_tol
     checks["still_engaged_after_wall"] = in_structure_hold(v)
+    checks["wall_guard_warning_sent"] = any(
+        "wall guard" in t for t in v.texts_since(t_close, mavlink.MAV_SEVERITY_WARNING))
 
 
 def check_ulog(path: Path, result: dict) -> None:

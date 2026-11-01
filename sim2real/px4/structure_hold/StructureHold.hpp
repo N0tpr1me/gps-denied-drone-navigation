@@ -34,6 +34,7 @@
 #include <px4_platform_common/module_params.h>
 #include <px4_platform_common/posix.h>
 #include <px4_platform_common/px4_work_queue/WorkItem.hpp>
+#include <systemlib/mavlink_log.h>
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
@@ -150,6 +151,9 @@ private:
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
 	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
 	uORB::Publication<structure_hold_status_s> _status_pub{ORB_ID(structure_hold_status)};
+	// Ground-station text (MAVLink STATUSTEXT): the pilot is told when a safety function
+	// acts and why (docs/market-research.md, gap 2). Each call also prints to the console.
+	orb_advert_t _mavlink_log_pub{nullptr};
 
 	// Registration state
 	bool _registration_sent{false};
