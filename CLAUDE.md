@@ -70,7 +70,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker) |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker) |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -134,6 +134,11 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   v19 plus a 21st input, the time since engage (`docs/hold-offset.md`), which the module
   reads when its header has it (`HAS_ENGAGE_TIME`). The module's `PolicyWeights.hpp` is
   generated from it. v19 (20 inputs) is the fallback release.
+- Wall-range input (Nov 2026, `docs/wall-range.md`): inputs 22 and 23 are the forward
+  rangefinder's distance error against a reference latched at engage and its usable flag
+  (mock: `cfg.range`, `RangeSensor`, off by default; module: `RangeReference` in
+  `WallGuard.hpp`, read when the header has `HAS_WALL_RANGE`). Candidate v24 is not
+  released; it waits for a Gazebo re-fly with `--rangefinder` on the GPU server.
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
@@ -157,7 +162,7 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   `sitl_test.py` checks ground engage always, `--range-faults` and `--moving-engage` on demand.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
-  hosts allowed in the cloud environment), the distance-to-wall policy input, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
+  hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
   server once it arrives. Gate dates: Gate 1 31 Jan 2027, Gate 2 30 Apr, Gate 3 31 Jul.
 
 ## Notes for future Claude sessions
