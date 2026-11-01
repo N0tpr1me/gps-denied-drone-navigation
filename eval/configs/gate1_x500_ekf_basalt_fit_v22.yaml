@@ -1,0 +1,69 @@
+# Gate 1 x500 test set through the EKF2-like fusion (same seeds, cells and rules as
+# gate1_x500_ekf_v22.yaml) with the estimate model fitted to Basalt VIO on the 11 raw EuRoC
+# flights (docs/vio-fit.md, second fit). v22 judged, v19 alongside, the PD on the same
+# episodes. A re-check, not a new gate: Gate 1 is judged on the standard corruption.
+#   python -m training.launch --config eval/configs/gate1_x500_ekf_basalt_fit_v22.yaml --device cpu
+name: gate1_x500_ekf_basalt_fit_v22
+entrypoint: eval.gate1
+seed: 9001  # unused: the protocol seeds are params.seeds
+expected_hours: 0.7  # three controllers: two took 21 min on 4 cores (run 20261030-174900)
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released 2026-10-31 (PR #93)
+    - name: v19
+      policy: training/policies/structure_hold_v19.onnx  # fallback release
+  gate_controller: v22
+  seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
+  num_envs: 1024
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    # EKF2-like fusion as gz_x500_sitl has it (envs/structure_hold/airframes.py).
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
+    # The fitted estimate corruption, stated in full (FITTED VALUES PENDING).
+    estimate:
+      delay_min_s: 0.05            # kept: offline VIO output carries no latency
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.001       # fitted (standard 0.02)
+      vel_noise_std_mps: 0.05      # kept: the files carry no VIO velocity
+      bias_walk_std_m_per_sqrt_s: 0.01  # fitted, near-hover windows (standard 0.01)
+      bias_max_m: 0.4              # fitted, 95th percentile of 60 s drift (standard 0.3)
+      jump_rate_hz: 0.002          # fitted: 3 in 1399 s (standard 0.02)
+      jump_min_m: 0.1              # fitted: 0.105 to 0.20 m (standard 0.1 to 2)
+      jump_max_m: 0.2
+      jump_decay_s: 9.0            # fitted (standard 5)
+      dropout_rate_hz: 0.02        # kept: no tracking loss in the textured lab flights
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Held-out gust schedule: both gusts start inside the 20 s episode (training draws
+      # starts up to 50 s). Gust speed and length stay inside the training ranges.
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  cells:
+    - {name: w0_d1, label: "0 m/s, 1 m", env: {disturbance: {mean_speed: 0.0}, hold_distance: 1.0}}
+    - {name: w0_d2, label: "0 m/s, 2 m", env: {disturbance: {mean_speed: 0.0}, hold_distance: 2.0}}
+    - {name: w4_d1, label: "4 m/s, 1 m", env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0}}
+    - {name: w4_d2, label: "4 m/s, 2 m", env: {disturbance: {mean_speed: 4.0}, hold_distance: 2.0}}
+    - {name: w8_d1, label: "8 m/s, 1 m", headline: true, env: {disturbance: {mean_speed: 8.0}, hold_distance: 1.0}}
+    - {name: w8_d2, label: "8 m/s, 2 m", env: {disturbance: {mean_speed: 8.0}, hold_distance: 2.0}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9001]
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 2.0
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true}
