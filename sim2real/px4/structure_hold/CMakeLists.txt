@@ -14,6 +14,7 @@ px4_add_module(
 		Watchdog.hpp
 		WallGuard.hpp
 		Handback.hpp
+		RangeHover.hpp
 		ParamLimits.hpp
 		HoldController.hpp
 		PolicyController.hpp

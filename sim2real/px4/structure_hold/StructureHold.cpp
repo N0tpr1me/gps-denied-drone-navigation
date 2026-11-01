@@ -94,6 +94,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wall_req, param_limits::SH_WALL_REQ, "SH_WALL_REQ");
 	sanitizeParam(_param_land_en, param_limits::SH_LAND_EN, "SH_LAND_EN");
 	sanitizeParam(_param_hb_guard, param_limits::SH_HB_GUARD, "SH_HB_GUARD");
+	sanitizeParam(_param_hb_range, param_limits::SH_HB_RANGE, "SH_HB_RANGE");
 
 	WatchdogLimits limits{};
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
@@ -282,7 +283,11 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 	}
 
 	if (_hover_arming_check_id != -1) {
+		// SH_HB_RANGE 1: Structure Hover also flies with the horizontal estimate gone, on the
+		// rangefinder (RangeHover.hpp), so commander must not refuse it, or fail it over,
+		// for want of a local position.
 		reply.registration_id = _hover_arming_check_id;
+		reply.mode_req_local_position = _param_hb_range.get() == 0;
 		_arming_check_reply_pub.publish(reply);
 	}
 
@@ -382,6 +387,8 @@ void StructureHold::engageGuarded(const vehicle_local_position_s &lpos, bool des
 
 	_wall_guard.engage();
 	_wall_out = WallGuardOutput{};
+	_range_hover.stop();
+	_range_hover_xy_back_us = 0;
 	PX4_INFO("%s: N %.2f E %.2f D %.2f m, yaw %.0f deg%s", descend ? LAND_MODE_NAME : HOVER_MODE_NAME,
 		 (double)_setpoint.pos(0), (double)_setpoint.pos(1), (double)_setpoint.pos(2),
 		 (double)math::degrees(_setpoint.yaw), descend ? ", descending" : "");
@@ -412,7 +419,10 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 		from = HandbackFrom::Hover;
 	}
 
-	_handback_plan = planHandback(from, latch, xy_valid, guardedHandbackAvailable(hrt_absolute_time()));
+	_handback_plan = planHandback(from, latch, xy_valid, guardedHandbackAvailable(hrt_absolute_time()),
+				      _param_hb_range.get() != 0);
+	_range_hover_handback = _range_hover.active();
+	_range_hover.stop();
 	_state = structure_hold_status_s::STATE_HANDBACK;
 	_handback_step = 0;
 	_handback_logged_last = false;
@@ -428,6 +438,7 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 void StructureHold::endHandback(const char *why)
 {
 	PX4_INFO("handback ended: %s", why);
+	_range_hover_handback = false;
 	_state = structure_hold_status_s::STATE_STANDBY;
 	_active_mode_id = -1;
 }
@@ -502,7 +513,16 @@ void StructureHold::handbackStep(const hrt_abstime now)
 	// Still the active mode: keep the vehicle level at hover thrust while commander
 	// switches, and escalate if the requested mode was refused. From Structure Land, whose
 	// rate setpoints come from PX4's own cascade, stop the descent there instead.
-	if (_active_mode_id == _land_mode_id || _active_mode_id == _hover_mode_id) {
+	const bool xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
+			      && PX4_ISFINITE(_local_position.y);
+
+	if (_active_mode_id == _hover_mode_id && _param_hb_range.get() != 0 && (_range_hover_handback || !xy_valid)) {
+		// From Structure Hover with the range or the horizontal estimate gone: no xy
+		// setpoint PX4 could fly, so lean into the wind as before the estimate went, height
+		// held, until commander takes the next mode.
+		publishAccelerationSetpoint(_wind_ff.x(), _wind_ff.y());
+
+	} else if (_active_mode_id == _land_mode_id || _active_mode_id == _hover_mode_id) {
 		publishTrajectorySetpoint(NAN, Vector3f(0.f, 0.f, 0.f));
 
 	} else {
@@ -629,7 +649,7 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 	}
 }
 
-Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float position_error_m)
+Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float position_error_m, bool range_only)
 {
 	// The stale trip counts from the last position fix (or the last local position update,
 	// whichever is older), so an EKF2 that stops publishing trips it too. A trip hands
@@ -647,6 +667,17 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
 	in.position_error_m = position_error_m;
 	in.test_fault = _param_test_fault.get() != 0;
+	const bool xy_valid = in.xy_valid;
+
+	if (range_only) {
+		// Structure Hover on the range alone flies no horizontal estimate and no position
+		// fix: what still counts is the height, EKF2 publishing at all, the tilt and the
+		// test hook. The range itself is checked by rangeHoverStep (Trip::RangeLost).
+		in.xy_valid = true;
+		in.v_xy_valid = true;
+		in.estimate_timestamp_us = _local_position.timestamp;
+		in.position_error_m = 0.f;
+	}
 
 	const Trip trip = _watchdog.check(in);
 
@@ -656,7 +687,7 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 			_param_test_fault.commit_no_notification();
 		}
 
-		handBack(trip, in.xy_valid);
+		handBack(trip, xy_valid);
 	}
 
 	return trip;
@@ -821,6 +852,13 @@ void StructureHold::guardedStep(const hrt_abstime now)
 		}
 	}
 
+	// Structure Hover with the horizontal estimate gone or stale (SH_HB_RANGE 1): the wall
+	// distance on the rangefinder alone, until the estimate has been back for a second.
+	if (rangeHoverWanted(now)) {
+		rangeHoverStep(now, r);
+		return;
+	}
+
 	// Structure Land: height is the descent's, not a setpoint to hold, so only xy counts as
 	// hold error. Structure Hover holds the height it entered at.
 	const bool descend = _state == structure_hold_status_s::STATE_LANDING;
@@ -884,6 +922,159 @@ void StructureHold::publishTrajectorySetpoint(float z_ned, const Vector3f &veloc
 	sp.yaw = _setpoint.yaw;
 	sp.yawspeed = NAN;
 	_trajectory_setpoint_pub.publish(sp);
+}
+
+bool StructureHold::estimateGood() const
+{
+	// Valid, finite and fresh: what the guarded hold and the wind feed-forward trust.
+	return _local_position.xy_valid && _local_position.v_xy_valid && PX4_ISFINITE(_local_position.x)
+	       && PX4_ISFINITE(_local_position.y) && PX4_ISFINITE(_local_position.vx) && PX4_ISFINITE(_local_position.vy)
+	       && _stale_s < RANGE_HOVER_STALE_S;
+}
+
+bool StructureHold::rangeHoverWanted(const hrt_abstime now) const
+{
+	(void)now;
+	return _param_hb_range.get() != 0 && _state == structure_hold_status_s::STATE_HOVER
+	       && (_range_hover.active() || !estimateGood());
+}
+
+float StructureHold::measuredWall(const hrt_abstime now, const Dcmf &r) const
+{
+	// The perpendicular distance to the wall along the structure normal (the held heading),
+	// as the wall guard measures it, or NaN without a usable reading.
+	if (!_wall_guard.usable(_range, now)) {
+		return NAN;
+	}
+
+	const float cos_off = r(0, 0) * cosf(_setpoint.yaw) + r(1, 0) * sinf(_setpoint.yaw);
+
+	if (!(cos_off >= cosf(_wall_guard.limits().max_off_axis_rad))) {
+		return NAN;
+	}
+
+	return _range.distance_m * cos_off;
+}
+
+void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
+{
+	const float nx = cosf(_setpoint.yaw), ny = sinf(_setpoint.yaw);  // wall normal, NED
+	const float wall = measuredWall(now, r);
+	const bool good = estimateGood();
+	const bool xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
+			      && PX4_ISFINITE(_local_position.y);
+
+	if (!_range_hover.active()) {
+		if (!PX4_ISFINITE(wall)) {
+			handBack(Trip::RangeLost, xy_valid);
+			return;
+		}
+
+		// The wind the vehicle leaned into while the estimate was good, split along the
+		// normal (toward the wall positive) and along the wall (t = n rotated +90 deg).
+		const float fx = _wind_ff.valid() ? _wind_ff.x() : 0.f;
+		const float fy = _wind_ff.valid() ? _wind_ff.y() : 0.f;
+		_range_hover.start(wall, _param_wall_min.get(), fx * nx + fy * ny, -fx * ny + fy * nx);
+		_range_hover_seen_us = now;
+		_range_hover_xy_back_us = 0;
+
+		if (!PX4_ISFINITE(_setpoint.pos(2))) {
+			_setpoint.pos(2) = _local_position.z;
+		}
+
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hover: position lost, holding %.2f m from the wall on the rangefinder",
+				     (double)_range_hover.reference());
+	}
+
+	// The estimate back and fresh for a second: hold the point on it again, where the
+	// vehicle is now (the wall guard keeps that off the wall).
+	if (good) {
+		if (_range_hover_xy_back_us == 0) {
+			_range_hover_xy_back_us = now;
+
+		} else if (now - _range_hover_xy_back_us >= RANGE_HOVER_XY_BACK) {
+			_range_hover.stop();
+			_setpoint.pos(0) = _local_position.x;
+			_setpoint.pos(1) = _local_position.y;
+			_land_xy_reset_counter = _local_position.xy_reset_counter;
+			_wall_guard.engage();
+			_guard_speed = 0.f;
+			mavlink_log_info(&_mavlink_log_pub, "Structure Hover: position back, holding on the estimate");
+			return;
+		}
+
+	} else {
+		_range_hover_xy_back_us = 0;
+	}
+
+	if (checkWatchdog(now, r, 0.f, true) != Trip::None) {
+		return;
+	}
+
+	if (PX4_ISFINITE(wall)) {
+		_range_hover_seen_us = now;
+
+	} else if (now - _range_hover_seen_us > RANGE_HOVER_LOST) {
+		handBack(Trip::RangeLost, xy_valid);
+		return;
+	}
+
+	const float a_n = _range_hover.step(wall, _range.timestamp_us, CONTROL_INTERVAL * 1e-6f);
+	const float a_t = _range_hover.alongWall();
+	publishAccelerationSetpoint(a_n * nx - a_t * ny, a_n * ny + a_t * nx);
+
+	// Status: the measured distance and the reference it holds.
+	_wall_out = WallGuardOutput{};
+	_wall_out.range_ok = PX4_ISFINITE(wall);
+	_wall_out.wall_m = PX4_ISFINITE(wall) ? wall : -1.f;
+	_wall_out.clearance_m = _range_hover.reference();
+	_last_output = HoldOutput{};
+}
+
+void StructureHold::publishAccelerationSetpoint(float ax_ned, float ay_ned)
+{
+	// No horizontal position or velocity setpoint: PX4's position controller turns the
+	// acceleration into a tilt without any horizontal estimate, as in Altitude mode, and
+	// holds the height on z (Structure Hover's own).
+	trajectory_setpoint_s sp{};
+	sp.timestamp = hrt_absolute_time();
+	sp.position[0] = NAN;
+	sp.position[1] = NAN;
+	sp.position[2] = _setpoint.pos(2);
+
+	for (int i = 0; i < 3; i++) {
+		sp.velocity[i] = NAN;
+		sp.jerk[i] = NAN;
+	}
+
+	sp.acceleration[0] = PX4_ISFINITE(ax_ned) ? ax_ned : 0.f;
+	sp.acceleration[1] = PX4_ISFINITE(ay_ned) ? ay_ned : 0.f;
+	sp.acceleration[2] = NAN;
+	sp.yaw = _setpoint.yaw;
+	sp.yawspeed = NAN;
+	_trajectory_setpoint_pub.publish(sp);
+}
+
+void StructureHold::updateWindFeedForward(const hrt_abstime now)
+{
+	if (now - _wind_ff_us < CONTROL_INTERVAL) {
+		return;
+	}
+
+	const float dt = _wind_ff_us == 0 ? 0.f : math::min((now - _wind_ff_us) * 1e-6f, 0.1f);
+	_wind_ff_us = now;
+
+	if (!_armed) {
+		_wind_ff.reset();
+		return;
+	}
+
+	// The lean while flying on a good estimate, in any mode (Structure Hold, its hover, or
+	// stock Position mode): frozen on the ground, with the estimate gone or stale, and
+	// while the range hover itself flies.
+	const Dcmf r(Quatf(_attitude.q));
+	const float body_z[3] = {r(0, 2), r(1, 2), r(2, 2)};
+	_wind_ff.update(body_z, dt, !_landed && estimateGood() && !_range_hover.active());
 }
 
 void StructureHold::publishStatus(const hrt_abstime now)
@@ -1007,6 +1198,7 @@ void StructureHold::Run()
 	_attitude_sub.update(&_attitude);
 	updateFix(now);
 	updateRange();
+	updateWindFeedForward(now);
 
 	const bool mode_active = _vehicle_status.nav_state == _active_mode_id;
 	const bool land_selected = _land_mode_id != -1 && _vehicle_status.nav_state == _land_mode_id;
@@ -1236,6 +1428,10 @@ int StructureHold::print_status()
 			 (double)_wall_out.wall_m, (double)_wall_out.clearance_m, (double)_wall_guard.totalShift());
 	}
 
+	PX4_INFO("range hover (SH_HB_RANGE %d): %s, reference %.2f m, error %.2f m; wind lean N %.2f E %.2f m/s^2%s",
+		 (int)_param_hb_range.get(), _range_hover.active() ? "FLYING" : "idle", (double)_range_hover.reference(),
+		 (double)_range_hover.error(), (double)_wind_ff.x(), (double)_wind_ff.y(), _wind_ff.valid() ? "" : " (none yet)");
+
 	if (_param_bench.get() != 0) {
 		PX4_WARN("SH_BENCH 1: engages on the ground (bench test, props off only)");
 	}
@@ -1269,7 +1465,9 @@ With SH_LAND_EN a second mode, "Structure Land", lands next to the structure: PX
 position controller descends at MPC_LAND_SPEED while the wall guard keeps the xy setpoint
 SH_WALL_MIN from the measured wall. It stays available after a latched trip. With
 SH_HB_GUARD a third mode, "Structure Hover" (ext3), holds the same guarded setpoint
-without descending; a trip next to a measured wall hands back into it first.
+without descending; a trip next to a measured wall hands back into it first. With
+SH_HB_RANGE (off by default) it also flies with the horizontal estimate gone, holding the
+measured wall distance on the rangefinder alone.
 
 Engage from the shell with `commander mode ext1` (first registered external mode; Structure
 Land is ext2) or from a ground station / MAVLink as the external mode by name.

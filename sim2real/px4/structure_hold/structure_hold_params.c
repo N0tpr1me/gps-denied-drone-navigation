@@ -381,3 +381,24 @@ PARAM_DEFINE_INT32(SH_LAND_EN, 1);
  * @group Structure Hold
  */
 PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
+
+/**
+ * Structure Hover: hold the wall distance on the rangefinder when the position is lost
+ *
+ * Proposed, off by default (docs/decisions.md 2026-11-01, docs/field-faults.md). With the
+ * horizontal position estimate gone, the decided handback goes to Altitude mode, which holds
+ * the height and keeps the vehicle level: a wind blowing into the wall then pushes it onto
+ * the face (the 8 s link-loss field fault in Gazebo). With 1, a trip in Structure Hold next
+ * to a measured wall (as SH_HB_GUARD) goes to Structure Hover even without a horizontal
+ * estimate, and Structure Hover, whenever the estimate is invalid or stale, holds the
+ * measured wall distance on the forward rangefinder alone (never under SH_WALL_MIN), leans
+ * into the wind it was holding against before the estimate went, and keeps the height on
+ * PX4's own altitude control. Once the estimate is back and fresh for 1 s it holds the
+ * point on the estimate again. A lost range hands back as before (Altitude mode, Hold,
+ * Land). Structure Hover then no longer needs a local position to be selected. Needs
+ * SH_HB_GUARD 1 and SH_WALL_MIN > 0. 0: Altitude mode as decided.
+ *
+ * @boolean
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_HB_RANGE, 0);

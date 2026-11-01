@@ -141,6 +141,18 @@ What it does today:
   (Gazebo seed 3: 0.59 to 0.31 m before the landing); here the range keeps the point off
   the wall. The pilot leaves it for Position mode as usual. State `hover` (5). Chosen by
   Zain over handing straight into Structure Land, or no change (2026-10-28).
+- **Structure Hover on the rangefinder alone** (`SH_HB_RANGE`, default off; Proposed,
+  `docs/decisions.md` 2026-11-01). With the horizontal estimate gone the decided handback
+  goes to Altitude mode, which keeps the vehicle level while a wind into the wall pushes it
+  onto the face (`docs/field-faults.md`, the link-loss fault). With 1, a trip next to a
+  measured wall goes to Structure Hover even without a horizontal estimate, and Structure
+  Hover, whenever the estimate is invalid or more than 1 s stale, holds the measured wall
+  distance on the forward range alone (never under `SH_WALL_MIN`), leaning into the wind it
+  held against before the estimate went, with the height on PX4's own altitude control
+  (`RangeHover.hpp`: an acceleration-only xy `trajectory_setpoint`, as Altitude mode flies).
+  The estimate back and fresh for 1 s: it holds a point on the estimate again. No usable
+  range for 0.5 s trips it (`range_lost`) to Altitude mode, Hold, Land. Structure Hover then
+  no longer needs a local position to be selected.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -154,7 +166,7 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*`, the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside
@@ -166,7 +178,7 @@ the estimate the policy sees.
 ```
 sim2real/px4/
   structure_hold/        the module: CMakeLists.txt, Kconfig, StructureHold.{hpp,cpp},
-                         Watchdog.hpp, WallGuard.hpp, Handback.hpp, ParamLimits.hpp,
+                         Watchdog.hpp, WallGuard.hpp, Handback.hpp, RangeHover.hpp, ParamLimits.hpp,
                          PolicyController.hpp, MlpPolicy.hpp,
                          PolicyWeights.hpp (generated), HoldController.hpp,
                          structure_hold_params.c
@@ -180,7 +192,7 @@ sim2real/px4/
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
   tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
-                         test_params.cpp, test_handback.cpp, test_policy_header.py,
+                         test_params.cpp, test_handback.cpp, test_range_hover.cpp, test_policy_header.py,
                          test_param_limits.py
 ```
 
@@ -319,6 +331,8 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_params.cpp -o test_params && ./test_params
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_handback.cpp -o test_handback && ./test_handback
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_range_hover.cpp -o test_range_hover && ./test_range_hover
 python -m pytest sim2real/px4/tests
 ```
 
@@ -330,7 +344,10 @@ re-engage mid-flight (bit for bit a fresh controller), NaN and inf in every inpu
 finite setpoint) and the policy step time on the host. `test_wall_guard.cpp` covers the
 broken readings real drivers and MAVLink send (inf, 0, negative, 65535 cm, unset or NaN
 limits, bad quality, the age and range edges). `test_handback.cpp` walks every handback
-sequence of the decided rows; `test_params.cpp` and `test_param_limits.py` keep the
+sequence of the decided rows (and the Proposed `SH_HB_RANGE` one); `test_range_hover.cpp`
+flies the range hover on a point mass with a tilt lag (a 4 m/s wind into the wall, with and
+without the wind feed-forward, a drifting entry, an entry inside the standoff);
+`test_params.cpp` and `test_param_limits.py` keep the
 module's limits equal to `structure_hold_params.c`. The c++14 flags mirror PX4's own build.
 
 ## SIH flights (2026-10-22, cloud)
