@@ -111,6 +111,7 @@ depends on them (`sim2real/estimate_bridge/ekf2_ev.params` is what our benchmark
 | `EKF2_EV_CTRL` fuses VIO position (and velocity if your VIO gives a good one) | The hold is only as good as this |
 | `EKF2_EV_DELAY` set to your VIO's measured latency | A wrong delay makes the estimate lag or lead in gusts (`docs/real-flight-gap.md`, row 7) |
 | `EKF2_EV_POS_X/Y/Z` set to the camera's offset from the IMU | Otherwise rotations look like movement |
+| `EKF2_HGT_REF` barometer (1) or a downward rangefinder, not vision (3) | With vision as the height reference, EKF2's height stops moving when the VIO goes quiet (the baro change goes into its bias), and the vehicle can sink without anything seeing it: in Gazebo an 8 s VIO silence put Structure Hold on the ground while EKF2 still showed 2.5 m; with baro height it held its height (`docs/field-faults.md`). Our own benchmark still uses vision height (a decided row under review) |
 | Heading source | The heading at engage is taken as the wall's normal. Near steel the magnetometer can be off by tens of degrees; if your VIO gives yaw, fusing it (`EKF2_EV_CTRL` yaw bit) is safer (row 3) |
 
 The VIO must reach PX4 as `ODOMETRY` with `estimator_type` VISION or VIO (it is logged as

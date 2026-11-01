@@ -30,7 +30,9 @@ Engage: the bridge reads PX4's HEARTBEAT on its own link (asked for at 20 Hz wit
 SET_MESSAGE_INTERVAL, so an engage is seen within about 50 ms) and marks each sample with
 whether Structure Hold (external mode 1 under the auto main mode, as sitl_test.py decodes
 it) is flying. A profile with ``fault_anchor: engage`` keys its fault schedule to the first
-such sample (``bridge.py``).
+such sample (``bridge.py``). The mode only counts once the vehicle is airborne
+(``heartbeat.airborne_engage``): the flight sequence first tries an engage on the ground,
+which the module refuses, and the mode shows for a moment then.
 
 Rangefinder: a profile with a ``rangefinder`` entry (``run_gazebo --rangefinder``) also
 gets a forward DISTANCE_SENSOR (MAV_SENSOR_ROTATION_NONE, i.e. forward facing) on the same
@@ -56,7 +58,7 @@ from pymavlink.dialects.v20 import common as mavlink
 
 from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
-from sim2real.estimate_bridge.heartbeat import structure_hold_engaged
+from sim2real.estimate_bridge.heartbeat import airborne_engage, structure_hold_engaged
 
 NAN = float("nan")
 NAN21 = [NAN] * 21
@@ -69,6 +71,7 @@ class Bridge:
         self.profile = load_profile(args.profile)
         self.bridge = self.profile.bridge()
         self.engaged = False
+        self.first_z: float | None = None  # where the first truth sample put the vehicle
         self.model = args.model
         self.trace = TraceWriter(args.trace)
         self.lock = threading.Lock()
@@ -117,9 +120,12 @@ class Bridge:
             if self.rangefinder is not None:
                 self.send_range(t, pose)
             was_anchored = self.bridge.anchored
+            if self.first_z is None:
+                self.first_z = pose.position.z
+            engaged = airborne_engage(self.engaged, pose.position.z, self.first_z)
             try:
                 sample = self.bridge.update(
-                    t, (pose.position.x, pose.position.y, pose.position.z), self.engaged)
+                    t, (pose.position.x, pose.position.y, pose.position.z), engaged)
             except ValueError as exc:  # a repeated stamp: skip, do not kill the stream
                 print(f"bridge: skipped sample: {exc}", flush=True)
                 return
@@ -163,7 +169,7 @@ class Bridge:
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
             float(p[0]), float(p[1]), float(p[2]), [NAN, NAN, NAN, NAN],
             float(v[0]), float(v[1]), float(v[2]), NAN, NAN, NAN,
-            NAN21, NAN21, 0, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
+            NAN21, NAN21, sample.resets % 256, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )
 
     def send_range(self, t: float, pose) -> None:

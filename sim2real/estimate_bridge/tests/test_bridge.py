@@ -465,3 +465,16 @@ def test_heartbeat_decoding_matches_sitl_test():
     assert structure_hold_engaged(custom(4, 12))  # a later external mode
     assert not structure_hold_engaged(custom(4, 3))  # Hold
     assert not structure_hold_engaged(custom(3, 0))  # Position
+
+
+def test_an_engage_on_the_ground_does_not_count_for_the_anchor():
+    """The flight sequence tries an engage on the ground first, which the module refuses;
+    the bridge must not anchor its engage-keyed faults on that (PR #101 made the sequence
+    do it; the first field-fault flights anchored there)."""
+    from sim2real.estimate_bridge.heartbeat import ENGAGE_MIN_HEIGHT_M, airborne_engage
+
+    assert not airborne_engage(True, 0.02, 0.0)  # the refusal on the ground
+    assert not airborne_engage(False, 2.5, 0.0)  # flying in a stock mode
+    assert airborne_engage(True, 2.5, 0.0)  # the real engage at the hover height
+    assert airborne_engage(True, 10.0 + ENGAGE_MIN_HEIGHT_M, 10.0)  # height from the start
+    assert not airborne_engage(True, 10.3, 10.0)
