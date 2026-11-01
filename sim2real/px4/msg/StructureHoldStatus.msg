@@ -19,6 +19,7 @@ uint8 TRIP_TILT = 4
 uint8 TRIP_POSITION_ERROR = 5
 uint8 TRIP_ESTIMATE_RESET = 6 # entry refused: EKF reset its xy position within SH_RST_HOLD (not latched)
 uint8 TRIP_LANDED = 7         # entry refused: the land detector says the vehicle is on the ground (not latched)
+uint8 TRIP_RANGE_LOST = 8     # Structure Hover on the rangefinder alone (SH_HB_RANGE) lost its range
 uint8 trip_reason             # TRIP_*: last watchdog trip or refusal; cleared on disarm
 uint8 trip_count              # trips since boot
 

@@ -74,6 +74,7 @@ static constexpr FloatRange SH_WALL_MIN{0.0f, 5.0f, 0.7f};
 static constexpr IntRange SH_WALL_REQ{0, 1, 0};
 static constexpr IntRange SH_LAND_EN{0, 1, 1};
 static constexpr IntRange SH_HB_GUARD{0, 1, 1};
+static constexpr IntRange SH_HB_RANGE{0, 1, 0};
 
 // Not ours: PX4's hover thrust (MPC_THR_HOVER, or hover_thrust_estimate). Outside this the
 // thrust scaling of every controller here is wrong by more than any airframe needs.

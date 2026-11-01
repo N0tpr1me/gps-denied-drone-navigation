@@ -22,7 +22,9 @@
  * Structure Hover (SH_HB_GUARD), a third mode, is the same guarded setpoint with no
  * descent. A watchdog trip hands back into it first when a forward range sees the wall,
  * so stock Position mode's creep after a handback on a jumped estimate cannot walk the
- * vehicle into the wall; the pilot switches out of it to Position mode as usual.
+ * vehicle into the wall; the pilot switches out of it to Position mode as usual. With
+ * SH_HB_RANGE 1 (Proposed, off by default) it also flies with the horizontal estimate gone,
+ * holding the measured wall distance on the rangefinder alone (RangeHover.hpp).
  */
 
 #pragma once
@@ -63,6 +65,7 @@
 #include "HoldController.hpp"
 #include "ParamLimits.hpp"
 #include "PolicyController.hpp"
+#include "RangeHover.hpp"
 #include "WallGuard.hpp"
 #include "Watchdog.hpp"
 
@@ -91,6 +94,11 @@ public:
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
 	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Position, Hold, Land
+	// Structure Hover on the range alone (SH_HB_RANGE): no usable reading for this long
+	// trips it, and the estimate must be back and fresh for this long to leave it.
+	static constexpr hrt_abstime RANGE_HOVER_LOST = 500_ms;
+	static constexpr hrt_abstime RANGE_HOVER_XY_BACK = 1_s;
+	static constexpr float RANGE_HOVER_STALE_S = 1.f;  // a fix older than this is not good
 	// Run() is woken by vehicle_angular_velocity, which a flight controller can publish at
 	// 1 to 8 kHz; the control tick is 10 ms, so wake-ups closer than this are skipped.
 	static constexpr hrt_abstime WAKE_INTERVAL = 2_ms;
@@ -113,10 +121,17 @@ private:
 	void endHandback(const char *why);
 	void requestHandbackMode();
 	void handbackStep(const hrt_abstime now);
-	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m);
+	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m,
+					   bool range_only = false);
 	void controlStep(const hrt_abstime now);
 	void engageGuarded(const vehicle_local_position_s &lpos, bool descend);
 	void guardedStep(const hrt_abstime now);
+	bool rangeHoverWanted(const hrt_abstime now) const;
+	void rangeHoverStep(const hrt_abstime now, const matrix::Dcmf &r);
+	float measuredWall(const hrt_abstime now, const matrix::Dcmf &r) const;
+	bool estimateGood() const;
+	void publishAccelerationSetpoint(float ax_ned, float ay_ned);
+	void updateWindFeedForward(const hrt_abstime now);
 	void publishTrajectorySetpoint(float z_ned, const matrix::Vector3f &velocity_ned);
 	bool guardedHandbackAvailable(const hrt_abstime now) const;
 	void updateFix(const hrt_abstime now);
@@ -205,6 +220,16 @@ private:
 	structure_hold::WallGuardOutput _wall_out{};
 	structure_hold::RangeReference _range_ref{};  // the wall-range input's reference
 
+	// Structure Hover on the range alone (SH_HB_RANGE, RangeHover.hpp): the controller, the
+	// wind the vehicle leaned into while the estimate was good, when a usable range was
+	// last seen, and since when the estimate has been back.
+	structure_hold::RangeHover _range_hover{};
+	structure_hold::WindFeedForward _wind_ff{};
+	hrt_abstime _wind_ff_us{0};
+	hrt_abstime _range_hover_seen_us{0};
+	hrt_abstime _range_hover_xy_back_us{0};
+	bool _range_hover_handback{false};  // the handback running started from a range hover
+
 	// Position-fix tracking for the stale time (docs/fallback.md): a fix is a new
 	// vehicle_visual_odometry sample with a finite position (the VIO / estimate-bridge path),
 	// or, without any odometry source, a vehicle_local_position update.
@@ -256,6 +281,7 @@ private:
 		(ParamInt<px4::params::SH_WALL_REQ>) _param_wall_req,
 		(ParamInt<px4::params::SH_LAND_EN>) _param_land_en,
 		(ParamInt<px4::params::SH_HB_GUARD>) _param_hb_guard,
+		(ParamInt<px4::params::SH_HB_RANGE>) _param_hb_range,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

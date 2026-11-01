@@ -87,5 +87,11 @@ jobs:
           g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
               -I../structure_hold test_handback.cpp -o test_handback
           ./test_handback
+      - name: Range hover unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../structure_hold test_range_hover.cpp -o test_range_hover
+          ./test_range_hover
       - name: Shell scripts parse
         run: bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh

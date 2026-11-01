@@ -12,6 +12,12 @@
  *   - then, and for every other trip or refusal: Position mode (Altitude mode when the
  *     horizontal estimate is invalid), Hold, Land.
  *
+ * Proposed, off by default (SH_HB_RANGE 1, docs/decisions.md 2026-11-01): a trip in
+ * Structure Hold next to a measured wall with the horizontal estimate gone also asks for
+ * Structure Hover first, which then holds the wall distance on the rangefinder alone
+ * (RangeHover.hpp) instead of Altitude mode's level drift; Altitude mode, Hold and Land
+ * follow as before if commander refuses it.
+ *
  * Commander may refuse a target (no manual control source for Position mode, no position
  * for Hold), so the module moves to the next one when the current one has not taken
  * after a short wait. Land is the last target and is asked for again until commander
@@ -78,13 +84,15 @@ struct HandbackPlan {
 /**
  * The plan for one trip. ``latched`` is false for an entry refusal (nothing was flying, so
  * no guarded first target); ``wall_measured`` is the module's check that Structure Hover
- * is registered, the guard is on and a usable forward range sees the wall within 5 m.
+ * is registered, the guard is on and a usable forward range sees the wall within 5 m;
+ * ``range_hover`` is SH_HB_RANGE (Structure Hover may fly on the range alone).
  */
-inline HandbackPlan planHandback(HandbackFrom from, bool latched, bool xy_valid, bool wall_measured)
+inline HandbackPlan planHandback(HandbackFrom from, bool latched, bool xy_valid, bool wall_measured,
+				 bool range_hover = false)
 {
 	HandbackPlan p{};
 	p.xy_valid = xy_valid;
-	p.guarded = latched && xy_valid && from == HandbackFrom::Hold && wall_measured;
+	p.guarded = latched && (xy_valid || range_hover) && from == HandbackFrom::Hold && wall_measured;
 	p.landing = latched && from == HandbackFrom::Land;
 	return p;
 }

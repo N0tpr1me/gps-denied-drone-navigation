@@ -170,6 +170,9 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   the ground (`SH_BENCH` 1 lifts it for the bench test only), stops on disarm, and the
   handback order lives in `Handback.hpp` (decided rows, pinned by `test_handback.cpp`);
   `sitl_test.py` checks ground engage always, `--range-faults` and `--moving-engage` on demand.
+  Field faults (Nov 2026, `docs/field-faults.md`): scripted VIO reset, restart, silence,
+  freeze and drift flown vs tuned PX4; `SH_HB_RANGE` (off by default, Proposed) keeps
+  Structure Hover off the wall on the rangefinder alone when the position estimate is gone.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU

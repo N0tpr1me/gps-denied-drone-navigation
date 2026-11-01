@@ -43,6 +43,7 @@ enum class Trip : uint8_t {
 	PositionError = 5,    // hold error beyond the limit
 	EstimateReset = 6,    // entry refused: estimator reset its position too recently
 	Landed = 7,           // entry refused: the land detector says the vehicle is on the ground
+	RangeLost = 8,        // Structure Hover on the range alone (SH_HB_RANGE) lost its range
 };
 
 struct WatchdogLimits {
@@ -162,6 +163,8 @@ public:
 		case Trip::EstimateReset: return "estimate_reset";
 
 		case Trip::Landed: return "landed";
+
+		case Trip::RangeLost: return "range_lost";
 		}
 
 		return "unknown";

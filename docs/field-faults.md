@@ -94,6 +94,37 @@ Altitude mode, which keeps the vehicle level, and the wind blew it into the wall
 touching at 2.4 m height, 8.9 s after the link went; closest 0.26 m) and down. Stock PX4 with baro height did what it
 did before: failsafe descent, wall touched on the way down.
 
+### The same link loss with the range hover (`SH_HB_RANGE` 1, Proposed)
+
+`SH_HB_RANGE` (off by default, `sim2real/px4/structure_hold/RangeHover.hpp`) keeps Structure
+Hover flying when the horizontal estimate is gone next to a measured wall, instead of the
+decided handback to Altitude mode. It sends PX4's position controller an acceleration-only
+horizontal setpoint (PX4 needs no horizontal estimate for that, as in Altitude mode, and
+holds the height itself): the wind lean learned while the estimate was good, plus a PID on
+the forward range that holds the distance measured when it started. Nothing measures drift
+along the wall, so that axis gets the wind lean alone. Once the estimate has been good for
+a second it goes back to holding a point on the estimate; without a usable range for 0.5 s
+it trips (`range_lost`) and the decided handback order follows.
+
+Flown on the same flight with barometer height (image built from the module branch with
+`SITL_IMAGE=structure-hold/px4-sitl:rangehover sim2real/docker/cloud_build.sh`, flown with
+`--image structure-hold/px4-sitl:rangehover --param SH_HB_RANGE=1`):
+
+| | Without (Altitude mode) | With `SH_HB_RANGE` 1 |
+| --- | --- | --- |
+| Closest to the wall | 0.26 m (props on the wall) | 0.94 m |
+| Lowest height | 0.04 m (on the ground) | 2.45 m |
+| Largest move | 8.4 m | 0.48 m (along the wall) |
+| Airborne at the end | no | yes |
+
+The watchdog tripped (`estimate_invalid`) 4.5 s into the silence as before and handed back
+to Structure Hover, which said "position lost, holding 0.98 m from the wall on the
+rangefinder". Through the rest of the silence the true wall distance stayed 0.95 to 0.99 m
+while the vehicle slid about 0.2 m along the wall; when the VIO came back it said "position
+back" and held on the estimate again. One flight, one seed: it shows the mechanism works in
+Gazebo, not how well it does across winds. It does nothing for the height: with vision as
+EKF2's height reference the vehicle would still sink.
+
 What this says, in plain words:
 
 - **A VIO reset or restart is where the module earns its keep.** Stock PX4 climbed 2.2 m
@@ -110,9 +141,8 @@ What this says, in plain words:
   should fly the barometer (or a downward rangefinder) as the height reference, and our
   benchmark set-up should probably follow, which changes a Decided row (Zain's call). With
   the height fixed, the decided handback to Altitude mode lets the wind push the vehicle
-  into the wall; a hover that keeps the wall distance on the rangefinder alone would fix
-  that, and it also changes the decided handback order (Zain's call; built off by default
-  and flown in its own PR).
+  into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead. Turning
+  it on changes the decided handback order, so it ships off by default (Zain's call).
 
 ## Next
 
@@ -120,6 +150,7 @@ What this says, in plain words:
   number here goes into a pitch.
 - A frozen-estimate trip in the watchdog (classical, cheap), flown on `field_freeze_*`.
 - The link-loss pair again with the barometer as EKF2's height reference, once Zain decides
-  the benchmark's height reference, and with the range-only hover (`SH_HB_RANGE`).
+  the benchmark's height reference, and the range hover (`SH_HB_RANGE`) over more seeds,
+  winds and longer silences.
 - The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
   should partners ever fly with GPS on?

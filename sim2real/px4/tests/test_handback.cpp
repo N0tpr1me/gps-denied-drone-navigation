@@ -69,6 +69,26 @@ int main()
 		CHECK(sequenceIs(p, seq, 3));
 	}
 
+	// SH_HB_RANGE 1 (Proposed, off by default): with the horizontal estimate gone next to a
+	// measured wall, Structure Hover first (it holds the wall distance on the range alone),
+	// then Altitude mode, Hold, Land. With an estimate, or without a wall, nothing changes.
+	{
+		const HandbackPlan p = planHandback(HandbackFrom::Hold, true, false, true, true);
+		CHECK(p.guarded && !p.xy_valid);
+		const T seq[] = {T::StructureHover, T::Altitude, T::Hold, T::Land};
+		CHECK(sequenceIs(p, seq, 4));
+		const HandbackPlan no_wall = planHandback(HandbackFrom::Hold, true, false, false, true);
+		CHECK(!no_wall.guarded && no_wall.target(0) == T::Altitude);
+		const HandbackPlan with_xy = planHandback(HandbackFrom::Hold, true, true, true, true);
+		const HandbackPlan decided = planHandback(HandbackFrom::Hold, true, true, true);
+		CHECK(with_xy.guarded == decided.guarded && with_xy.target(0) == decided.target(0)
+		      && with_xy.target(1) == decided.target(1));
+		const HandbackPlan refusal = planHandback(HandbackFrom::Hold, false, false, true, true);
+		CHECK(!refusal.guarded);
+		const HandbackPlan hover = planHandback(HandbackFrom::Hover, true, false, true, true);
+		CHECK(!hover.guarded && hover.target(0) == T::Altitude);
+	}
+
 	// Trip in Structure Land: stock Land first (the landing was already asked for), then
 	// Position mode, Hold, Land; with or without a wall.
 	for (int wall = 0; wall < 2; wall++) {
