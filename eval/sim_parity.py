@@ -10,14 +10,17 @@ Two checks, both with identical inputs on both backends, both on true state:
    saturated commands, an aggressive all-axis sweep, the same sweep on another airframe set
    with ``set_airframe``, and an external body moment like the near-wall yaw moment). Inputs
    are a fixed function of time, so the trajectories can be compared step by step: worst
-   position, velocity, attitude and body-rate difference per scenario.
+   position, velocity, attitude and body-rate difference per scenario. Run on the placeholder
+   airframe and again on the PX4 Gazebo x500 (``x500_params``), with the scenarios' fixed
+   forces and torques scaled to it.
 2. **Closed loop** (``closed_loop``): the Structure Hold env with the cascaded PD on the
    corrupted estimate, same seed, same wind, same estimate noise, for ``seconds``. Errors
    cannot grow without bound here, so this is the check that matters for training: per env,
    the worst position difference while both copies are alive; how many envs crash in one
-   backend and not the other; and the hold error (p95) of each. It runs twice: on the nominal
-   airframe, and with the Gate 1 airframe randomisation and wall yaw moment on
-   (``RANDOMISED``), so every env flies its own airframe.
+   backend and not the other; and the hold error (p95) of each. It runs three times: the PD
+   on the nominal airframe, the PD with the Gate 1 airframe randomisation and wall yaw moment
+   on (``RANDOMISED``), so every env flies its own airframe, and the released policy (v22)
+   on its own x500 task with the near-wall flow on (``X500_V22``).
 
 Tolerances (``OPEN_LOOP_TOL`` per scenario, ``CLOSED_LOOP_TOL``) are written down below and
 come from one rule: Isaac Lab must agree with the mock about as well as the mock agrees with
