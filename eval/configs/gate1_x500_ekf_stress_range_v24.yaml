@@ -5,7 +5,7 @@
 name: gate1_x500_ekf_stress_range_v24
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
-expected_hours: 0.8  # 17 cells x 1536 episodes, two controllers, plus the fusion
+expected_hours: 1.7  # 19 cells x 1536 episodes, two controllers, about 5 min a cell on 4 cores: over the 1 h limit, run the _p1 to _p3 parts
 gpus: 1
 params:
   controllers:
