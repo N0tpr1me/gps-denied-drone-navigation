@@ -121,7 +121,10 @@ python -m eval.baselines.run_baseline --label tuned_v1 --jobs auto \
 
 CI (`.github/workflows/ci.yml`): ruff + pytest on 3.10/3.11/3.12 with CPU torch, the
 launch smoke run, the module's C++ tests, a 50 MB file check and the no-attribution check.
-`sitl-image.yml` builds the image and flies the hover test when `sim2real/` changes.
+`sitl-image.yml` builds the image and flies the hover test on PRs that change `sim2real/`.
+Actions minutes are capped monthly (they ran out late Oct 2026), so PRs run the full set,
+the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on main
+(`workflow_dispatch` to run it by hand), and a new push cancels a PR's older run.
 
 ## Current state (late Oct 2026; check docs before relying on it)
 

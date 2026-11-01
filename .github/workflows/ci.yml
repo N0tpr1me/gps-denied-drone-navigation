@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A new push to a PR branch cancels that branch's older run; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   python:
@@ -12,7 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         # 3.10 to 3.12: the core must import in Isaac Lab, the SITL image and the Mac.
-        python-version: ["3.10", "3.11", "3.12"]
+        # PRs (the merge gate) run all three; the after-merge run on main runs 3.11 only,
+        # to stay inside the monthly Actions minutes.
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.10", "3.11", "3.12"]' || '["3.11"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
