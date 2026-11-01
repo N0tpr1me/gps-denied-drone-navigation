@@ -130,6 +130,7 @@ private:
 	void rangeHoverStep(const hrt_abstime now, const matrix::Dcmf &r);
 	float measuredWall(const hrt_abstime now, const matrix::Dcmf &r) const;
 	bool estimateGood() const;
+	bool fixFrozen() const;  // SH_WD_FRZ_T on and the fix has not moved for that long
 	void publishAccelerationSetpoint(float ax_ned, float ay_ned);
 	void updateWindFeedForward(const hrt_abstime now);
 	void publishTrajectorySetpoint(float z_ned, const matrix::Vector3f &velocity_ned);
@@ -211,6 +212,8 @@ private:
 	float _last_action[4] {};
 	bool _fallback_active{false};
 	float _stale_s{0.f};
+	structure_hold::FrozenFix _frozen_fix{};  // how long the odometry fix has not moved
+	float _fix_frozen_s{0.f};
 	float _last_estimate_age_s{0.f};
 
 	// Forward rangefinder and the floor it puts under the hold point (WallGuard.hpp):
@@ -259,6 +262,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_EST_TO>) _param_wd_est_to,
 		(ParamFloat<px4::params::SH_WD_POS_ERR>) _param_wd_pos_err,
 		(ParamFloat<px4::params::SH_WD_TILT>) _param_wd_tilt,
+		(ParamFloat<px4::params::SH_WD_FRZ_T>) _param_wd_frz_t,
 		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
 		(ParamInt<px4::params::SH_BENCH>) _param_bench,

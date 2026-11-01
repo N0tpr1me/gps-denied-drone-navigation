@@ -73,6 +73,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wd_est_to, param_limits::SH_WD_EST_TO, "SH_WD_EST_TO");
 	sanitizeParam(_param_wd_pos_err, param_limits::SH_WD_POS_ERR, "SH_WD_POS_ERR");
 	sanitizeParam(_param_wd_tilt, param_limits::SH_WD_TILT, "SH_WD_TILT");
+	sanitizeParam(_param_wd_frz_t, param_limits::SH_WD_FRZ_T, "SH_WD_FRZ_T");
 	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
 	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
 	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
@@ -101,6 +102,7 @@ void StructureHold::updateParams()
 	limits.max_position_error_m = _param_wd_pos_err.get();
 	limits.max_tilt_rad = math::radians(_param_wd_tilt.get());
 	limits.reset_holdoff_us = static_cast<uint64_t>(_param_rst_hold.get() * 1e6f);
+	limits.max_fix_frozen_s = _param_wd_frz_t.get();
 	_watchdog.setLimits(limits);
 
 	_gains.p_pos = _param_p_pos.get();
@@ -355,6 +357,10 @@ Trip StructureHold::entryRefusal(const hrt_abstime now) const
 		return Trip::EstimateReset;
 	}
 
+	if (fixFrozen()) {
+		return Trip::EstimateFrozen;
+	}
+
 	return Trip::None;
 }
 
@@ -585,8 +591,12 @@ void StructureHold::updateFix(const hrt_abstime now)
 			_last_fix_us = odom.timestamp > 0 ? odom.timestamp : now;
 			_last_fix_sample_us = odom.timestamp_sample > 0 ? odom.timestamp_sample : _last_fix_us;
 			_odometry_seen = true;
+			_frozen_fix.update(_last_fix_sample_us, odom.position[0], odom.position[1], odom.position[2]);
 		}
 	}
+
+	// Only the VIO's own odometry can freeze: EKF2's output moves with the IMU regardless.
+	_fix_frozen_s = useOdometryFix() ? _frozen_fix.frozenSeconds() : 0.f;
 
 	if (!useOdometryFix()) {
 		_last_fix_us = _local_position.timestamp;
@@ -667,6 +677,14 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
 	in.position_error_m = position_error_m;
 	in.test_fault = _param_test_fault.get() != 0;
+	// A frozen fix stops the policy. In Structure Land and Structure Hover PX4's own
+	// controller flies with the wall guard; handing back from there would put Position mode
+	// on the same frozen estimate without the guard (a Gazebo freeze flight drifted to
+	// 0.64 m from the wall that way), so it is no trip there. With SH_HB_RANGE the hover
+	// flies on the range instead (estimateGood()).
+	const bool guarded_mode = _state == structure_hold_status_s::STATE_HOVER
+				  || _state == structure_hold_status_s::STATE_LANDING;
+	in.fix_frozen_s = guarded_mode ? 0.f : _fix_frozen_s;
 	const bool xy_valid = in.xy_valid;
 
 	if (range_only) {
@@ -677,6 +695,7 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 		in.v_xy_valid = true;
 		in.estimate_timestamp_us = _local_position.timestamp;
 		in.position_error_m = 0.f;
+		in.fix_frozen_s = 0.f;
 	}
 
 	const Trip trip = _watchdog.check(in);
@@ -926,10 +945,17 @@ void StructureHold::publishTrajectorySetpoint(float z_ned, const Vector3f &veloc
 
 bool StructureHold::estimateGood() const
 {
-	// Valid, finite and fresh: what the guarded hold and the wind feed-forward trust.
+	// Valid, finite, fresh and not frozen: what the range hover and the wind feed-forward
+	// trust.
 	return _local_position.xy_valid && _local_position.v_xy_valid && PX4_ISFINITE(_local_position.x)
 	       && PX4_ISFINITE(_local_position.y) && PX4_ISFINITE(_local_position.vx) && PX4_ISFINITE(_local_position.vy)
-	       && _stale_s < RANGE_HOVER_STALE_S;
+	       && _stale_s < RANGE_HOVER_STALE_S && !fixFrozen();
+}
+
+bool StructureHold::fixFrozen() const
+{
+	const float limit = _param_wd_frz_t.get();
+	return limit > 0.f && !(_fix_frozen_s < limit);
 }
 
 bool StructureHold::rangeHoverWanted(const hrt_abstime now) const
@@ -1403,10 +1429,10 @@ int StructureHold::print_status()
 	PX4_INFO("latched trip: %s, last: %s, trips since boot: %u, EKF reset %.1f s ago (hold-off %.1f s)",
 		 Watchdog::name(_watchdog.latched()), Watchdog::name(_last_trip), _trip_count,
 		 (double)_watchdog.resetAge(hrt_absolute_time()), (double)_param_rst_hold.get());
-	PX4_INFO("controller: %s (policy %s, history %d x %d), fallback %s, fix source %s, stale %.2f s",
+	PX4_INFO("controller: %s (policy %s, history %d x %d), fallback %s, fix source %s, stale %.2f s, unmoved %.2f s (SH_WD_FRZ_T %.1f)",
 		 _param_ctrl.get() == 1 ? "policy" : "cascade", policy::NAME, policy::HISTORY, policy::NUM_OBS,
 		 _fallback_active ? "ACTIVE" : "idle", useOdometryFix() ? "visual odometry" : "local position",
-		 (double)_stale_s);
+		 (double)_stale_s, (double)_fix_frozen_s, (double)_param_wd_frz_t.get());
 	PX4_INFO("policy defaults: yaw %s, fallback %s, rates %.1f rad/s; flying: yaw guard %s, fallback %s, rate clamp %.1f rad/s",
 		 policy::YAW_FROM_POLICY ? "policy" : "module", policy::FALLBACK_DEFAULT_ON ? "on" : "off",
 		 (double)policy::MAX_RATE_RAD_S, _policy.yawGuard().enabled ? "on" : "off",

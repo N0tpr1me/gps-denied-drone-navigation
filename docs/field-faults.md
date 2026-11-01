@@ -125,6 +125,32 @@ back" and held on the estimate again. One flight, one seed: it shows the mechani
 Gazebo, not how well it does across winds. It does nothing for the height: with vision as
 EKF2's height reference the vehicle would still sink.
 
+### The freeze with the frozen-fix trip (`SH_WD_FRZ_T`, Proposed)
+
+`SH_WD_FRZ_T` (seconds, off by default; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
+(`estimate_frozen`) when the VIO odometry keeps arriving but has not moved by 0.1 mm for
+that long. A real VIO on a flying vehicle is never that still: its noise and the vehicle's
+own motion move it every sample. The trip follows the decided order: next to a measured wall
+that is Structure Hover, PX4's controller with the wall guard. It is not a trip inside
+Structure Hover or Land: the first flight below had it there, and Structure Hover then
+handed on to Position mode, which flew the same frozen estimate without the guard and
+drifted to 0.64 m from the wall. With `SH_HB_RANGE` 1 Structure Hover counts a frozen fix
+as no estimate and holds the wall distance on the rangefinder until the fix moves again.
+
+Same scenario and seed as the table above, benchmark parameters (vision height), the 5 s
+freeze, `SH_WD_FRZ_T` 1 s (image `structure-hold/px4-sitl:frozen` from the module branch):
+
+| | No trip (table above) | Trip, first version (handed on to Position mode) | Trip | Trip + `SH_HB_RANGE` 1 |
+| --- | --- | --- | --- | --- |
+| Closest to the wall | 0.94 m | 0.64 m | 0.97 m | 0.97 m |
+| Largest move | 0.55 m | 0.40 m | 0.21 m | 0.19 m |
+| Lowest height | 2.46 m | 2.47 m | 2.47 m | 2.47 m |
+
+The trip fired 1 s into the freeze each time and told the ground station why. Staying in
+Structure Hover on the frozen estimate held about as well as the range hover here: in 4 s
+the wind moved the vehicle 0.2 m, and the wall guard kept it off the wall. A longer freeze
+is where the range hover should matter, as on the link loss. One flight per cell, one seed.
+
 What this says, in plain words:
 
 - **A VIO reset or restart is where the module earns its keep.** Stock PX4 climbed 2.2 m
@@ -133,9 +159,10 @@ What this says, in plain words:
 - **Slow drift is caught by the rangefinder, not by the estimate.** The wall guard held
   0.70 m while stock PX4 went to 0.42 m. Stock PX4 could only match this with a wall-aware
   hold of its own.
-- **A frozen estimate is invisible to both.** No trip fired; both wandered about half a
-  metre and stayed 0.94 m from the wall. A classical frozen-estimate check (the position
-  not changing while the IMU says the vehicle moves) is the obvious next watchdog trip.
+- **A frozen estimate is invisible to both, until the module looks for it.** No trip fired;
+  both wandered about half a metre and stayed 0.94 m from the wall. The frozen-fix trip
+  (`SH_WD_FRZ_T`, above, off by default) caught it in 1 s and the guarded hover then moved
+  0.2 m; turning it on is Zain's call.
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
   should fly the barometer (or a downward rangefinder) as the height reference, and our
@@ -148,7 +175,7 @@ What this says, in plain words:
 
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
-- A frozen-estimate trip in the watchdog (classical, cheap), flown on `field_freeze_*`.
+- The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
 - The link-loss pair again with the barometer as EKF2's height reference, once Zain decides
   the benchmark's height reference, and the range hover (`SH_HB_RANGE`) over more seeds,
   winds and longer silences.

@@ -60,7 +60,8 @@ NAV_POSCTL, NAV_AUTO_LOITER, NAV_EXTERNAL1 = 2, 4, 23
 ARMING_STATE_ARMED = 2
 CONTROLLERS = ("tuned_px4", "structure_hold")
 TRIP_NAMES = {0: "none", 1: "test_fault", 2: "estimate_invalid", 3: "estimate_stale",
-              4: "tilt", 5: "position_error", 6: "estimate_reset", 7: "landed", 8: "range_lost"}
+              4: "tilt", 5: "position_error", 6: "estimate_reset", 7: "landed", 8: "range_lost",
+              9: "estimate_frozen"}
 HOLD_S, SETTLE_S = 60.0, 2.0
 
 

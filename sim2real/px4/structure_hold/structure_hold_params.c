@@ -55,6 +55,26 @@ PARAM_DEFINE_FLOAT(SH_WD_POS_ERR, 2.0f);
 PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
 
 /**
+ * Watchdog: frozen position fix
+ *
+ * Trips the watchdog when the position fix (the VIO odometry, SH_FIX_SRC) keeps arriving on
+ * time but has not moved by more than 0.1 mm for this long while flying, and refuses an
+ * engage while it is so. A stuck camera pipeline or VIO process can republish its last pose
+ * forever: the stale trip never sees it and EKF2 keeps it valid. A real VIO on a flying
+ * vehicle is never that still for long. After the trip the decided handback order applies;
+ * with SH_HB_RANGE 1 Structure Hover treats a frozen fix as no estimate and holds the wall
+ * distance on the rangefinder. Needs the odometry fix (no effect when the fix is EKF2's
+ * local position). 0 = off (default; Proposed, docs/decisions.md 2026-11-01).
+ *
+ * @unit s
+ * @min 0.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 0.0f);
+
+/**
  * Watchdog: entry hold-off after an estimator reset
  *
  * Structure Hold refuses to engage (commander keeps the current mode, or the module hands
