@@ -76,7 +76,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker), `route-follow.md` (the second capability: route flying through tunnels and corridors) |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker), `route-follow.md` (the second capability: route flying through tunnels and corridors), `market-research.md` (what drone engineers need, ranked gaps, Nov 2026) |
 
 ## Conventions (details in docs/conventions.md)
 
