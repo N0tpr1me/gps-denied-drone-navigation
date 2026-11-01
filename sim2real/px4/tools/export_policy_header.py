@@ -190,6 +190,15 @@ def render_header(net: dict, meta: dict, onnx_path: Path, json_path: Path, sha: 
     cap = float(env.get("engage_obs_cap_s", 4.0))
     out.append(f"static constexpr bool HAS_ENGAGE_TIME = {str(has_engage).lower()};")
     out.append(f"static constexpr float ENGAGE_OBS_CAP_S = {cap!r}f;")
+    # The wall-range input (v23 on): the hold point's wall distance minus the forward range's,
+    # clipped at RANGE_OBS_CLIP_M, and a usable flag. Constants for every policy, as above.
+    has_range = "wall_range" in layout
+    if not has_range:
+        out.append("static constexpr int OBS_WALL_RANGE = 0;  // unused: no wall-range input")
+        out.append("static constexpr int OBS_RANGE_OK = 0;  // unused: no wall-range input")
+    range_clip = float((env.get("range") or {}).get("obs_clip_m", 1.0))
+    out.append(f"static constexpr bool HAS_WALL_RANGE = {str(has_range).lower()};")
+    out.append(f"static constexpr float RANGE_OBS_CLIP_M = {range_clip!r}f;")
     out.append("")
     out.append("// Action scaling and the airframe the policy was trained on (mock sim).")
     max_rate = float(meta["output"]["max_rate_rad_s"])

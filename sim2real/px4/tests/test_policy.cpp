@@ -44,6 +44,8 @@ static VehicleSample sampleOf(int k)
 	s.stale = testvec::STALE[k];
 	s.age_s = testvec::AGE_S[k];
 	s.engage_s = testvec::ENGAGE_S[k];
+	s.range_ok = testvec::RANGE_OK[k];
+	s.range_err_m = testvec::RANGE_ERR_M[k];
 	return s;
 }
 

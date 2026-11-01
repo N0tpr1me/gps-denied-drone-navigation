@@ -129,4 +129,51 @@ private:
 	float _total_shift_m{0.f};
 };
 
+/**
+ * The wall-range policy input (policies with HAS_WALL_RANGE, v23 on; envs/structure_hold
+ * env.range_input): the hold point's wall distance, latched at the first usable range after
+ * engage, minus the measured perpendicular distance each tick. Positive toward the wall, like
+ * the estimated x error, but measured on the wall: once latched, an estimate jump or drift
+ * does not move it. At an engage on the estimate the latch is the vehicle's own measured
+ * distance (the clearance with the hold point where the vehicle is); the guard's own shifts
+ * move the reference back with the hold point.
+ */
+class RangeReference
+{
+public:
+	void engage() { _valid = false; }
+
+	/** One tick, after WallGuard::apply. */
+	void update(const WallGuardOutput &w)
+	{
+		if (!w.range_ok) { return; }
+
+		if (!_valid) {
+			_ref_m = w.clearance_m;  // after this tick's shift, if any
+			_valid = true;
+
+		} else {
+			_ref_m += w.shift_m;
+		}
+	}
+
+	/** True with ``err_m`` set when a usable reading backs the input this tick. */
+	bool error(const WallGuardOutput &w, float &err_m) const
+	{
+		err_m = 0.f;
+
+		if (!_valid || !w.range_ok) { return false; }
+
+		err_m = _ref_m - w.wall_m;
+		return true;
+	}
+
+	bool valid() const { return _valid; }
+	float reference() const { return _ref_m; }
+
+private:
+	float _ref_m{0.f};
+	bool _valid{false};
+};
+
 } // namespace structure_hold

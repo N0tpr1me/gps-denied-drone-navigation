@@ -186,6 +186,7 @@ private:
 	structure_hold::RangeSample _range{};
 	structure_hold::WallGuard _wall_guard{};
 	structure_hold::WallGuardOutput _wall_out{};
+	structure_hold::RangeReference _range_ref{};  // the wall-range input's reference
 
 	// Position-fix tracking for the stale time (docs/fallback.md): a fix is a new
 	// vehicle_visual_odometry sample with a finite position (the VIO / estimate-bridge path),

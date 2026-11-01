@@ -257,9 +257,9 @@ def fly_reengage(env: StructureHoldEnv, controller: Any, seq: dict[str, Any],
     holding the estimate where the switch found it and moving that setpoint with each
     horizontal EKF2 reset, as PX4's flight tasks do. After ``stock_s`` the module re-engages
     as ``StructureHold::engage`` does: hold point = the estimate now, last action zeroed, the
-    engage clock restarted, the policy's history refilled. ``guard_s`` > 0 holds the re-engage
-    off until that long after the last horizontal reset (a module guard under discussion).
-    ``jump_m`` > 0 adds a vision
+    engage clock restarted, the wall-range reference latched, the policy's history refilled.
+    ``guard_s`` > 0 holds the re-engage off until that long after the last horizontal reset
+    (a module guard under discussion). ``jump_m`` > 0 adds a vision
     jump toward the wall, decaying as ``vio_default``'s do, ``jump_lead_s`` (a range, drawn
     per env) before the switch: Gazebo seed 3's, which put the v11 re-engages on the wall.
     """
@@ -303,6 +303,10 @@ def fly_reengage(env: StructureHoldEnv, controller: Any, seq: dict[str, Any],
                 env.hold_point[eng] = env.estimate_pos[eng]
                 env.last_action[eng] = 0.0
                 env.engage_time[eng] = 0.0
+                # The module latches the wall-range input's reference at engage as the hold
+                # point's measured wall distance: the vehicle's own, as the hold point is the
+                # estimate, so a jumped estimate does not move it (StructureHold.cpp).
+                env.range_ref[eng] = env.clearance()[eng]
                 mode[eng] = 2
                 e = eng.cpu().numpy()
                 k_eng[e] = k
