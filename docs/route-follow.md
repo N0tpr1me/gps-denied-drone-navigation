@@ -25,8 +25,9 @@ body rates and collective thrust to PX4's stock rate controller, a small MLP on 
 observation history, exported as ONNX and compiled into the module as a header.
 
 **The target.** A point moves along the route's centreline (straight segments between the
-waypoints) at the route speed, with a speed ramp at the start and the end, and stops on the
-last waypoint. The policy is asked to stay on that moving point. A moving target, rather
+waypoints) at the route speed: it starts from rest, slows for each corner (a 90 degree
+corner at a fifth of the cruise speed, a straight joint at full speed, as PX4 Mission mode
+slows for a corner), and stops on the last waypoint. The policy is asked to stay on that moving point. A moving target, rather
 than "fly to the next waypoint", gives the policy one well-defined error to close at all
 times and is the same shape as PX4's own position controller tracking a trajectory setpoint,
 so the classical baseline is a fair copy of what PX4 does.
@@ -89,6 +90,29 @@ Gazebo (below).
   profile that lets the drift grow larger.
 - **Airframe:** the Gazebo x500 presets (`gz_x500`, `gz_x500_sitl`), so the numbers carry
   over to SITL as they did for Structure Hold.
+
+## The code
+
+| Piece | Where |
+| --- | --- |
+| Config (route, rangefinders, reward; airframes as Structure Hold) | `envs/route_follow/config.py` |
+| Random routes and the target's speed plan (NumPy) | `envs/route_follow/routes.py` |
+| Walls, target, route frame, rangefinder beams (sphere-traced) on tensors | `envs/route_follow/geometry.py` |
+| The env (38 inputs per step, table in its docstring) | `envs/route_follow/env.py` |
+| PD yardsticks (estimate only; with range centring) | `envs/route_follow/baseline.py` |
+| Scoring and the yardstick run | `eval/route_follow.py`, `eval/configs/route_follow_baseline.yaml` |
+| PPO training (smoke mode, exports `policy.onnx`) | `training/train_route_ppo.py`, `training/configs/route_follow_ppo.yaml` |
+
+Defaults worth knowing: 4 segments with turns up to 90 degrees and slopes up to 10 degrees
+(a short route turns less, one piece per 3 m at most); corridors 2 to 4 m wide and 2.4 to 4 m
+tall, tunnels 1.1 to 2 m in radius; cruise 0.5 to 1.5 m/s at 0.5 m/s^2; 30 s episodes with
+the last 5 s a hold on the last waypoint; draft up to 3 m/s along the tunnel; the estimate's
+drift walk and cap raised to 0.02 m/sqrt(s) and 0.5 m (a guess until a tunnel VIO fit).
+
+```
+python -m training.launch --config training/configs/route_follow_ppo.yaml --smoke --device cpu
+python -m training.launch --config eval/configs/route_follow_baseline.yaml --device cpu
+```
 
 ## How it is scored
 

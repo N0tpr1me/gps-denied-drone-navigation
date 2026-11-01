@@ -10,3 +10,5 @@ Folders (see docs/decisions.md and the execution plan):
   `isaac_quad.py` (Isaac Lab, on the GPU server, later)
 - `structure_hold/` the task: observations, reward, resets, the classical cascaded-PD
   yardstick and the standalone rollout entrypoint (the rate PID is in `sims/rate_pid.py`)
+- `route_follow/` the second task, Route Follow (`docs/route-follow.md`): a given route
+  through a corridor or tunnel, its walls and rangefinder beams, the env and the PD yardsticks
