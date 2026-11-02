@@ -37,12 +37,15 @@ command -v docker >/dev/null || { echo "Docker is not installed: https://docs.do
 docker info >/dev/null 2>&1 || { echo "Docker is installed but not running (or needs sudo / the docker group)." >&2; exit 2; }
 echo "ok: $(docker --version)"
 
-say "2/4 SITL image ${IMAGE}"
+say "2/4 SITL image"
 if [[ -n "${load}" ]]; then
-    docker load -i "${load}"
+    # Fly the image the file holds (the binary-only kit image has its own name).
+    loaded="$(docker load -i "${load}" | sed -n 's/^Loaded image: //p' | tail -1)"
+    [[ -n "${loaded}" ]] && IMAGE="${loaded}"
+    echo "loaded ${IMAGE}"
 fi
 if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    echo "ok: image present"
+    echo "ok: ${IMAGE} present"
 else
     echo "not found: building it once (PX4 v1.17.0 + Gazebo Harmonic, 20 to 40 min)"
     SITL_IMAGE="${IMAGE}" sim2real/docker/run.sh build
