@@ -162,7 +162,7 @@ if [[ "${SITL}" -eq 1 ]]; then
     seeds=$(seq -s ' ' 1 "${jobs}")
     if run "parallel hovers (${jobs} at once)" parallel.log \
         "${PY}" -m eval.baselines.run_baseline --label server_parallel_check \
-            --params eval/baselines/px4_tuned_v1.params --scenarios wall1m_calm_0ms \
+            --params eval/baselines/px4_tuned_v2.params --scenarios wall1m_calm_0ms \
             --seeds ${seeds} --jobs "${jobs}" -- --profile vio_at_hover; then
         batch=$(sed -n 's/^batch folder: //p' "${OUT}/parallel.log")
         rtf=$("${PY}" -c "import json,sys; b=json.load(open(sys.argv[1]+'/batch.json')); r=[x['rtf_min'] for x in b['rows']]; print(len(r), 'flights, worst real-time factor', min(v for v in r if v is not None) if any(r) else None)" "${batch}")

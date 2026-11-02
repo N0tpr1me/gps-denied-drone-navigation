@@ -220,7 +220,7 @@ def test_ekf2_ev_params_disable_gps_and_enable_vision():
     p = read_params(PROFILE_DIR.parent / "ekf2_ev.params")
     assert p["EKF2_GPS_CTRL"] == 0 and p["SYS_HAS_GPS"] == 0
     assert p["EKF2_EV_CTRL"] & 0b111 == 0b111 and not p["EKF2_EV_CTRL"] & 0b1000
-    assert p["EKF2_HGT_REF"] == 3
+    assert p["EKF2_HGT_REF"] == 1  # barometer height since 2026-11-01 (docs/decisions.md)
     est = load_profile("vio_default").estimate
     assert p["EKF2_EV_DELAY"] == pytest.approx(500.0 * (est.delay_min_s + est.delay_max_s))
     env = to_environment(p)

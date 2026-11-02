@@ -30,8 +30,9 @@ run_estimate.py    host runner: scenario + profile -> run folder, verify, score
    a MAVLink ODOMETRY message (local NED position and velocity, no attitude, no covariance,
    estimator type VIO) to PX4's second onboard link on port 14030. PX4 turns it into
    `vehicle_visual_odometry`; EKF2 fuses position, height and velocity from it
-   (`EKF2_EV_CTRL 7`, `EKF2_HGT_REF 3`, `EKF2_GPS_CTRL 0`, `SYS_HAS_GPS 0`). Heading still
-   comes from the magnetometer.
+   (`EKF2_EV_CTRL 7`, `EKF2_GPS_CTRL 0`, `SYS_HAS_GPS 0`), with the barometer as the height
+   reference (`EKF2_HGT_REF 1` since 2026-11-01; it was 3, vision, before:
+   `docs/field-faults.md` says why). Heading still comes from the magnetometer.
 3. During a dropout nothing is sent: EKF2 sees a gap and dead-reckons on the IMU, as it
    would with a real camera that lost tracking. Jumps arrive as ordinary samples; the EKF's
    innovation gate decides what to do with them (see the LOG entries for what it did).

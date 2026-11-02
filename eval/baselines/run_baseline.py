@@ -3,10 +3,10 @@
     python -m eval.baselines.run_baseline --label stock \\
         --params sim2real/estimate_bridge/ekf2_ev.params
     python -m eval.baselines.run_baseline --label tuned_v1 \\
-        --params eval/baselines/px4_tuned_v1.params
+        --params eval/baselines/px4_tuned_v2.params
     python -m eval.baselines.run_baseline --compare runs/<stock>/batch.json runs/<tuned>/batch.json
     python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 \\
-        --params eval/baselines/px4_tuned_v1.params -- --param SH_FB_EN=1
+        --params eval/baselines/px4_tuned_v2.params -- --param SH_FB_EN=1
 
 Each flight is one ``sim2real.estimate_bridge.run_estimate`` run (Gazebo wall_slab, wind
 plugin, GPS off, EKF2 on the corrupted vision estimate), scored on the TRUE position with

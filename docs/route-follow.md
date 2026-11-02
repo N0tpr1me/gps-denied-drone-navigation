@@ -129,7 +129,7 @@ velocity fed forward, on the estimate only (the shape of PX4's position controll
 same PD with a classical wall-centring term from the left/right/up/down ranges, the best a
 hand-written controller does with the same sensors. Every mock result is reported against
 both. In SITL: stock PX4 Mission mode with the tuned parameters
-(`eval/baselines/px4_tuned_v1.params`) flying the same waypoints through the same estimate.
+(`eval/baselines/px4_tuned_v2.params`) flying the same waypoints through the same estimate.
 
 ## First results (mock, 2026-11-01)
 
