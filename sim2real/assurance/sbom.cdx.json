@@ -1,0 +1,678 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "firmware",
+      "bom-ref": "structure-hold",
+      "name": "Structure Hold",
+      "version": "structure_hold_v22 on PX4 v1.17.0",
+      "supplier": {
+        "name": "Zain Ali"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Proprietary, all rights reserved (LICENSE)"
+          }
+        }
+      ],
+      "description": "PX4 flight mode that holds a quadrotor 1 to 3 m from a structure without GPS. Confidential."
+    },
+    "authors": [
+      {
+        "name": "Zain Ali"
+      }
+    ],
+    "manufacturer": {
+      "name": "Zain Ali"
+    },
+    "properties": [
+      {
+        "name": "dronenav:classification",
+        "value": "Confidential"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "application",
+      "bom-ref": "structure-hold-module",
+      "name": "Structure Hold PX4 module",
+      "supplier": {
+        "name": "Zain Ali"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Proprietary, all rights reserved (LICENSE)"
+          }
+        }
+      ],
+      "description": "C++14 source in sim2real/px4/structure_hold/ plus the StructureHoldStatus uORB message. Uses only PX4's own libraries (uORB, px4_work_queue, mathlib, mavlink_log) and the C++ standard headers; no heap, no ONNX runtime, no network code of its own.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "onboard"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "compiled into the drone's PX4 firmware"
+        }
+      ]
+    },
+    {
+      "type": "machine-learning-model",
+      "bom-ref": "structure-hold-policy",
+      "name": "structure_hold_v22",
+      "supplier": {
+        "name": "Zain Ali"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Proprietary, all rights reserved (LICENSE)"
+          }
+        }
+      ],
+      "description": "64x64 MLP weights compiled in as PolicyWeights.hpp, generated from training/policies/structure_hold_v22.onnx. Trained by us with PPO on our own simulator only; no third-party or pre-trained weights, no recorded data.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "onboard"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "compiled into the drone's PX4 firmware"
+        }
+      ]
+    },
+    {
+      "type": "framework",
+      "bom-ref": "px4-autopilot",
+      "name": "PX4-Autopilot",
+      "version": "v1.17.0",
+      "supplier": {
+        "name": "Dronecode Foundation (PX4 project)"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:github/PX4/PX4-Autopilot@v1.17.0",
+      "description": "The host flight stack. The drone maker builds and ships it, so PX4's own parts (NuttX and its submodules) belong in the maker's firmware SBOM.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/PX4/PX4-Autopilot"
+        }
+      ],
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "onboard"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "compiled into the drone's PX4 firmware"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "dronenav",
+      "name": "dronenav (simulator, scoring and SITL tools)",
+      "supplier": {
+        "name": "Zain Ali"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Proprietary, all rights reserved (LICENSE)"
+          }
+        }
+      ],
+      "description": "The Python in envs/, eval/, training/ and sim2real/.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-numpy",
+      "name": "numpy",
+      "supplier": {
+        "name": "NumPy developers"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/numpy",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=1.24"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-pyyaml",
+      "name": "PyYAML",
+      "supplier": {
+        "name": "PyYAML developers"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/pyyaml",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=6.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-pyulog",
+      "name": "pyulog",
+      "supplier": {
+        "name": "PX4 project"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/pyulog",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=1.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-pymavlink",
+      "name": "pymavlink",
+      "supplier": {
+        "name": "ArduPilot / MAVLink project"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-3.0-only"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/pymavlink",
+      "description": "Host side only; not linked into the module.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=2.4.41"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-mavsdk",
+      "name": "mavsdk",
+      "version": "3.17.4",
+      "supplier": {
+        "name": "Dronecode Foundation (MAVSDK project)"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/mavsdk@3.17.4",
+      "description": "Inside the SITL image.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "gazebo-harmonic",
+      "name": "Gazebo Harmonic (gz-sim8)",
+      "supplier": {
+        "name": "Open Source Robotics Foundation"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "description": "The SITL simulator; our wind plugin links gz-sim8 and gz-plugin2.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/gazebosim/gz-sim"
+        }
+      ],
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        }
+      ]
+    },
+    {
+      "type": "operating-system",
+      "bom-ref": "ubuntu-base-image",
+      "name": "Ubuntu 24.04 container base",
+      "version": "24.04",
+      "supplier": {
+        "name": "Canonical"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Various (Ubuntu distribution licences)"
+          }
+        }
+      ],
+      "description": "Base of the SITL Docker image (sim2real/docker/Dockerfile).",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "evaluation"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "evaluation kit and scoring tools (desktop or server, never on the drone)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-torch",
+      "name": "torch",
+      "supplier": {
+        "name": "PyTorch Foundation"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/torch",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "training"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "policy training only (desktop or server)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=2.6"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-rsl-rl-lib",
+      "name": "rsl-rl-lib",
+      "version": "5.5.1",
+      "supplier": {
+        "name": "ETH Zurich Robotic Systems Lab"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/rsl-rl-lib@5.5.1",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "training"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "policy training only (desktop or server)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": "==5.5.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-tensordict",
+      "name": "tensordict",
+      "supplier": {
+        "name": "PyTorch Foundation"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/tensordict",
+      "description": "Pulled in by rsl-rl-lib.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "training"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "policy training only (desktop or server)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-onnx",
+      "name": "onnx",
+      "supplier": {
+        "name": "LF AI & Data (ONNX project)"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/onnx",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "training"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "policy training only (desktop or server)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=1.16"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-onnxruntime",
+      "name": "onnxruntime",
+      "supplier": {
+        "name": "Microsoft"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/onnxruntime",
+      "description": "Checks the exported policy on the desktop; not on the drone.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "training"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "policy training only (desktop or server)"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=1.17"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-pytest",
+      "name": "pytest",
+      "supplier": {
+        "name": "pytest developers"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/pytest",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "development"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "tests and lint only"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=8.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pypi-ruff",
+      "name": "ruff",
+      "supplier": {
+        "name": "Astral"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:pypi/ruff",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "development"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "tests and lint only"
+        },
+        {
+          "name": "dronenav:version-constraint",
+          "value": ">=0.6"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "basalt",
+      "name": "Basalt VIO",
+      "version": "47b063e64fa7dd56ac04eb2d579c5cb5e72c743e",
+      "supplier": {
+        "name": "Technical University of Munich"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "description": "Run offline on EuRoC in eval/vio_basalt/ to measure real VIO error.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://gitlab.com/VladyslavUsenko/basalt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "research"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "offline fit of the simulator's estimate-error model; not delivered"
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bom-ref": "rpg-trajectory-evaluation",
+      "name": "rpg_trajectory_evaluation",
+      "version": "8c8ceec55c5c5094a6494208cfc5f54afe0bbc4d",
+      "supplier": {
+        "name": "University of Zurich, Robotics and Perception Group"
+      },
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "description": "Its published example VIO results were the first fit's input.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/uzh-rpg/rpg_trajectory_evaluation"
+        }
+      ],
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "research"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "offline fit of the simulator's estimate-error model; not delivered"
+        }
+      ]
+    },
+    {
+      "type": "data",
+      "bom-ref": "euroc-mav-dataset",
+      "name": "EuRoC MAV dataset",
+      "supplier": {
+        "name": "ETH Zurich"
+      },
+      "licenses": [
+        {
+          "license": {
+            "name": "Dataset owner's terms; not redistributed"
+          }
+        }
+      ],
+      "description": "Read offline; only fitted error statistics are kept (docs/vio-fit.md). Not in the repo, not in the policy.",
+      "properties": [
+        {
+          "name": "dronenav:role",
+          "value": "research"
+        },
+        {
+          "name": "dronenav:where",
+          "value": "offline fit of the simulator's estimate-error model; not delivered"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "structure-hold",
+      "dependsOn": [
+        "structure-hold-module",
+        "structure-hold-policy",
+        "px4-autopilot"
+      ]
+    },
+    {
+      "ref": "structure-hold-module",
+      "dependsOn": [
+        "px4-autopilot",
+        "structure-hold-policy"
+      ]
+    }
+  ]
+}
