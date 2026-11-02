@@ -77,6 +77,11 @@ wall; move to the hold point; engage (Structure Hold, or stay in Position mode f
 baseline); the script fires the gusts at +15 s and +40 s; hold 60 s untouched; disengage,
 back off to 2 m, land. Tethered shakedown runs are never scored.
 
+The wind fit: the calm, free-air (wall away, anemometer reading) and wall-in holds go
+through `eval/fit_wind.py` (`docs/wind-fit.md`), which returns the drag, turbulence and the
+shelter `L` and `g0` from the drone's own accelerometer, so the hot-wire grid of step 5 is a
+cross-check rather than the only measurement.
+
 Scoring: `eval/metrics.py` on the truth over the 60 s hold, gusts from the logged switch
 times. Report each case as in `docs/baseline.md` (mean p95 against tuned PX4, worst toward
 the wall, crashes, handbacks) with the sim twin beside it, and log every scored run in

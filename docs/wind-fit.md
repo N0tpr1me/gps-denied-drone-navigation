@@ -67,7 +67,44 @@ steady wind, with a handheld anemometer for the free-air reference.
 
 ## The Gazebo check
 
-RESULTS_PLACEHOLDER
+Eight Gazebo SITL holds of stock PX4 on the x500 (`sim2real/gazebo/scenarios/windfit_*.yaml`,
+60 s each, flown one at a time in the cloud container on 2026-11-02): calm, free air at 8 and
+4 m/s, and 0.75, 1, 1.5, 2 and 3 m from the wall in 8 m/s blowing into it, with turbulence
+and two gusts per hold. Every disturbance value is fixed in the scenarios, and none is the
+model's nominal, so the fit has something to find: shelter `L` 1.4 m and `g0` 0.12 (nominal
+1.06 m and 0), `k_quad` 0.032. The free-air reference speed is the plugin's trace over each
+hold, as an anemometer at the hold point would read it. Run
+`20261102-003514_wind_fit_gazebo_s0_503d2cd` (`experiments/LOG.md`):
+
+| Number | Truth | Fit | Error |
+| --- | --- | --- | --- |
+| `k_quad` (two speeds) | 0.0320 | 0.0319 | -0.4 % |
+| `k_lin` | 0 | 0.0009 | |
+| Shelter `L` | 1.400 m | 1.382 m (+- 0.002) | -1.3 % |
+| Shelter `g0` | 0.120 | 0.114 (+- 0.001) | -0.006 |
+| Turbulence sigma, same air | 0.666 m/s | 0.648 m/s | -2.6 % |
+| Turbulence tau, same air | 1.12 s | 1.18 s | +4.6 % |
+| Wind heading, 8 m/s / 4 m/s | 0 deg | +1.1 / -5.6 deg | EKF2 heading |
+
+Per hold, the shelter from the IMU and the shelter of the plugin's own air over the same
+samples differ by 0.0001 to 0.0026 (0.75 m: 0.471 against 0.474). Fitting the curve to the
+plugin's own air gives `L` 1.386 m and `g0` 0.120, so most of the gap to the scenario's
+1.4 m is the drone moving about its hold point, not the measurement. The mean air speed
+agrees within 0.01 m/s on every hold, and along the wind the air rms error is 0.03 to
+0.06 m/s. Across the wind it is 0.11 to 0.45 m/s: EKF2's heading wobbles by about
+2 degrees, which turns a 2 N force by 0.07 N; with Gazebo's true attitude the crosswind
+force error falls from 0.079 to 0.014 N rms. Every proposed range holds the fitted values,
+and so do the current defaults (`covered` true for all four), as it should be when the
+scenarios were drawn from inside them.
+
+Turbulence is scored against the plugin's own air over the same samples, not the
+scenario's sigma 0.8 m/s and tau 1.5 s: a 60 s hold shows part of the model's spectrum,
+and the true air itself showed sigma 0.67 m/s and tau 1.12 s. The calm hold's "speed" of
+0.27 m/s rms is the drag inversion's noise near zero force (speed goes as the square root
+of force); it is only used for the accelerometer offset.
+
+On model-made logs (the tests and the smoke run) the fit returns `L` and `g0` exactly, the
+drag within 3 %, and `k_lin` and `k_quad` from two speeds.
 
 ## Limits
 
