@@ -1535,3 +1535,78 @@ spot, would likely have come closer, not farther. So no module or policy change:
 0.54 m is the Position-mode stretch of the test sequence, which tuned PX4 flies too
 (`docs/gazebo_check.md`: closest approaches after the hold are printed, not scored). Compare
 closest approaches after a re-engage only next to the entry state.
+
+## Gate 2 on barometer height: v22 vs tuned PX4, 8 seeds (2026-11-02)
+
+Zain switched the benchmark's height reference from vision to the barometer on 2026-11-01
+(decision row of that date): with vision height EKF2's height freezes when the VIO goes
+silent and the vehicle can sink unseen (`docs/field-faults.md`). The benchmark EKF2 file
+(`sim2real/estimate_bridge/ekf2_ev.params`) now has `EKF2_HGT_REF` 1, and the tuned
+baseline is the new frozen file `eval/baselines/px4_tuned_v2.params` (v1 plus that one
+line; nothing re-tuned). Both controllers re-flown on it, same protocol as the v22 section
+above: corrected stream, stock runner `vio_at_hover`, hold runner `vio_at_engage`, no
+rangefinder, three scenarios x seeds 1 to 8, four sub-hour batches, one flight at a time.
+
+Flown in the Claude cloud container (Linux x86_64, 4 CPUs, Docker) on the cloud-built image
+(`sim2real/docker/cloud_build.sh`: PX4 v1.17.0, the same module, world and v22 headers, on
+PX4's Gazebo base image instead of the OSRF one), at `0063441`:
+
+```bash
+python -m eval.baselines.run_baseline --label tuned_v2_at_hover_ba --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 -- --profile vio_at_hover            # then --seeds 5 6 7 8
+python -m eval.baselines.run_baseline --runner hold --label structure_hold_v22_v2_ba --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 -- --profile vio_at_engage   # then --seeds 5 6 7 8
+python -m eval.baselines.run_baseline --compare runs/pooled_tuned_v2_at_hover_ba_seeds1-8.json runs/pooled_structure_hold_v22_v2_ba_seeds1-8.json
+```
+
+Batches: tuned PX4 `20261101-234335_..._tuned_v2_at_hover_ba_0063441` (seeds 1–4) and
+`20261102-000555_..._tuned_v2_at_hover_ba_0063441` (5–8); v22
+`20261102-002729_..._structure_hold_v22_v2_ba_0063441` (1–4) and
+`20261102-005408_..._structure_hold_v22_v2_ba_0063441` (5–8). All 48 flights flown and
+scored, 0 crashes, 0 contacts, 0 failsafes in the scored window. One v22 flight (8 m/s
+seed 3) ran its full hold but the sequence timed out waiting for the disarm after Structure
+Land (the guarded descent slows to 0.3 m/s next to the wall on seed 3); the batch counts it
+under post-hold, not as a crash. Three stock flights had a momentary slow-down of the sim
+(real-time factor minimum 0.01 to 0.15) outside the scored hold; their windows were full.
+
+### Pooled compare (8 seeds, as `--compare` prints it)
+
+| scenario | p95 m, tuned → v22 | worst toward wall m | rms m | crashes | failsafes |
+|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.424 (1.105) → **0.234 (0.370), −45 %** | 0.197 (0.489) → 0.069 (0.227), −65 % | 0.218 (0.455) → 0.163 (0.215), −25 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_4ms | 0.443 (1.129) → **0.250 (0.423), −44 %** | 0.191 (0.476) → 0.075 (0.228), −61 % | 0.230 (0.484) → 0.169 (0.302), −27 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_8ms | 0.433 (1.092) → **0.246 (0.438), −43 %** | 0.190 (0.443) → 0.102 (0.256), −46 % | 0.229 (0.464) → 0.170 (0.264), −26 % | 0/8 → 0/8 | 0/8 → 0/8 |
+
+### Per-seed p95 m
+
+| tuned PX4 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.896 | 0.179 | 0.450 | 0.170 | 0.229 | 1.105 | 0.218 | 0.147 | 0.424 |
+| 4 m/s | 0.895 | 0.187 | 0.440 | 0.213 | 0.197 | 1.129 | 0.307 | 0.173 | 0.443 |
+| 8 m/s | 0.893 | 0.167 | 0.407 | 0.178 | 0.302 | 1.092 | 0.297 | 0.129 | 0.433 |
+
+| v22 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.253 | 0.149 | 0.370 | 0.182 | 0.239 | 0.283 | 0.207 | 0.189 | 0.234 |
+| 4 m/s | 0.242 | 0.209 | 0.314 | 0.180 | 0.165 | 0.252 | 0.423 | 0.212 | 0.250 |
+| 8 m/s | 0.187 | 0.438 | 0.248 | 0.171 | 0.224 | 0.240 | 0.265 | 0.197 | 0.246 |
+
+### What changed, and what this does not separate
+
+**v22 still holds 43 to 45 % tighter than tuned PX4 at the 95th percentile and 46 to 65 %
+less toward the wall**, with no crashes for either. That is the comparison that counts: both
+flown on the same image and the same set-up.
+
+The margin is smaller than the −54 to −55 % on the vision-height set-up, and the change is
+v22's: tuned PX4 is within 0.02 m of its old means (0.427 / 0.424 / 0.428 m), while v22 went
+from 0.198 / 0.196 / 0.194 m to 0.234 / 0.250 / 0.246 m. Its truth drifted up to 0.19 m
+vertically on average over a hold (`truth_drift.z_max_m`, mean over the 24 flights), about
+as much as horizontally (0.20 m), so part of it is height: the policy holds EKF2's height,
+which now follows the barometer's own noise and drift rather than the vision fix it was
+trained on (the mock fusion still models vision height). Two things changed at once,
+though: the height source and the image (Mac arm64 image, OSRF Gazebo base, for the old
+numbers; cloud x86_64 image, PX4's Gazebo base, now), so this batch cannot say how much each
+contributed. Flying v22 on the cloud image with vision height would separate them; it is not
+needed for the benchmark itself, which compares both controllers on one set-up.
+
+Follow-ups: align the mock's fusion with barometer height and train the next candidate on
+it; re-check the range hover (`SH_HB_RANGE`) and the frozen-fix trip on this set-up over more
+seeds and winds.

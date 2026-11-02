@@ -152,8 +152,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
-- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v22 mean p95 -54 to -55 % (v19 -47 to
-  -48 %), 0 crashes (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
+- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): on barometer height (`px4_tuned_v2.params`,
+  Decided 2026-11-01) v22 mean p95 -43 to -45 %, 0 crashes; on the earlier vision-height
+  set-up v22 -54 to -55 %, v19 -47 to -48 % (`docs/baseline.md`). Crash is judged on the 60 s
+  hold only; seed 6 is the hard seed.
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second
