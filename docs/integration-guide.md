@@ -52,8 +52,8 @@ interface, and commander can take the vehicle out of it at any time.
 | Obstacle sensors (optional) | PX4 collision-prevention data: `obstacle_distance` (a 360 deg lidar, or `OBSTACLE_DISTANCE` from a companion) and side-facing `distance_sensor`s, with `CP_DIST` set | The keep-out holds the hold point that far from any obstacle they see (`SH_KO_DIST`). Without them nothing changes |
 | Pilot | An RC mode switch with Position mode on it, and a kill switch | Position mode is the pilot's way out of anything |
 
-Height: fly the barometer or a downward rangefinder as EKF2's height reference, not vision
-(`EKF2_HGT_REF` 3): with vision height, EKF2's height freezes when the VIO goes quiet and
+Height: fly the barometer (`EKF2_HGT_REF` 0) or a downward rangefinder (2) as EKF2's height
+reference, not GPS (1, PX4's default) and not vision (3): with vision height, EKF2's height freezes when the VIO goes quiet and
 the vehicle can sink unseen (`docs/field-faults.md`). The EKF2 settings to check are listed
 in `docs/partner-pack.md`, step 2.
 

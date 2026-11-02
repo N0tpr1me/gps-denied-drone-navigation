@@ -106,9 +106,8 @@ Two things the flights showed about EKF2:
   GPS EKF2 falls back to the barometer (`Ekf::checkHeightSensorRefFallback`), which is why
   every benchmark flight on `ekf2_ev.params` and `px4_tuned_v2.params` (both 1) really flew
   on barometer height, but the GPS-left-on flight above fused GPS height with that same
-  value. The check warns about it. The repo's own files call 1 "barometer"
-  (`docs/decisions.md` 2026-11-01 row, `docs/safety-manual.md`, `docs/partner-pack.md`);
-  changing the value to 0 is a decided-row change, raised with Zain separately.
+  value. The check warns about it. The repo's own files called 1 "barometer"; on Zain's
+  call (2026-11-02, `docs/decisions.md`) every set and doc now says 0. Re-flown on 0 (`experiments/LOG.md`, 2026-11-02 18:35 to 18:41): the `health_good` flight is OK on every check, and tuned PX4 flew barometer height on both values with seed 2's p95 within its run-to-run scatter (0.17 to 0.33 m).
 
 To fly these again (cloud container or GPU server, Docker image built):
 

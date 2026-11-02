@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.4, ready for sign-off (section 8); 1.0 to 1.3 were not signed |
+| Version | 1.5, ready for sign-off (section 8); 1.0 to 1.4 were not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`) and the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), and the keep-out of 1.4: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged) the height-reference value of 1.4 and the keep-out of 1.5: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -56,7 +56,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Airframe | A quadrotor like the PX4 Gazebo x500 (2 kg, 0.36 m prop reach). Another airframe needs its own fit and test | `envs/structure_hold/airframes.py`, `docs/airframe-fit.md`, `docs/partner-pack.md` step 0 |
 | Flight stack | PX4 v1.17.0 exactly, multicopter, with the module built in (`boards/structurehold.px4board` on 2 MB flight controllers) | `docs/decisions.md` (PX4 pin) |
 | Position source | VIO (or another external position) into EKF2 as `ODOMETRY` VISION/VIO, 20 Hz or faster, its latency set in `EKF2_EV_DELAY` | `docs/partner-pack.md` step 2 |
-| Height source | Barometer (`EKF2_HGT_REF` 1) or a downward rangefinder. **Not vision** (see F5) | `eval/baselines/px4_tuned_v2.params`, `docs/field-faults.md` |
+| Height source | Barometer (`EKF2_HGT_REF` 0) or a downward rangefinder (2). **Not vision** (3, see F5), and not GPS (1, PX4's default) | `eval/baselines/px4_tuned_v2.params`, `docs/field-faults.md` |
 | GPS | Off, or on (a GPS or RTK receiver fused by EKF2 beside the VIO) **with the forward rangefinder and `SH_WALL_REQ` 1**: with GPS on, the rangefinder is the only thing that keeps the drone off the wall when the GPS solution moves (F27, F36 to F38). The benchmark numbers are GPS-off | `docs/field-faults.md`, "GPS on"; `docs/decisions.md` 2026-11-02 |
 | Forward rangefinder | Required for the wall guard and the guarded modes: a forward-facing `distance_sensor` that reads 0.3 to 5 m on the wall | `docs/partner-pack.md` step 2 |
 | Obstacle sensors | Optional: PX4 collision-prevention data (`obstacle_distance` from a 360 deg lidar or a companion, side-facing `distance_sensor`s). With them the keep-out holds the hold point `SH_KO_DIST` (default: PX4's `CP_DIST`) from obstacles other than the structure. Tested in SIH with one simulated lidar and one pole | `docs/decisions.md` (keep-out row), `sitl_test.py --keep-out` |
@@ -241,7 +241,7 @@ match the drone, and a policy trained on it being released for that drone.
 
 | Setting | Default | Recommendation | Why |
 | --- | --- | --- | --- |
-| `EKF2_HGT_REF` | PX4's | 1 (barometer) or a downward rangefinder | F5 |
+| `EKF2_HGT_REF` | PX4's | 0 (barometer) or 2 (downward rangefinder); PX4's default 1 is GPS | F5 |
 | `SH_WALL_MIN` | 0.7 m | Prop reach plus at least 0.3 m | F7, F9 |
 | `SH_WALL_REQ` | 0 | 1; required with GPS on | F13, F27 |
 | `SH_HB_RANGE` | 1 | Keep 1 if the rangefinder is reliable on your structure | F4 is 2 with it, 4 without |
@@ -298,7 +298,8 @@ signed again. Record each one below.
 | 1.1 | 2026-11-02 | `c308113` | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
 | 1.2 | 2026-11-02 | `def668f` | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
 | 1.3 | 2026-11-02 | `abc8fe7` | Envelope widened to GPS on with the rangefinder required (decision row 2026-11-02); F27 flown (GPS jump, 3 seeds, with and without the rangefinder) and F38 to F40 added (RTK float, loss and hand-over, glitch); `SH_WALL_REQ` 1 required with GPS on. No module change | |
-| 1.4 | 2026-11-02 | this PR | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
+| 1.4 | 2026-11-02 | `b20dba6` | Sections 2 and 6: the barometer height reference is `EKF2_HGT_REF` 0, not 1 (PX4 v1.17 numbers 1 GPS; found by the log health check, `docs/log-health.md`); GPS added to the height sources not to use. No module change | |
+| 1.5 | 2026-11-02 | this PR | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
 
 ## Change control
 
