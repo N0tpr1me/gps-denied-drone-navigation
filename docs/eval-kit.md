@@ -110,10 +110,18 @@ What it says, in plain words:
 
 ### Before it goes to a buyer
 
-- **What they receive.** The kit as written needs this repository (the Python side
-  launches the containers and scores them) and the image, which carries the module's
-  source. Whether a buyer gets source under the evaluation agreement or a binary-only image
-  is the open "source or binary" item of `docs/partner-pack.md`, for Zain.
+- **What they receive: binary only** (Decided 2026-11-02, `docs/decisions.md`).
+  `sim2real/docker/build_kit.sh` writes `dist/kit-<commit>/`: `kit-image.tar` (about 3 GB,
+  the SITL image with the module's source and build objects deleted and the layers
+  flattened, so no lower layer still holds them; the compiled module is in PX4's binary)
+  and `kit-src.tar.gz` (about 130 KB: `evaluate.sh`, the runners, the estimate bridge, the
+  Gazebo scenarios and the scorers; no module source, training code, policies or docs). The
+  buyer unpacks the second and runs `./evaluate.sh --load kit-image.tar`. Checked
+  2026-11-02: unpacked in an empty folder, the local image deleted, `./evaluate.sh --load
+  kit-image.tar --faults silence drift` loaded the stripped image and flew all 4 flights
+  (exit 0). Link loss: Structure Hold closest 0.91 m and still flying, tuned PX4 touched the
+  wall and landed. Drift: 0.71 against 0.42 m. Module source in the image: none (checked);
+  the module's strings are in PX4's binary.
 - **One seed, one scenario.** The table is a first look, as the field-faults page says;
   more seeds come from `eval.baselines.run_baseline` on the same profiles.
 - **The cloud image** (`sim2real/docker/cloud_build.sh`) has a different Gazebo base from
