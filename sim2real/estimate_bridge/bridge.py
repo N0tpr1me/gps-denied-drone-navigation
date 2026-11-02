@@ -153,7 +153,7 @@ class EstimateBridge:
             self.corruptor = EstimateCorruptor(pre, 1, step_dt, self.seed)
         else:
             self.corruptor = EstimateCorruptor(cfg, 1, step_dt, self.seed)
-        self.field_faults = FieldFaultInjector(tuple(field_faults))
+        self.field_faults = FieldFaultInjector(tuple(field_faults), seed=self.seed)
         self.anchor_step: int | None = None  # bridge step at which the schedule was anchored
         self.anchor_t: float | None = None
         self._last_t: float | None = None
@@ -196,12 +196,8 @@ class EstimateBridge:
         ):
             self._anchor(pos, vel, float(t))
         s = self.corruptor.step(pos[None], vel[None])
-        if self.fault_anchor == "start":
-            t_rel = float(t) - self._first_t
-        else:
-            t_rel = None if self.anchor_t is None else float(t) - self.anchor_t
         est_pos, est_vel, stale = self.field_faults.apply(
-            np.asarray(s.pos[0]), np.asarray(s.vel[0]), bool(s.stale[0]), t_rel)
+            np.asarray(s.pos[0]), np.asarray(s.vel[0]), bool(s.stale[0]), self.t_rel(t))
         sample = BridgeSample(
             step=self._steps, t=float(t), truth_pos=pos, truth_vel=vel,
             est_pos=est_pos, est_vel=est_vel,
@@ -211,6 +207,12 @@ class EstimateBridge:
         )
         self._steps += 1
         return sample
+
+    def t_rel(self, t: float) -> float | None:
+        """Time since the fault anchor (the field faults' clock), None before it."""
+        if self.fault_anchor == "start":
+            return None if self._first_t is None else float(t) - self._first_t
+        return None if self.anchor_t is None else float(t) - self.anchor_t
 
     def _anchor(self, pos: np.ndarray, vel: np.ndarray, t: float) -> None:
         """Rebuild the corruptor from the seed with the fault clock at ``fault_anchor_s``

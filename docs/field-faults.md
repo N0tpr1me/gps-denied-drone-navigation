@@ -7,9 +7,9 @@ buyer's first question is what the drone does in each one. This page scripts tho
 failures, flies them in Gazebo SITL with Structure Hold and with tuned stock PX4, and says
 plainly what happened, good and bad.
 
-## The five faults
+## The six faults
 
-All five live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
+All six live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
 bridge on top of the normal corruption, at a set time after the fault anchor, so every
 runner meets the same failure at the same moment of its scored window.
 
@@ -20,6 +20,7 @@ runner meets the same failure at the same moment of its scored window.
 | `silence` | Nothing is sent for `duration_s` (longer than the 3 s dropouts we train on) | Companion computer or link lost |
 | `freeze` | The same position and zero velocity keep arriving on time, never marked stale | A stuck camera pipeline; no staleness check can see it |
 | `drift` | A slow ramp of `rate_mps` along `direction`, then held | Scale drift, or a spoofed source walking off |
+| `degrade` | The VIO keeps running but sees less: extra noise (`noise_m`, `vel_noise_mps`), a faster random walk (`walk_mps`, kept afterwards), tracking losses of `loss_s` about `loss_hz` times a second; the forward rangefinder gets noise (`range_noise_m`), missing returns (`range_loss_frac`) and short returns off the particles (`range_short_frac`). All of it ramps up over `ramp_s` | Dust thrown up by the rotors, fog or steam, a dark underside: the cases buyers ask about (added 2026-11-02) |
 
 Each ships as a pair of profiles that differ only in their anchor:
 `field_<fault>_at_engage` for the hold runner and `field_<fault>_at_hover` for the stock
@@ -184,6 +185,67 @@ Structure Hover on the frozen estimate held about as well as the range hover her
 the wind moved the vehicle 0.2 m, and the wall guard kept it off the wall. A longer freeze
 is where the range hover should matter, as on the link loss. One flight per cell, one seed.
 
+### Dust, fog and low light: the `degrade` fault (2026-11-02)
+
+Buyers ask what happens in rotor-blown dust, fog or steam, and on a dark underside. None
+of these stops a VIO outright: it runs on fewer and worse features, gets noisier, walks off
+faster and loses tracking for fractions of a second, and a laser rangefinder in the same
+air gets noisy, misses returns and sees short ones off the particles. `degrade` scripts
+that (`field_degrade_at_engage` / `_at_hover`): over 20 s, ramping up over the first 5 s,
+the VIO gains 5 cm of position noise, 0.2 m/s of velocity noise, a random walk of
+0.1 m/sqrt(s) that is kept afterwards, and 0.5 s tracking losses about once every 4 s; the
+rangefinder gains 5 cm of noise, loses a fifth of its returns and a tenth come back short.
+The walk and the losses come from the profile's seed, so both runners meet the same ones
+(seed 1 walks about 0.55 m away from the wall and 0.6 m along it; seed 2 about 0.45 m,
+toward it); the rangefinder's draws are their own stream, so `verify_trace` still holds.
+
+v22 with the rangefinder (`--rangefinder`) against tuned PX4, barometer height
+(`px4_tuned_v2.params`), calm, 4 and 8 m/s into the wall, seeds 1 and 2, cloud image
+(`eval/field_faults.py` over the 25 s after the fault, `field_faults.json` in the batch
+folders `*_degrade_v22_e185a80_e185a80` and `*_degrade_tuned_def668f_def668f`):
+
+| | calm | 4 m/s | 8 m/s | all 6 |
+| --- | --- | --- | --- | --- |
+| v22: wall contacts | 0/2 | 0/2 | 0/2 | **0/6**, no trip, all airborne, closest 0.85 m |
+| v22: closest to the wall, m | 1.02 / 0.91 | 1.01 / 1.01 | 0.99 / 0.85 | |
+| v22: largest move, m | 1.01 / 0.44 | 0.57 / 0.68 | 1.03 / 0.53 | up to 1.0 m, seed 1 away from the wall |
+| v22: height, m | within 0.26 | within 0.46 | within 0.31 | |
+| Tuned PX4: wall contacts | 1/2 | 1/2 | 1/2 | **3/6** (seed 1 every time, 0.37 to 0.39 m) |
+| Tuned PX4: closest to the wall, m | 0.39 / 0.55 | 0.37 / 0.84 | 0.37 / 0.66 | |
+| Tuned PX4: largest move, m | 0.85 / 0.49 | 0.74 / 0.29 | 0.75 / 0.37 | |
+| Tuned PX4: height, m | within 0.40 | within 0.46 | within 0.24 | |
+
+Seed 1 / seed 2 in each cell. What happened:
+
+- **Nothing trips, on purpose.** 5 cm of noise is well under the 2 m hold-error trip and
+  0.5 s losses are under the 5 s stale trip; EKF2 rode through both. v22 held through the
+  whole 20 s on the degraded fix, as it was trained to (Gate 1 stress covers noise and
+  dropouts to 3 s).
+- **Both follow the walk.** Neither controller can tell a VIO walking off from the vehicle
+  moving, so both move with it: seed 1's 0.55 m walk away from the wall took stock PX4
+  0.55 m toward it, to 0.37 to 0.39 m, prop contact, in all three winds. The policy would
+  have done the same; the rangefinder is what kept v22 off the wall (as on the slow
+  drift, F7 in the safety manual).
+- **Short returns off the dust push the hold point back, and it stays back.** The wall
+  guard treats a short reading as the wall being close and moves the hold point away; it
+  only ever moves away (the ratchet that stops a lost sensor walking the vehicle in). In
+  the dust the readings went as short as 0.10 to 0.13 m and the guard moved the hold
+  point 0.6 to 0.95 m back over the 20 s (`hold.json` `wall_guard.shift_m`, less the
+  engage-time shift), on top of the walk: seed 1 ended 1.9 to 2.1 m from the wall. That is
+  the safe side, but it is an unplanned move of up to a metre away from the structure, into
+  whatever is behind, and in a longer cloud it would keep going. The wall-range policy input
+  (`RangeReference`, v23 on) has a spike gate; the guard has none. A one-step spike gate on
+  the guard (accept a shorter reading only when the next one agrees), or a floor on how far
+  the guard may move the point in one hold, is the fix; it is a module change on a safety
+  path, so it goes in its own PR (Next).
+- **Height moved 0.2 to 0.5 m on both**, from the velocity noise (0.2 m/s) that EKF2
+  fuses: the barometer height reference bounds it. Stock PX4 dipped 0.46 m, v22 0.26 m.
+
+One flight per cell, two seeds: it shows the mechanisms, not a rate. The numbers are what
+this one `degrade` setting does; a real dust cloud or fog bank may be milder or far worse,
+which is why the safety manual's envelope now names visibility (F36, F37), and tells the
+pilot to stop the hold when the VIO degrades rather than fly it out.
+
 What this says, in plain words:
 
 - **A VIO reset or restart is where the module earns its keep.** Stock PX4 climbed 2.2 m
@@ -196,6 +258,11 @@ What this says, in plain words:
   both wandered about half a metre and stayed 0.94 m from the wall. The frozen-fix trip
   (`SH_WD_FRZ_T`, above) caught it in 1 s and the guarded hover then moved 0.2 m; it is on
   by default since 2026-11-02 (Zain).
+- **Dust, fog and low light: the module holds, but walks with the VIO.** Neither v22 nor
+  stock PX4 can see a degraded VIO walking off; stock PX4 touched the wall on 3 of 6
+  flights, v22 on none, because the rangefinder guard caught the walk toward the wall. The
+  guard also read the dust as a close wall and backed the hold point off by up to a metre,
+  which a spike gate on the guard should stop (Next).
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
   should fly the barometer (or a downward rangefinder) as the height reference, and the
@@ -210,5 +277,9 @@ What this says, in plain words:
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
 - The range hover (`SH_HB_RANGE`, now on by default) over seeds 5 to 8 and longer silences.
+- A spike gate (or a per-hold limit) on the wall guard so short returns off dust or fog do
+  not march the hold point back; then re-fly `field_degrade` with it, more seeds, and a
+  harsher setting (longer losses, a faster walk) to find where the module's own trips take
+  over.
 - The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
   should partners ever fly with GPS on?

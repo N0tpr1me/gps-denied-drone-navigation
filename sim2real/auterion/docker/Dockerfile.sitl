@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.4
+# The Structure Hold app on stock ROS 2 Humble, for flying it against stock PX4 v1.17.0
+# SITL without Auterion hardware or an Auterion account (docs/auterion-app.md):
+# px4_msgs and px4-ros2-interface-lib from their PX4 v1.17 release branches, the
+# Micro XRCE-DDS Agent that bridges PX4's uORB to ROS 2, and the app itself.
+#
+#   docker build -f sim2real/auterion/docker/Dockerfile.sitl -t structure-hold/app-sitl .
+#   (from the repo root; sitl_app_test.sh does this for you)
+#
+# The Auterion image (Dockerfile.auterion) installs the same libraries from Auterion's
+# package feed instead, pinned to the AuterionOS release.
+FROM ros:humble-ros-base
+
+# Behind an HTTPS proxy with its own CA (the cloud container), pass it as a build secret:
+#   --secret id=proxy_ca,src=/root/.ccr/ca-bundle.crt
+RUN --mount=type=secret,id=proxy_ca,required=false \
+    if [ -f /run/secrets/proxy_ca ]; then \
+      cp /run/secrets/proxy_ca /usr/local/share/ca-certificates/proxy.crt && update-ca-certificates; \
+    fi
+
+ARG PX4_MSGS_REF=release/1.17
+ARG PX4_ROS2_REF=release/1.17
+ARG XRCE_AGENT_REF=v2.4.3
+
+WORKDIR /ws/src
+RUN git clone -q --depth 1 -b ${PX4_MSGS_REF} https://github.com/PX4/px4_msgs.git \
+ && git clone -q --depth 1 -b ${PX4_ROS2_REF} https://github.com/Auterion/px4-ros2-interface-lib.git \
+ && rm -rf px4-ros2-interface-lib/examples px4-ros2-interface-lib/px4_ros2_py
+
+# The agent's superbuild fetches Fast-DDS from GitHub.
+RUN git clone -q --depth 1 -b ${XRCE_AGENT_REF} https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /agent \
+ && cmake -S /agent -B /agent/build -DCMAKE_BUILD_TYPE=Release >/dev/null \
+ && cmake --build /agent/build -j"$(nproc)" >/dev/null \
+ && cmake --install /agent/build >/dev/null && ldconfig && rm -rf /agent
+
+WORKDIR /ws
+RUN . /opt/ros/humble/setup.sh \
+ && colcon build --packages-up-to px4_ros2_cpp --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    --event-handlers console_direct- >/dev/null
+
+# The app last, so editing it rebuilds only this layer.
+COPY sim2real/auterion/structure_hold_app /ws/src/structure_hold_app
+COPY sim2real/px4/structure_hold/PolicyController.hpp sim2real/px4/structure_hold/PolicyWeights.hpp \
+     sim2real/px4/structure_hold/MlpPolicy.hpp sim2real/px4/structure_hold/Watchdog.hpp \
+     sim2real/px4/structure_hold/Handback.hpp sim2real/px4/structure_hold/ParamLimits.hpp \
+     /ws/src/structure_hold_app/module/
+RUN . /opt/ros/humble/setup.sh && . /ws/install/setup.sh \
+ && colcon build --packages-select structure_hold_app --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+COPY sim2real/auterion/docker/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["app"]

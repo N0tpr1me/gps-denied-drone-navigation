@@ -174,10 +174,19 @@ What it does today:
   (warning), and each handback target (info). Regulators ask for exactly this: a failure of
   a system the flight relies on must be shown to the pilot (`docs/market-research.md`,
   gap 2). `sitl_test.py` checks the trip and wall-guard messages arrive.
+- **Shows the pilot the hold while it flies** (`PilotStatus.hpp`, `docs/pilot-status.md`):
+  an "engaged" line with the measured wall distance at each mode's start, a status line
+  every `SH_GCS_PER` s (hold error, wall distance, fix age), a warning when the vehicle
+  nears a watchdog limit (half of the no-fix time, the frozen-fix time or the hold error,
+  three quarters of the tilt; once per crossing, at most every 10 s per limit) and a note
+  when it is back inside them, plus a live number array (`debug_array`, MAVLink
+  `DEBUG_FLOAT_ARRAY` "SH_STATUS") for QGroundControl's MAVLink Inspector. Unit-tested by
+  `tests/test_pilot_status.cpp`; `sitl_test.py` checks the lines and the array arrive, and
+  the near-limit warning with `--pilot-warning`.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*` (the frozen-fix trip `SH_WD_FRZ_T` among them), the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the ground-station status period `SH_GCS_PER`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside
@@ -252,14 +261,17 @@ does not build on Python 3.13, use 3.10 to 3.12).
 
 ### Real flight controllers
 
-The module is about 125 KB of flash (text plus data), most of it the policy's weights, and
+The module is about 128 KB of flash (text plus data), most of it the policy's weights, and
 a stock 2 MB board does not have that spare: `px4_fmu-v6c_default` plus the module
 overflowed flash by 87 KB (2026-10-31). `boards/structurehold.px4board` is a board variant
 that drops the fixed-wing, VTOL and airspeed modules (as PX4's own
 `fmu-v6x/multicopter.px4board` does), SIH, the MSP OSD driver and the precision-landing
 target estimator, none of which a GPS-denied multicopter next to a wall uses, and turns the
 module on. With only the fixed-wing, VTOL and airspeed modules dropped, the fmu-v6x build
-still overflowed by 2 KB:
+still overflowed by 2 KB. Since 2026-11-02 it also drops the AUAV airspeed driver and
+EKF2's airspeed and sideslip fusion (PX4's own multicopter variant drops sideslip too): on
+that day the fmu-v6x build of `main` was at 99.97 % of flash (556 bytes spare), and the
+pilot's live status (`docs/pilot-status.md`, about 3.2 KB) overflowed it by 2.7 KB.
 
 ```bash
 cp sim2real/px4/boards/structurehold.px4board /path/to/PX4-Autopilot/boards/px4/fmu-v6c/
@@ -270,7 +282,7 @@ cd /path/to/PX4-Autopilot && make px4_fmu-v6c_structurehold
 Checked in the cloud container with Ubuntu 24.04's `gcc-arm-none-eabi` 13.2.1 (`apt-get
 install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`; PX4's
 venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
-uses 96.0 % of flash, `px4_fmu-v6x_structurehold` 99.7 % (about 6 KB spare, so a partner
+uses 96.1 % of flash, `px4_fmu-v6x_structurehold` 99.5 % (2026-11-02, with the pilot's live status; about 9 KB spare, so a partner
 adding drivers to a 6X drops something else they do not fly). The first such build also
 caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
