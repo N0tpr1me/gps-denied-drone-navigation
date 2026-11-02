@@ -25,6 +25,11 @@
  * vehicle into the wall; the pilot switches out of it to Position mode as usual. With
  * SH_HB_RANGE 1 (the default) it also flies with the horizontal estimate gone,
  * holding the measured wall distance on the rangefinder alone (RangeHover.hpp).
+ *
+ * Keep-out (SH_KO_DIST, following PX4's CP_DIST by default): the data PX4's collision
+ * prevention reads (obstacle_distance and horizontal distance_sensors) keeps the hold point
+ * of all three modes that far from any obstacle (KeepOut.hpp). Not avoidance: the point
+ * only moves away from what is measured too close.
  */
 
 #pragma once
@@ -45,6 +50,7 @@
 #include <uORB/topics/arming_check_request.h>
 #include <uORB/topics/distance_sensor.h>
 #include <uORB/topics/hover_thrust_estimate.h>
+#include <uORB/topics/obstacle_distance.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/register_ext_component_reply.h>
 #include <uORB/topics/register_ext_component_request.h>
@@ -63,6 +69,7 @@
 
 #include "Handback.hpp"
 #include "HoldController.hpp"
+#include "KeepOut.hpp"
 #include "ParamLimits.hpp"
 #include "PolicyController.hpp"
 #include "RangeHover.hpp"
@@ -139,6 +146,8 @@ private:
 	void updateRange();
 	bool rangeFresh(const hrt_abstime now) const;
 	void applyWallGuard(const hrt_abstime now, const matrix::Vector3f &pos, const matrix::Dcmf &r);
+	void applyKeepOut(const hrt_abstime now, const matrix::Vector3f &pos, const matrix::Dcmf &r);
+	bool keepOutDataFresh(const hrt_abstime now) const;
 	bool estimateFinite() const;
 	void publishRates(const matrix::Vector3f &rates, float thrust);
 	bool useOdometryFix() const;
@@ -157,6 +166,7 @@ private:
 	uORB::Subscription _visual_odometry_sub{ORB_ID(vehicle_visual_odometry)};
 	uORB::Subscription _land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::SubscriptionMultiArray<distance_sensor_s> _distance_sensor_subs{ORB_ID::distance_sensor};
+	uORB::Subscription _obstacle_distance_sub{ORB_ID(obstacle_distance)};
 
 	// Publications
 	uORB::Publication<register_ext_component_request_s> _register_request_pub{ORB_ID(register_ext_component_request)};
@@ -223,6 +233,19 @@ private:
 	structure_hold::WallGuardOutput _wall_out{};
 	structure_hold::RangeReference _range_ref{};  // the wall-range input's reference
 
+	// Keep-out from PX4's collision-prevention data (KeepOut.hpp): the newest
+	// obstacle_distance scan, and per distance_sensor instance the newest reading of a
+	// sensor facing a horizontal direction other than forward, with its bearing off the nose.
+	static constexpr int SIDE_RANGES = ORB_MULTI_MAX_INSTANCES;  // distance_sensor instances
+	structure_hold::ObstacleScan _scan{};
+	structure_hold::RangeSample _side_range[SIDE_RANGES] {};
+	float _side_yaw[SIDE_RANGES] {};
+	structure_hold::KeepOut _keep_out{};
+	structure_hold::KeepOutOutput _keep_out_out{};
+	param_t _param_cp_dist{PARAM_INVALID};  // PX4's CP_DIST, if this build has it
+	bool _keep_out_warned{false};          // "keep-out moved the hold point" sent this engage
+	bool _no_room_warned{false};
+
 	// Structure Hover on the range alone (SH_HB_RANGE, RangeHover.hpp): the controller, the
 	// wind the vehicle leaned into while the estimate was good, when a usable range was
 	// last seen, and since when the estimate has been back.
@@ -286,6 +309,7 @@ private:
 		(ParamInt<px4::params::SH_LAND_EN>) _param_land_en,
 		(ParamInt<px4::params::SH_HB_GUARD>) _param_hb_guard,
 		(ParamInt<px4::params::SH_HB_RANGE>) _param_hb_range,
+		(ParamFloat<px4::params::SH_KO_DIST>) _param_ko_dist,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

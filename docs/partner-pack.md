@@ -132,6 +132,17 @@ for height is fine alongside it; the module skips it.
 **Check:** `listener distance_sensor` on the shell shows a sample with `orientation: 0`
 whose `current_distance` follows a board you move in front of the drone.
 
+### Obstacle sensors (optional)
+
+If your drone already has PX4 collision prevention set up (a 360 deg lidar such as the
+LightWare SF45, `OBSTACLE_DISTANCE` from a companion, or side-facing rangefinders, with
+`CP_DIST` set), Structure Hold honours it: the hold point stays at least `CP_DIST` from any
+obstacle those sensors see, other than the structure itself (`SH_KO_DIST` -1, the default,
+follows `CP_DIST`; set `SH_KO_DIST` to use another distance inside the hold, 0 to turn it
+off). It is a keep-out, not avoidance (`docs/integration-guide.md`, inputs).
+
+**Check:** `structure_hold status` prints `keep-out: <d> m ... obstacle data fresh`.
+
 ### Truth for scoring (mocap)
 
 Every scored number is measured on an independent truth, never on the drone's own

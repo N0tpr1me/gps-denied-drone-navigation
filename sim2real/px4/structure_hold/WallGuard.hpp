@@ -196,6 +196,12 @@ public:
 		return true;
 	}
 
+	/** The keep-out moved the hold point ``m`` farther from the wall (negative: nearer). */
+	void moveBack(float m)
+	{
+		if (_valid) { _ref_m += m; }
+	}
+
 	bool valid() const { return _valid; }
 	float reference() const { return _ref_m; }
 

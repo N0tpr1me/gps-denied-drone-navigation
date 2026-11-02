@@ -43,6 +43,11 @@ bool odometry_fix             # fixes counted from vehicle_visual_odometry (else
 float32 wall_distance_m       # [m] forward rangefinder, perpendicular to the wall (WallGuard.hpp); -1 without a usable sample
 float32 hold_clearance_m      # [m] hold point to the measured wall along the structure x axis; -1 without a sample
 float32 standoff_shift_m      # [m] how far the wall guard has moved the hold point back since engage
+float32 keep_out_m            # [m] keep-out flown (SH_KO_DIST, or PX4's CP_DIST at its default -1); 0 = off (KeepOut.hpp)
+float32 obstacle_clearance_m  # [m] hold point to the nearest obstacle point (not the structure); -1 without one
+float32 keep_out_shift_m      # [m] how far the keep-out has moved the hold point since engage
+uint8 keep_out_points         # obstacle points (obstacle_distance bins and side rangefinders) used this tick
+bool keep_out_no_room         # the keep-out could not be met everywhere: the hold point sits between obstacles
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 
 float32[3] rates_setpoint     # [rad/s] FRD body rates commanded this tick
