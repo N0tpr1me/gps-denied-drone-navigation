@@ -433,7 +433,11 @@ void StructureHold::handBack(Trip trip, bool xy_valid, bool latch)
 	_handback_step = 0;
 	_handback_logged_last = false;
 	if (latch) {
-		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: watchdog trip: %s, handing back", Watchdog::name(trip));
+		// The code first (logs and eval/field_faults.py match "watchdog trip: <code>"), then
+		// the plain reason, then what the pilot can still do: the latch only clears on disarm.
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: watchdog trip: %s (%s), handing back",
+				     Watchdog::name(trip), Watchdog::reason(trip));
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: locked out until disarm");
 
 	} else {  // an engage refusal, already sent to the ground station with its reason
 		PX4_WARN("watchdog refusal: %s, handing back", Watchdog::name(trip));
@@ -1254,7 +1258,8 @@ void StructureHold::Run()
 					 (double)_watchdog.resetAge(now), (double)_param_rst_hold.get());
 
 			} else if (refusal != Trip::None) {
-				mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: engage refused: %s", Watchdog::name(refusal));
+				mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: engage refused: %s (%s)",
+						     Watchdog::name(refusal), Watchdog::reason(refusal));
 			}
 
 			if (refusal != Trip::None) {

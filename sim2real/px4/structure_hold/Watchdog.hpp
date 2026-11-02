@@ -227,6 +227,37 @@ public:
 		return "unknown";
 	}
 
+	/** The same reason in plain words for the pilot, with the parameter that sets the limit.
+	 * The ground-station message puts it after the code ("watchdog trip: tilt (tilted past
+	 * SH_WD_TILT)"), so scripts that match the code keep working. PX4 caps a mavlink_log text
+	 * at 126 characters; test_watchdog.cpp keeps every message inside that. */
+	static const char *reason(Trip trip)
+	{
+		switch (trip) {
+		case Trip::None: return "no trip";
+
+		case Trip::TestFault: return "test fault set by SH_TEST_FAULT";
+
+		case Trip::EstimateInvalid: return "PX4 marked the position estimate invalid";
+
+		case Trip::EstimateStale: return "no position estimate for SH_WD_EST_TO";
+
+		case Trip::Tilt: return "tilted past SH_WD_TILT";
+
+		case Trip::PositionError: return "drifted past SH_WD_POS_ERR from the hold point";
+
+		case Trip::EstimateReset: return "position estimate just reset, see SH_RST_HOLD";
+
+		case Trip::Landed: return "on the ground";
+
+		case Trip::RangeLost: return "rangefinder lost while holding on it alone";
+
+		case Trip::EstimateFrozen: return "position fix stopped moving for SH_WD_FRZ_T";
+		}
+
+		return "unknown";
+	}
+
 private:
 	WatchdogLimits _limits{};
 	Trip _latched{Trip::None};
