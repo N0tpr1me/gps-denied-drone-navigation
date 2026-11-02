@@ -2,10 +2,12 @@
 
 A field fault (``sim2real/estimate_bridge/field_faults.py``) is a blunt, scripted estimate
 failure: a VIO reset to its origin, a restart, a long silence, a frozen estimate, a slow
-drift. The benchmark's p95 and its "the hold must run to the end" crash rule do not fit
-them: when the estimate snaps by metres, handing back is the right answer, not a failure.
-What matters is what the vehicle physically did, so this reads the TRUE position from each
-run's bridge trace over the window after the fault and reports:
+drift; with GPS on, a scripted GPS fault (``gps.py``: RTK float, a jump, a glitch, a loss
+and the hand-over back) counts the same way. The benchmark's p95 and its "the hold must
+run to the end" crash rule do not fit them: when the estimate snaps by metres, handing
+back is the right answer, not a failure. What matters is what the vehicle physically did,
+so this reads the TRUE position from each run's bridge trace over the window after the
+fault and reports:
 
 - ``clearance_before_m``: closest to the wall in the 5 s before the fault;
 - ``min_clearance_m``: closest to the wall in the window (the x500's props touch at
@@ -67,15 +69,16 @@ def score_run(run: Path, window_s: float = WINDOW_S) -> dict[str, Any]:
     run = Path(run)
     cfg = yaml.safe_load((run / "config.yaml").read_text())
     profile = EstimateProfile.from_dict(cfg["profile"])
-    if not profile.field_faults:
-        raise ValueError(f"{run}: profile {profile.name} has no field faults")
+    faults = [*profile.field_faults, *profile.gps_faults]
+    if not faults:
+        raise ValueError(f"{run}: profile {profile.name} has no field or GPS faults")
     scenario = load_scenario(cfg.get("scenario", cfg.get("name")))
     verify = json.loads((run / "estimate_verify.json").read_text())
     # run_gazebo names its folders *_sitl_hold_*; run_estimate (stock PX4) *_sitl_estimate_*.
     runner = "hold" if "_sitl_hold_" in run.name or (run / "hold_summary.json").exists() \
         else "stock"
     row: dict[str, Any] = {"run": run.name, "runner": runner, "profile": profile.name,
-                           "faults": [f.kind for f in profile.field_faults],
+                           "faults": [f.kind for f in faults], "gps_on": profile.gps is not None,
                            "seed": profile.seed, "scenario": scenario.name}
     anchor_t = verify.get("anchor_t")
     if anchor_t is None:
@@ -83,7 +86,7 @@ def score_run(run: Path, window_s: float = WINDOW_S) -> dict[str, Any]:
     tr = read_trace(run / "estimate_trace.csv")
     t = tr["t"]
     truth = np.stack([tr["tx"], tr["ty"], tr["tz"]], 1)
-    t_fault = float(anchor_t) + min(f.at_s for f in profile.field_faults)
+    t_fault = float(anchor_t) + min(f.at_s for f in faults)
     i0 = int(np.searchsorted(t, t_fault))
     if i0 >= t.size:
         return {**row, "error": "the trace ends before the fault"}
