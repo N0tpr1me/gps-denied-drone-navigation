@@ -45,7 +45,7 @@ namespace param_limits
 static constexpr FloatRange SH_WD_EST_TO{0.05f, 10.0f, 5.0f};
 static constexpr FloatRange SH_WD_POS_ERR{0.2f, 10.0f, 2.0f};
 static constexpr FloatRange SH_WD_TILT{10.0f, 80.0f, 45.0f};
-static constexpr FloatRange SH_WD_FRZ_T{0.0f, 10.0f, 0.0f};
+static constexpr FloatRange SH_WD_FRZ_T{0.0f, 10.0f, 1.0f};
 static constexpr FloatRange SH_RST_HOLD{0.0f, 60.0f, 0.0f};
 static constexpr IntRange SH_BENCH{0, 1, 0};
 // SH_TEST_FAULT is left alone: any nonzero value trips, as documented. SH_EN is read by
@@ -75,7 +75,7 @@ static constexpr FloatRange SH_WALL_MIN{0.0f, 5.0f, 0.7f};
 static constexpr IntRange SH_WALL_REQ{0, 1, 0};
 static constexpr IntRange SH_LAND_EN{0, 1, 1};
 static constexpr IntRange SH_HB_GUARD{0, 1, 1};
-static constexpr IntRange SH_HB_RANGE{0, 1, 0};
+static constexpr IntRange SH_HB_RANGE{0, 1, 1};
 
 // Not ours: PX4's hover thrust (MPC_THR_HOVER, or hover_thrust_estimate). Outside this the
 // thrust scaling of every controller here is wrong by more than any airframe needs.

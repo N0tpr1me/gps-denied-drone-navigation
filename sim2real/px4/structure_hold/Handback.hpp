@@ -12,7 +12,7 @@
  *   - then, and for every other trip or refusal: Position mode (Altitude mode when the
  *     horizontal estimate is invalid), Hold, Land.
  *
- * Proposed, off by default (SH_HB_RANGE 1, docs/decisions.md 2026-11-01): a trip in
+ * With SH_HB_RANGE 1 (the default, Decided 2026-11-02 in docs/decisions.md): a trip in
  * Structure Hold next to a measured wall with the horizontal estimate gone also asks for
  * Structure Hover first, which then holds the wall distance on the rangefinder alone
  * (RangeHover.hpp) instead of Altitude mode's level drift; Altitude mode, Hold and Land

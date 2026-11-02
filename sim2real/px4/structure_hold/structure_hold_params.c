@@ -64,7 +64,7 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
  * vehicle is never that still for long. After the trip the decided handback order applies;
  * with SH_HB_RANGE 1 Structure Hover treats a frozen fix as no estimate and holds the wall
  * distance on the rangefinder. Needs the odometry fix (no effect when the fix is EKF2's
- * local position). 0 = off (default; Proposed, docs/decisions.md 2026-11-01).
+ * local position). Default 1 s (Decided 2026-11-02, docs/decisions.md); 0 = off.
  *
  * @unit s
  * @min 0.0
@@ -72,7 +72,7 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
  * @decimal 1
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 0.0f);
+PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
 
 /**
  * Watchdog: entry hold-off after an estimator reset
@@ -405,7 +405,7 @@ PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
 /**
  * Structure Hover: hold the wall distance on the rangefinder when the position is lost
  *
- * Proposed, off by default (docs/decisions.md 2026-11-01, docs/field-faults.md). With the
+ * On by default (Decided 2026-11-02, docs/decisions.md, docs/field-faults.md). With the
  * horizontal position estimate gone, the decided handback goes to Altitude mode, which holds
  * the height and keeps the vehicle level: a wind blowing into the wall then pushes it onto
  * the face (the 8 s link-loss field fault in Gazebo). With 1, a trip in Structure Hold next
@@ -416,9 +416,9 @@ PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
  * PX4's own altitude control. Once the estimate is back and fresh for 1 s it holds the
  * point on the estimate again. A lost range hands back as before (Altitude mode, Hold,
  * Land). Structure Hover then no longer needs a local position to be selected. Needs
- * SH_HB_GUARD 1 and SH_WALL_MIN > 0. 0: Altitude mode as decided.
+ * SH_HB_GUARD 1 and SH_WALL_MIN > 0. 0: Altitude mode, the earlier decided order.
  *
  * @boolean
  * @group Structure Hold
  */
-PARAM_DEFINE_INT32(SH_HB_RANGE, 0);
+PARAM_DEFINE_INT32(SH_HB_RANGE, 1);

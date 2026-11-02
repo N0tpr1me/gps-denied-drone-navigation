@@ -5,8 +5,10 @@
 #
 # Only logging and the module's own SH_ parameters. Estimator, rate loop and position loop
 # parameters stay what the drone already flies on (VIO into EKF2, GPS off), because the point
-# is to fly that drone as it is. Values are the module defaults the Gazebo benchmark flew,
-# written out so the session's parameter dump shows them, except two:
+# is to fly that drone as it is. Values are the module defaults, written out so the session's
+# parameter dump shows them, except SH_WALL_REQ and the logger, explained below. The Gazebo
+# benchmark flew these too, except SH_HB_RANGE 1 and SH_WD_FRZ_T 1.0, defaults since
+# 2026-11-02 (docs/decisions.md): they only change what happens after a lost or frozen fix.
 #
 # SH_WALL_REQ 1: the mode refuses to engage without a usable forward range, so the wall guard
 #   (SH_WALL_MIN) is always under the hold point on a real drone.
@@ -36,5 +38,7 @@
 1	1	SH_WALL_REQ	1	6
 1	1	SH_LAND_EN	1	6
 1	1	SH_HB_GUARD	1	6
+1	1	SH_HB_RANGE	1	6
+1	1	SH_WD_FRZ_T	1.0	9
 1	1	SH_TEST_FAULT	0	6
 1	1	SH_BENCH	0	6

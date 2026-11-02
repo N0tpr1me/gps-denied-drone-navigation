@@ -65,7 +65,7 @@ Each layer works without the one above it. Only the first contains learning.
 | Policy | Holds the point in wind and through short estimate faults | Yes |
 | Last-step check | A non-finite rate becomes 0, a non-finite thrust the hover thrust; rates clamped to the policy's scale | No |
 | Brake-and-hover fallback | After `SH_FB_T` of stale fix, brakes to a level hover (`docs/fallback.md`). Off by default for v22, which flies dropouts itself; `SH_FB_EN` 1 turns it on | No |
-| Watchdog | Trips on: test fault, invalid estimate (EKF2 flags or NaN), stale estimate (`SH_WD_EST_TO`), frozen fix (`SH_WD_FRZ_T`, off by default), tilt (`SH_WD_TILT`), hold error (`SH_WD_POS_ERR`). A trip latches until disarm | No |
+| Watchdog | Trips on: test fault, invalid estimate (EKF2 flags or NaN), stale estimate (`SH_WD_EST_TO`), frozen fix (`SH_WD_FRZ_T`, 1 s by default), tilt (`SH_WD_TILT`), hold error (`SH_WD_POS_ERR`). A trip latches until disarm | No |
 | Handback order | Decided rows, pinned by `test_handback.cpp`: next to a measured wall, Structure Hover; else Position (Altitude if no horizontal estimate), then Hold, then Land, Land repeated until it takes. A trip in Structure Land goes to stock Land first | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says | No |
 | Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on the setpoint | No |
@@ -106,9 +106,9 @@ results are one seed, one scenario unless stated (`docs/field-faults.md`).
 | F1 | Estimate snaps back to the VIO origin in flight | VIO reset | Stock PX4 climbed 2.2 m and slid 0.39 m toward the wall | 3 | Hold error over `SH_WD_POS_ERR` | Trip, Structure Hover: moved 0.09 m, 0.99 m from the wall | 1 | G (`field_reset`) |
 | F2 | VIO restarts: a gap, then the same snap | VIO process crash | As F1 | 3 | As F1 | As F1: moved 0.08 m, 0.95 m from the wall | 1 | G (`field_restart`) |
 | F3 | Short dropout, under 3 s | Feature loss, link hiccup | Drift while EKF2 dead-reckons | 3 | Trained on (stale flag in the observation) | Policy holds through it | 2 | M (Gate 1 stress, capped 2 to 3 s cell passes) |
-| F4 | Long silence, over 5 s | Companion computer or link lost | Drift into the wall | 4 | Stale or invalid estimate trip | Default: Altitude mode; any wind into the wall carries it there (8 of 12 flights touched, every one at 4 and 8 m/s). With `SH_HB_RANGE` 1: 0 of 12, closest 0.84 m, all airborne. Tuned PX4: 6 of 12 touched, all 12 landed by failsafe | **4 by default, 2 with `SH_HB_RANGE` 1** | G (`field_silence`, barometer height, 3 winds x 4 seeds) |
+| F4 | Long silence, over 5 s | Companion computer or link lost | Drift into the wall | 4 | Stale or invalid estimate trip | Default (`SH_HB_RANGE` 1): Structure Hover holds the wall distance on the range, 0 of 12 touched, closest 0.84 m, all airborne. With `SH_HB_RANGE` 0: Altitude mode, and any wind into the wall carries it there (8 of 12 touched, every one at 4 and 8 m/s). Tuned PX4: 6 of 12 touched, all 12 landed by failsafe | **2 by default, 4 with `SH_HB_RANGE` 0** | G (`field_silence`, barometer height, 3 winds x 4 seeds) |
 | F5 | Height estimate freezes during a silence | `EKF2_HGT_REF` 3 (vision height): the baro change goes into its bias | Sank to the ground unseen in 5.5 s | 4 | Nothing in the loop can see it | Prevented by the envelope: barometer height held 2.39 to 2.45 m | 1 with baro height | G (`field_silence`, vision vs baro) |
-| F6 | Fix keeps arriving but stops moving | Stuck camera pipeline | Wandered 0.55 m (stock PX4 0.46 m) | 3 | `SH_WD_FRZ_T` (off by default) | Default: nothing. With 1 s: trip, Structure Hover, moved 0.21 m, 0.97 m from the wall | **3 by default, 2 with `SH_WD_FRZ_T`** | U, G (`field_freeze`) |
+| F6 | Fix keeps arriving but stops moving | Stuck camera pipeline | Wandered 0.55 m (stock PX4 0.46 m) | 3 | `SH_WD_FRZ_T` (1 s by default) | Default: trip in 1 s, Structure Hover, moved 0.21 m, 0.97 m from the wall. With 0: nothing | **2 by default, 3 with `SH_WD_FRZ_T` 0** | U, G (`field_freeze`) |
 | F7 | Slow drift toward or away from the wall | VIO scale drift, a source walking off | Stock PX4 followed it to 0.42 m (props at 0.40 m) | 4 | Rangefinder (wall guard) | Stopped at `SH_WALL_MIN` 0.70 m. Drift along the wall or away from it is not caught | 2 | G (`field_drift`) |
 | F8 | Random jumps, noise, bias walk | A working but imperfect VIO | A looser hold | 2 | Trained on | Gate 2: v22 p95 54 to 55 % below tuned PX4 (8 seeds) | 1 | M, G (`docs/baseline.md`) |
 | F9 | Hold point captured on a jumped estimate at engage | Engage right after an EKF reset | Hold point on the wall face, contact | 4 | Wall guard; `SH_RST_HOLD` (off by default) | The guard moves the point back to `SH_WALL_MIN` | 2 | U, G (`docs/baseline.md`, wall guard on seed 3) |
@@ -169,13 +169,13 @@ match the drone, and a policy trained on it being released for that drone.
 | `EKF2_HGT_REF` | PX4's | 1 (baro) or a downward rangefinder | F5 |
 | `SH_WALL_MIN` | 0.7 m | Prop reach plus at least 0.3 m | F7, F9 |
 | `SH_WALL_REQ` | 0 | 1 | F13 |
-| `SH_HB_RANGE` | 0 (Proposed) | 1 if the rangefinder is reliable on your structure | F4 drops from 4 to 2 |
-| `SH_WD_FRZ_T` | 0 (Proposed) | 1 s | F6 |
+| `SH_HB_RANGE` | 1 | Keep 1 if the rangefinder is reliable on your structure | F4 is 2 with it, 4 without |
+| `SH_WD_FRZ_T` | 1 s | Keep 1 s | F6 |
 | `SH_WD_EST_TO`, `SH_WD_POS_ERR`, `SH_WD_TILT` | 5 s, 2 m, 45 deg | 1 m and 30 deg for first flights | Earlier trips while building trust |
 | `SH_RST_HOLD` | 0 | Operator choice | F9 (stock PX4 has the same settling problem) |
 
-`SH_HB_RANGE` and `SH_WD_FRZ_T` change the decided handback behaviour, so they ship off until
-Zain turns them on (`docs/decisions.md`, Proposed rows of 2026-11-01).
+`SH_HB_RANGE` and `SH_WD_FRZ_T` are on by default since 2026-11-02 (`docs/decisions.md`);
+setting either to 0 goes back to the earlier behaviour in F4 and F6.
 
 ## 7. Open items
 

@@ -23,7 +23,7 @@
  * descent. A watchdog trip hands back into it first when a forward range sees the wall,
  * so stock Position mode's creep after a handback on a jumped estimate cannot walk the
  * vehicle into the wall; the pilot switches out of it to Position mode as usual. With
- * SH_HB_RANGE 1 (Proposed, off by default) it also flies with the horizontal estimate gone,
+ * SH_HB_RANGE 1 (the default) it also flies with the horizontal estimate gone,
  * holding the measured wall distance on the rangefinder alone (RangeHover.hpp).
  */
 

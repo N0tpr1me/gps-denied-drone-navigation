@@ -69,7 +69,7 @@ int main()
 		CHECK(sequenceIs(p, seq, 3));
 	}
 
-	// SH_HB_RANGE 1 (Proposed, off by default): with the horizontal estimate gone next to a
+	// SH_HB_RANGE 1 (the default since 2026-11-02): with the horizontal estimate gone next to a
 	// measured wall, Structure Hover first (it holds the wall distance on the range alone),
 	// then Altitude mode, Hold, Land. With an estimate, or without a wall, nothing changes.
 	{
