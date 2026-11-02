@@ -175,8 +175,9 @@ public:
 		const float cos_max = cosf(_limits.wall_cone_rad);
 
 		// The wall: the nearest perpendicular distance among the forward range and the points
-		// inside the wall cone. Only the cone's own points set the plane floor here; the
-		// rangefinder's floor is the wall guard's.
+		// inside the wall cone. It is also a floor here: the wall guard has already kept the
+		// hold point SH_WALL_MIN off it, and a push away from an obstacle behind must not
+		// undo that (SIH, Structure Hover 0.50 m from the wall with only a rangefinder).
 		float wall_cone = INFINITY;
 
 		for (int i = 0; i < _n; i++) {
@@ -190,7 +191,7 @@ public:
 
 		const float wall = (wall_m > 0.f) ? fminf(wall_m, wall_cone) : wall_cone;
 		const bool have_wall = std::isfinite(wall);
-		const bool plane = have_wall && _limits.wall_min_m > 0.f && std::isfinite(wall_cone);
+		const bool plane = have_wall && _limits.wall_min_m > 0.f;
 		const float k = _limits.keep_out_m;
 
 		// Obstacle points in NED, and the wall plane's offset along n (from the vehicle).
@@ -202,7 +203,7 @@ public:
 			int count = 0;
 
 			if (plane) {
-				const float clearance = wall_cone - ((hx - pos_ned[0]) * nx + (hy - pos_ned[1]) * ny);
+				const float clearance = wall - ((hx - pos_ned[0]) * nx + (hy - pos_ned[1]) * ny);
 
 				if (clearance < _limits.wall_min_m) {
 					const float s = _limits.wall_min_m - clearance;
@@ -249,7 +250,7 @@ public:
 		}
 
 		if (plane) {
-			worst = fmaxf(worst, _limits.wall_min_m - (wall_cone - ((hx - pos_ned[0]) * nx + (hy - pos_ned[1]) * ny)));
+			worst = fmaxf(worst, _limits.wall_min_m - (wall - ((hx - pos_ned[0]) * nx + (hy - pos_ned[1]) * ny)));
 		}
 
 		out.no_room = worst > NO_ROOM_M;

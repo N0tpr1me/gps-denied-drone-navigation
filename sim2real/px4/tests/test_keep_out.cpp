@@ -345,6 +345,23 @@ int main()
 		CHECK(hold[1] < -0.1f);          // moved west, away from the pole
 	}
 
+	// The same with only the forward rangefinder seeing the wall (no lidar point ahead): the
+	// keep-out must not push the hold point inside the floor the wall guard keeps, as it did
+	// in SIH (`sitl_test.py --keep-out --wall`: Structure Hover 0.50 m from a creeping wall).
+	{
+		KeepOut k = keepOut(1.0f, 0.7f);
+		float hold[3] = {0.f, 0.f, -2.5f};
+
+		for (int tick = 0; tick < 20; tick++) {
+			k.begin();
+			k.addPoint(135.f * DEG, 0.5f);         // pole behind-right (south-east)
+			k.apply(pos, n_north, 0.8f, hold);     // rangefinder: wall 0.8 m ahead
+		}
+
+		CHECK(hold[0] <= 0.1f + 0.02f);
+		CHECK(hold[1] < -0.1f);
+	}
+
 	// The rangefinder's wall distance classifies points too: with the range at 1 m, a point
 	// 1.2 m ahead and 0.9 m to the side (on the face, outside the cone) is the structure.
 	{
