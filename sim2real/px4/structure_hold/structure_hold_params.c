@@ -447,3 +447,20 @@ PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
  * @group Structure Hold
  */
 PARAM_DEFINE_INT32(SH_HB_RANGE, 1);
+
+/**
+ * Ground station: period of the one-line status while a mode flies
+ *
+ * While Structure Hold, Structure Hover or Structure Land flies, the pilot gets one line of
+ * text this often: how far the vehicle is from its hold point, how far from the wall, and
+ * how old the position fix is (docs/pilot-status.md). The engage line and the warnings
+ * near a watchdog limit are sent whatever this is set to, and so is the live number array
+ * (DEBUG_FLOAT_ARRAY "SH_STATUS"). 0 turns the periodic line off.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 0
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_GCS_PER, 10.0f);

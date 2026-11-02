@@ -77,8 +77,8 @@ variant: `sim2real/px4/boards/structurehold.px4board` drops the fixed-wing, VTOL
 airspeed modules (as PX4's own `fmu-v6x/multicopter.px4board` does), PX4's built-in
 simulator, the MSP OSD driver, precision landing on a beacon and the Septentrio GPS driver,
 and turns the module on. We built it on 2026-11-02, with the module as of that day (keep-out
-included), for the Pixhawk 6C (95.8 % of flash used) and the Pixhawk 6X (99.5 %, about
-10 KB spare). On another board, tell us and we check it fits.
+and pilot status included), for the Pixhawk 6C (95.6 % of flash used) and the Pixhawk 6X (99.0 %, about
+19 KB spare). On another board, tell us and we check it fits.
 
 ```bash
 git clone --depth 1 --branch v1.17.0 --recurse-submodules https://github.com/PX4/PX4-Autopilot.git

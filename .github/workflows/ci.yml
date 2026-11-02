@@ -99,5 +99,19 @@ jobs:
           g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
               -I../structure_hold test_range_hover.cpp -o test_range_hover
           ./test_range_hover
+      - name: Pilot status unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../structure_hold test_pilot_status.cpp -o test_pilot_status
+          ./test_pilot_status
+      - name: Auterion app core unit tests (the app variant flies the module's own headers)
+        run: |
+          cd sim2real/auterion/structure_hold_app/test
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../include -I../../../px4/structure_hold test_hold_core.cpp -o test_hold_core
+          ./test_hold_core
       - name: Shell scripts parse
-        run: bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh
+        run: |
+          bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh
+          bash -n sim2real/auterion/sitl_app_test.sh && bash -n sim2real/auterion/stage_app.sh

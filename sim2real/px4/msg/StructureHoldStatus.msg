@@ -48,6 +48,8 @@ float32 obstacle_clearance_m  # [m] hold point to the nearest obstacle point (no
 float32 keep_out_shift_m      # [m] how far the keep-out has moved the hold point since engage
 uint8 keep_out_points         # obstacle points (obstacle_distance bins and side rangefinders) used this tick
 bool keep_out_no_room         # the keep-out could not be met everywhere: the hold point sits between obstacles
+float32 watchdog_used         # fraction of the closest watchdog limit used (1 trips; PilotStatus.hpp); -1 when no mode flies
+uint8 watchdog_closest        # TRIP_* code of that limit (3, 4, 5 or 9), 0 when no mode flies
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 
 float32[3] rates_setpoint     # [rad/s] FRD body rates commanded this tick
