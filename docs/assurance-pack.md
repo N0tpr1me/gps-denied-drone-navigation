@@ -31,7 +31,7 @@ standard by standard, so a reviewer can judge the gap rather than take our word 
 | Software parts list (SBOM), CycloneDX 1.6 JSON | `sim2real/assurance/sbom.cdx.json` | Generated from the build files, checked by CI |
 | Statement of origin | Section 3 below | Written; company fields for Zain to fill |
 | Standards mapping | Section 4 below | Written from the standards' published scopes |
-| Safety manual and failure table (FMEA) | `docs/safety-manual.md`, sign-off in its section 8 | v1.5 ready (pilot status, dust and fog, GPS on, height reference and keep-out added), **not signed yet** |
+| Safety manual and failure table (FMEA) | `docs/safety-manual.md`, sign-off in its section 8 | v1.6 ready (pilot status, dust and fog, GPS on, height reference, spike gate and keep-out added), **not signed yet** |
 | Interface spec | `docs/integration-guide.md` | Current, pinned to the module by tests |
 | How to report a vulnerability | `.github/SECURITY.md` | In place |
 | Flight test plan for a partner's drone | `docs/partner-pack.md` | Ready, no flight yet |

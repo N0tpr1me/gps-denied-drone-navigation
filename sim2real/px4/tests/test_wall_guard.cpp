@@ -339,6 +339,66 @@ int main()
 		CHECK(ref.valid() && near(ref.reference(), 1.02f));
 	}
 
+	// The guard's own spike gate (dust, fog: short returns off the particles). A lone short
+	// reading is held back and moves nothing; a short reading the next one agrees with is a
+	// real step and moves the point; a repeat of the same reading is decided once; long
+	// outliers are held back too; the gate is off by default.
+	{
+		WallGuardLimits l{};
+		l.min_standoff_m = 0.7f;
+		l.spike_gate_m = 0.25f;
+		WallGuard g{};
+		g.setLimits(l);
+		float hold[3] = {0.f, 0.f, -2.5f};
+		RangeSample r = range(1.0f);
+		r.timestamp_us = NOW - 20000;
+		WallGuardOutput o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(o.range_ok && !o.spike && near(o.shift_m, 0.f));
+
+		r = range(0.15f);  // a short return off the dust
+		r.timestamp_us = NOW - 15000;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(!o.range_ok && o.spike && near(o.wall_m, 0.15f) && near(o.shift_m, 0.f));
+		CHECK(near(hold[0], 0.f) && near(g.totalShift(), 0.f));
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);  // the same reading, next tick
+		CHECK(!o.range_ok && o.spike && near(hold[0], 0.f));
+
+		r = range(0.98f);  // the wall again: used at once
+		r.timestamp_us = NOW - 10000;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(o.range_ok && !o.spike && near(o.shift_m, 0.f));
+
+		r = range(0.4f);  // a real step toward the wall: held once...
+		r.timestamp_us = NOW - 5000;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(!o.range_ok && o.spike && near(hold[0], 0.f));
+		r = range(0.42f);  // ...and acted on when the next reading agrees
+		r.timestamp_us = NOW - 1000;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(o.range_ok && near(o.shift_m, 0.28f) && near(hold[0], -0.28f));
+
+		r = range(6.0f);  // a long outlier: held back as well
+		r.timestamp_us = NOW - 500;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(!o.range_ok && o.spike);
+		CHECK(!g.acceptWall(NOW - 500, 6.0f) && g.acceptWall(NOW - 400, 0.45f));
+
+		// A new engage keeps the gate's memory (it belongs to the sensor): the first reading
+		// after it is judged against the last accepted one.
+		g.engage();
+		r = range(0.1f);
+		r.timestamp_us = NOW - 100;
+		o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+		CHECK(!o.range_ok && o.spike);
+
+		// Gate 0 (the default): every usable reading is used.
+		WallGuard off = guard(0.7f);
+		float hold2[3] = {0.f, 0.f, -2.5f};
+		off.apply(range(1.0f), NOW, origin, n_north, bx_north, hold2);
+		o = off.apply(range(0.15f), NOW, origin, n_north, bx_north, hold2);
+		CHECK(o.range_ok && near(o.shift_m, 0.55f));
+	}
+
 	if (failures == 0) {
 		std::printf("wall guard tests: all passed\n");
 		return 0;

@@ -138,6 +138,7 @@ void StructureHold::updateParams()
 
 	WallGuardLimits wall{};
 	wall.min_standoff_m = _param_wall_min.get();
+	wall.spike_gate_m = policy::RANGE_SPIKE_GATE_M;  // short returns off dust (WallGuard.hpp)
 	_wall_guard.setLimits(wall);
 	_range_ref.setSpikeGate(policy::RANGE_SPIKE_GATE_M);
 
@@ -1125,7 +1126,12 @@ float StructureHold::measuredWall(const hrt_abstime now, const Dcmf &r) const
 void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
 {
 	const float nx = cosf(_setpoint.yaw), ny = sinf(_setpoint.yaw);  // wall normal, NED
-	const float wall = measuredWall(now, r);
+	float wall = measuredWall(now, r);
+
+	// The same spike gate the wall guard applies: a lone short return is not a wall.
+	if (PX4_ISFINITE(wall) && !_wall_guard.acceptWall(_range.timestamp_us, wall)) {
+		wall = NAN;
+	}
 	const bool good = estimateGood();
 	const bool xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
 			      && PX4_ISFINITE(_local_position.y);

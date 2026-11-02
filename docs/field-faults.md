@@ -234,12 +234,34 @@ Seed 1 / seed 2 in each cell. What happened:
   engage-time shift), on top of the walk: seed 1 ended 1.9 to 2.1 m from the wall. That is
   the safe side, but it is an unplanned move of up to a metre away from the structure, into
   whatever is behind, and in a longer cloud it would keep going. The wall-range policy input
-  (`RangeReference`, v23 on) has a spike gate; the guard has none. A one-step spike gate on
-  the guard (accept a shorter reading only when the next one agrees), or a floor on how far
-  the guard may move the point in one hold, is the fix; it is a module change on a safety
-  path, so it goes in its own PR (Next).
+  (`RangeReference`, v23 on) had a spike gate; the guard had none. Fixed the same day,
+  below.
 - **Height moved 0.2 to 0.5 m on both**, from the velocity noise (0.2 m/s) that EKF2
   fuses: the barometer height reference bounds it. Stock PX4 dipped 0.46 m, v22 0.26 m.
+
+**With the spike gate on the guard (2026-11-02, `WallGuard::acceptWall`, decided row).**
+The guard now holds a reading more than 0.25 m from the last accepted one until the next
+reading agrees with it, the rule `RangeReference` and the mock already used, and a held
+reading counts as no range for the range hover too. The same six flights again on an image
+with the gate (`*_degrade_v22_gate_ae14cbd`), the hold point's shift during the hold from
+`hold.json`:
+
+| | calm | 4 m/s | 8 m/s |
+| --- | --- | --- | --- |
+| Shift before the gate, m (seed 1 / 2) | 0.95 / 0.59 | 0.88 / 0.69 | 0.75 / 0.65 |
+| Shift with the gate, m (seed 1 / 2) | 0.61 / 0.00 | 0.57 / 0.02 | 0.58 / 0.00 |
+| Closest to the wall with the gate, m | 0.91 / 0.85 | 0.82 / 0.92 | 0.89 / 0.82 |
+| Where it ended, m from the wall | 1.48 / 1.19 | 1.39 / 1.19 | 1.37 / 1.22 |
+
+Seed 2's VIO walks toward the wall (the drone drifts away), so there is nothing for the
+guard to do, and with the gate it did nothing: 0.00 to 0.02 m against 0.59 to 0.69 m of dust
+before. Seed 1's VIO walks away from the wall, which carried the drone 0.5 m toward it (the
+case that put stock PX4 on the wall), and the guard's 0.6 m is it catching that, as on the
+slow drift; the 0.3 m of dust on top is gone. 0 of 6 touched, closest 0.82 m, no trips, and
+the flights ended 1.2 to 1.5 m from the wall instead of 1.2 to 2.0 m. What is left: two
+consecutive short returns that agree within 0.25 m still pass, by design (a real step
+must), so a dense cloud can still move the point; a longer agreement window or a rate limit
+on the shift would be the next step if a real sensor log shows that.
 
 One flight per cell, two seeds: it shows the mechanisms, not a rate. The numbers are what
 this one `degrade` setting does; a real dust cloud or fog bank may be milder or far worse,
@@ -261,8 +283,9 @@ What this says, in plain words:
 - **Dust, fog and low light: the module holds, but walks with the VIO.** Neither v22 nor
   stock PX4 can see a degraded VIO walking off; stock PX4 touched the wall on 3 of 6
   flights, v22 on none, because the rangefinder guard caught the walk toward the wall. The
-  guard also read the dust as a close wall and backed the hold point off by up to a metre,
-  which a spike gate on the guard should stop (Next).
+  guard also read the dust as a close wall and backed the hold point off by up to a metre;
+  the spike gate on the guard (same day) stopped that: 0 to 2 cm of dust shift on the seeds
+  with nothing real to catch.
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
   should fly the barometer (or a downward rangefinder) as the height reference, and the
@@ -346,9 +369,8 @@ What this says, in plain words:
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
 - The range hover (`SH_HB_RANGE`, now on by default) over seeds 5 to 8 and longer silences.
-- A spike gate (or a per-hold limit) on the wall guard so short returns off dust or fog do
-  not march the hold point back; then re-fly `field_degrade` with it, more seeds, and a
-  harsher setting (longer losses, a faster walk) to find where the module's own trips take
-  over.
+- `field_degrade` over more seeds and a harsher setting (longer losses, a faster walk, a
+  denser cloud with agreeing short returns) to find where the module's own trips take over
+  and whether the guard's two-reading gate needs a longer window.
 - The GPS faults over the other winds and more seeds, and the same faults with a jump along
   the wall (`direction` [0, 1, 0]), which no guard catches.

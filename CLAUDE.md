@@ -183,7 +183,7 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   `sitl_test.py` checks ground engage always, `--range-faults` and `--moving-engage` on demand.
   Field faults (Nov 2026, `docs/field-faults.md`): scripted VIO reset, restart, silence,
   freeze, drift and degrade (dust, fog, low light: a noisier, walking VIO and a spoiled
-  rangefinder; the wall guard backs off on short returns, a spike gate for it is open) flown
+  rangefinder; the wall guard's spike gate keeps short returns from moving the hold point) flown
   vs tuned PX4; `SH_HB_RANGE` (on by default since 2026-11-02) keeps
   Structure Hover off the wall on the rangefinder alone when the position estimate is gone,
   and `SH_WD_FRZ_T` (1 s, on by default since 2026-11-02) trips on a VIO fix that stops moving.

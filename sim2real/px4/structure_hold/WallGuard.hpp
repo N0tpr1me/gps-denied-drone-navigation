@@ -28,6 +28,15 @@
  * sample the guard does nothing and the hold flies as before; whether the mode may engage
  * without a sensor is the module's choice (SH_WALL_REQ).
  *
+ * Spike gate (spike_gate_m, 0 off): a new reading whose perpendicular distance differs from
+ * the last accepted one by more than the gate is not used until the next reading agrees
+ * with it, so a real step passes at its second reading and a lone short return does not
+ * move the point. Without it, short returns off dust, fog or spray in front of the sensor
+ * read as a close wall and the ratchet marched the hold point a metre back in 20 s of
+ * simulated dust (docs/field-faults.md, degrade). Each reading (its timestamp) is decided
+ * once; the gate belongs to the sensor, so it carries across engages. It is the same rule
+ * as RangeReference's gate below (the env's RangeSensor.spike_gate_m), applied first.
+ *
  * Plain C++, no PX4 headers, so tests/test_wall_guard.cpp runs it in a bare g++ build.
  */
 
@@ -43,6 +52,7 @@ struct WallGuardLimits {
 	float min_standoff_m{0.f};            // SH_WALL_MIN; 0 = guard off
 	uint64_t max_age_us{200000};          // older range samples are ignored
 	float max_off_axis_rad{0.6109f};      // 35 deg between body x and the wall normal
+	float spike_gate_m{0.f};              // a reading this far from the last accepted waits for a second
 };
 
 /** One forward rangefinder reading, as PX4's distance_sensor carries it. */
@@ -56,6 +66,7 @@ struct RangeSample {
 
 struct WallGuardOutput {
 	bool range_ok{false};      // a usable sample this tick
+	bool spike{false};         // a usable sample the gate is holding back (range_ok false)
 	float wall_m{-1.f};        // perpendicular distance vehicle -> wall, -1 without a sample
 	float clearance_m{-1.f};   // hold point -> wall along n, -1 without a sample
 	float shift_m{0.f};        // hold point moved back this tick
@@ -89,6 +100,37 @@ public:
 	}
 
 	/**
+	 * The spike gate on one reading's perpendicular wall distance (see above). True when the
+	 * reading may be used. Decided once per ``sample_us``; a repeat returns the same answer.
+	 */
+	bool acceptWall(uint64_t sample_us, float wall_m)
+	{
+		if (!(_limits.spike_gate_m > 0.f)) {
+			return true;
+		}
+
+		if (sample_us != _gate_sample_us) {
+			_gate_sample_us = sample_us;
+			const bool first = !_have_accepted;
+			const bool near_accepted = _have_accepted && std::fabs(wall_m - _accepted_m) <= _limits.spike_gate_m;
+			const bool near_pending = _have_pending && std::fabs(wall_m - _pending_m) <= _limits.spike_gate_m;
+			_gate_ok = first || near_accepted || near_pending;
+
+			if (_gate_ok) {
+				_accepted_m = wall_m;
+				_have_accepted = true;
+				_have_pending = false;
+
+			} else {
+				_pending_m = wall_m;
+				_have_pending = true;
+			}
+		}
+
+		return _gate_ok;
+	}
+
+	/**
 	 * One tick. ``normal_ned`` is the horizontal unit wall normal (structure x, NED),
 	 * ``body_x_ned`` the vehicle's body x axis in NED (first column of R). Moves
 	 * ``hold_ned`` back along the normal when its clearance is below the minimum.
@@ -108,8 +150,14 @@ public:
 			return out;
 		}
 
-		out.range_ok = true;
 		out.wall_m = r.distance_m * cos_off;
+
+		if (!acceptWall(r.timestamp_us, out.wall_m)) {
+			out.spike = true;
+			return out;
+		}
+
+		out.range_ok = true;
 		const float ahead = (hold_ned[0] - pos_ned[0]) * normal_ned[0] + (hold_ned[1] - pos_ned[1]) * normal_ned[1];
 		out.clearance_m = out.wall_m - ahead;
 
@@ -127,6 +175,12 @@ public:
 private:
 	WallGuardLimits _limits{};
 	float _total_shift_m{0.f};
+	uint64_t _gate_sample_us{0};
+	bool _gate_ok{false};
+	float _accepted_m{0.f};
+	bool _have_accepted{false};
+	float _pending_m{0.f};
+	bool _have_pending{false};
 };
 
 /**
