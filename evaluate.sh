@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The evaluation kit in one command (docs/eval-kit.md): fly the five position-estimate
-# failures (VIO reset, restart, link loss, freeze, drift) with Structure Hold and with tuned
+# The evaluation kit in one command (docs/eval-kit.md): fly the six position-estimate
+# failures (VIO reset, restart, link loss, freeze, drift, dust/fog/low light) with Structure Hold and with tuned
 # PX4 in Gazebo SITL, then print the comparison table.
 # Confidential. Copyright (c) 2026 Zain Ali. All rights reserved.
 #
@@ -10,7 +10,7 @@
 #   ./evaluate.sh --dry-run                # the plan and the time it should take
 #
 # Needs Docker and Python 3.10 or newer. No GPU: Gazebo runs headless on CPU cores, 4 per
-# flight; with 40 free cores all 10 flights fly at once (a few minutes), on 4 cores about 20.
+# flight; with 48 free cores all 12 flights fly at once (a few minutes), on 4 cores about 24.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

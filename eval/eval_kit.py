@@ -1,4 +1,4 @@
-"""The evaluation kit: fly the five field faults with Structure Hold and with tuned PX4,
+"""The evaluation kit: fly the field faults with Structure Hold and with tuned PX4,
 then print one comparison table (``docs/eval-kit.md``).
 
     ./evaluate.sh                                  # the one command (checks Docker, builds)
@@ -49,13 +49,14 @@ import yaml
 from eval.baselines.run_baseline import REPO_ROOT, cpu_slots, fly, git_commit
 from eval.field_faults import CONTACT_M, score_run
 
-FAULTS = ("reset", "restart", "silence", "freeze", "drift")
+FAULTS = ("reset", "restart", "silence", "freeze", "drift", "degrade")
 FAULT_TEXT = {
     "reset": "VIO resets to its origin in the air",
     "restart": "VIO process restarts (3 s gap, then reset)",
     "silence": "position link lost for 8 s",
     "freeze": "estimate freezes for 5 s",
     "drift": "estimate drifts 0.6 m away from the wall",
+    "degrade": "dust, fog or low light for 20 s (VIO and rangefinder degrade)",
 }
 SCENARIO = "wall1m_wind_4ms"  # 1 m from the wall, 4 m/s mean wind into it, gusts
 SEED = 1
@@ -171,7 +172,7 @@ def _m(row: dict[str, Any], key: str, nd: int = 2) -> str:
 
 def comparison_table(pairs: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     lines = [
-        "# Structure Hold vs tuned PX4 on five position-estimate failures",
+        f"# Structure Hold vs tuned PX4 on {len(pairs)} position-estimate failures",
         "",
         f"Gazebo SITL, PX4 v1.17.0, x500, scenario `{meta['scenario']}` (1 m from a wall, "
         f"4 m/s mean wind into it, gusts), seed {meta['seed']}, commit {meta['commit']}. "

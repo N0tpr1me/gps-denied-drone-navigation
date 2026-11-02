@@ -6,7 +6,7 @@ that sell" ranking (items 1 and 2, 2026-11-02): an engineering lead wants to see
 handle the failures they know before they take a call, and after a partner flight they want
 one page they can show their manager.
 
-## 1. The evaluation kit: one command, five failures, one table
+## 1. The evaluation kit: one command, six failures, one table
 
 ```bash
 ./evaluate.sh                          # checks Docker, builds the image if missing, flies
@@ -22,7 +22,7 @@ the `wall_slab` world, `sim2real/docker/`); makes a small Python environment
 (`.venv-kit/`, `pip install -e .[sitl]`) if the machine's Python lacks the packages; then
 runs `eval/eval_kit.py`.
 
-The kit flies the five scripted field faults of `docs/field-faults.md` twice each:
+The kit flies the scripted field faults of `docs/field-faults.md` twice each (six since `degrade` was added the same day; the first run below flew the first five):
 
 | Fault | Structure Hold flight | Tuned PX4 flight |
 | --- | --- | --- |
@@ -31,6 +31,7 @@ The kit flies the five scripted field faults of `docs/field-faults.md` twice eac
 | Position link lost for 8 s | `field_silence_at_engage` | `field_silence_at_hover` |
 | Estimate freezes for 5 s | `field_freeze_at_engage` | `field_freeze_at_hover` |
 | Estimate drifts 0.6 m away from the wall | `field_drift_at_engage` | `field_drift_at_hover` |
+| Dust, fog or low light for 20 s (added after the first run) | `field_degrade_at_engage` | `field_degrade_at_hover` |
 
 Every flight: scenario `wall1m_wind_4ms` (1 m from the wall, 4 m/s mean wind into it,
 gusts), seed 1, tuned parameters `eval/baselines/px4_tuned_v2.params` (barometer height),
@@ -56,11 +57,11 @@ per flight, each with its PX4 log, bridge trace and scores), `comparison.json` a
 Gazebo runs headless on CPU cores, no GPU. `--jobs auto` (the default) flies as many
 flights at once as the machine has free blocks of 4 cores, each pinned to its own:
 
-| Machine | Flights at once | Time for all 10 |
+| Machine | Flights at once | Time for all 12 |
 | --- | --- | --- |
-| 40 or more free cores (the GPU server's Threadripper, a build box) | 10 | about 3 minutes |
+| 48 or more free cores (the GPU server's Threadripper, a build box) | 12 | about 3 minutes |
 | 16 cores | 4 | about 7 minutes |
-| 4 cores (laptop, the cloud container) | 1 | about 20 minutes (measured, below) |
+| 4 cores (laptop, the cloud container) | 1 | about 24 minutes (the first five faults took 20, below) |
 
 A flight takes about 2 minutes of wall clock (Structure Hold 2.2, tuned PX4 1.8, measured on
 the cloud container); `--dry-run` prints the estimate for the machine it runs on.
@@ -107,6 +108,12 @@ What it says, in plain words:
   moved more than 11 cm. The 2.2 m climb in `docs/field-faults.md` was on vision height
   (`px4_tuned_v1`). A takeoff away from the hold point would make the reset a horizontal
   jump too; that is a different scenario, not flown here.
+
+The `degrade` fault, flown through the kit afterwards (`./evaluate.sh --faults degrade`,
+2026-11-02, kit folder `runs/20261102-175438_eval_kit_7008fd8`): Structure Hold closest to
+the wall 0.99 m, largest move 1.11 m (along the wall, no trip), lowest 2.21 m; tuned PX4
+closest 0.44 m, 4 cm from prop contact, largest move 0.76 m. The verdict: Structure Hold,
+0.55 m further from the wall. `docs/field-faults.md` has this fault over more cases.
 
 ### Before it goes to a buyer
 
