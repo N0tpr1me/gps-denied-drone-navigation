@@ -37,8 +37,9 @@ with `wall_deflect`, `wall_recirc`, `wake_ti` and `shed_amp`; `air_velocity(p, t
 the air the drone sits in.
 
 Nominal values reproduce the one published data point (2.14 kg drone, 10 m/s headwind:
-2.78 N at 5 m from a wall, 0.40 N at 0.5 m). Default ranges are wide until the Phase 3 fan
-rig fits them. Not modelled yet: near-wall yaw torque, ground effect, variation along the
+2.78 N at 5 m from a wall, 0.40 N at 0.5 m). Default ranges are wide until real flight logs
+fit them: `eval/fit_wind.py` (`docs/wind-fit.md`) does the fit from a partner's or the fan
+rig's holds. Not modelled yet: near-wall yaw torque, ground effect, variation along the
 surface, two surfaces at once.
 
 Tests: `pytest envs/disturbance`.

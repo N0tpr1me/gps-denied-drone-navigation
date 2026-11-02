@@ -39,13 +39,17 @@ handing back is the right answer.
 
 ```
 python -m eval.baselines.run_baseline --runner hold --label field_reset_v22 \
-    --params eval/baselines/px4_tuned_v1.params --scenarios wall1m_wind_4ms --seeds 1 \
+    --params eval/baselines/px4_tuned_v2.params --scenarios wall1m_wind_4ms --seeds 1 \
     -- --profile field_reset_at_engage --rangefinder
 python -m eval.baselines.run_baseline --label field_reset_tuned \
-    --params eval/baselines/px4_tuned_v1.params --scenarios wall1m_wind_4ms --seeds 1 \
+    --params eval/baselines/px4_tuned_v2.params --scenarios wall1m_wind_4ms --seeds 1 \
     -- --profile field_reset_at_hover
 python -m eval.field_faults runs/<hold flight> runs/<stock flight>
 ```
+
+The flights on this page were flown on `px4_tuned_v1.params` (vision height) unless a row says
+otherwise; since 2026-11-01 the benchmark uses `px4_tuned_v2.params` (barometer height,
+the finding below), as the commands above do.
 
 ## First flights (2026-11-01, cloud)
 
@@ -78,9 +82,10 @@ the second set. The stock runner anchors on its height and was not affected.
 
 ### Why Structure Hold sank on the link loss
 
-Not the module's horizontal logic: EKF2's height. The benchmark's EKF2 set-up
-(`ekf2_ev.params`, a Decided row of 2026-10-21) makes vision the height reference
-(`EKF2_HGT_REF 3`), with the barometer aiding through a bias estimate. When the vision stream
+Not the module's horizontal logic: EKF2's height. The benchmark's EKF2 set-up at the time
+(`ekf2_ev.params`, a Decided row of 2026-10-21) made vision the height reference
+(`EKF2_HGT_REF 3`; barometer since 2026-11-01), with the barometer aiding through a bias
+estimate. When the vision stream
 stops, EKF2 puts the barometer's change into that bias and its height stops moving: in this
 flight the baro innovation grew to -2.4 m while EKF2's height stayed at 2.5 m. A 4 % dip in
 the policy's thrust as the fix went stale started a 0.5 m/s descent, and nothing in the loop
@@ -125,6 +130,34 @@ back" and held on the estimate again. One flight, one seed: it shows the mechani
 Gazebo, not how well it does across winds. It does nothing for the height: with vision as
 EKF2's height reference the vehicle would still sink.
 
+### The link loss over three winds and four seeds (2026-11-02)
+
+The same 8 s silence 20 s into the hold, now on the benchmark's barometer height
+(`eval/baselines/px4_tuned_v2.params`), every scenario (calm, 4 and 8 m/s mean wind into the
+wall) and seeds 1 to 4: v22 with the rangefinder and `SH_HB_RANGE` 1, the same with it off
+(the decided handback), and tuned PX4. Cloud image at `a4afbd6` (module as merged in #113),
+36 flights in three sub-hour batches; `eval/field_faults.py` on each batch
+(`field_faults.json` in the batch folders `*_silence_v22_hb1_a4afbd6`, `*_silence_v22_hb0_a4afbd6`,
+`*_silence_tuned_a4afbd6`).
+
+| | calm | 4 m/s | 8 m/s | all 12 |
+| --- | --- | --- | --- | --- |
+| `SH_HB_RANGE` 1: wall contacts | 0/4 | 0/4 | 0/4 | **0/12**, all airborne, closest 0.84 m |
+| `SH_HB_RANGE` 1: closest to the wall, m | 0.92 to 1.03 | 0.92 to 1.02 | 0.84 to 1.01 | |
+| `SH_HB_RANGE` 1: largest move, m | 0.36 to 0.55 | 0.09 to 0.52 | 0.56 to 0.97 | |
+| Off (Altitude mode): wall contacts | 0/4 | 4/4 | 4/4 | **8/12** touched or passed the wall line |
+| Off: largest move, m | 0.52 to 2.08 | 2.1 to 12.1 | 8.4 to 20.6 | two 8 m/s flights sank to under 0.1 m |
+| Tuned PX4: wall contacts | 0/4 | 2/4 | 4/4 | **6/12**, all 12 ended on the ground (PX4's failsafe descent) |
+
+Every v22 flight tripped `estimate_invalid` and handed back as the decided order says. With
+`SH_HB_RANGE` 1 Structure Hover held the wall distance on the range through the rest of the
+silence and the vehicle was still flying, with its height kept within 0.31 m (barometer),
+when the estimate came back. Without it Altitude mode kept the vehicle level and any wind
+into the wall carried it there; in calm air it drifted but stayed clear. Stock PX4 held for
+about 4.5 s and then its failsafe landed it, touching the wall on the way down in wind.
+One flight per cell; the movement along the wall (up to 0.97 m at 8 m/s) is the axis the
+range cannot see.
+
 ### The freeze with the frozen-fix trip (`SH_WD_FRZ_T`, Proposed)
 
 `SH_WD_FRZ_T` (seconds, off by default; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
@@ -165,8 +198,8 @@ What this says, in plain words:
   0.2 m; turning it on is Zain's call.
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
-  should fly the barometer (or a downward rangefinder) as the height reference, and our
-  benchmark set-up should probably follow, which changes a Decided row (Zain's call). With
+  should fly the barometer (or a downward rangefinder) as the height reference, and the
+  benchmark now does too (Zain's call, 2026-11-01: `px4_tuned_v2.params`). With
   the height fixed, the decided handback to Altitude mode lets the wind push the vehicle
   into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead. Turning
   it on changes the decided handback order, so it ships off by default (Zain's call).
@@ -176,8 +209,7 @@ What this says, in plain words:
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
-- The link-loss pair again with the barometer as EKF2's height reference, once Zain decides
-  the benchmark's height reference, and the range hover (`SH_HB_RANGE`) over more seeds,
-  winds and longer silences.
+- The range hover (`SH_HB_RANGE`) over seeds 5 to 8 and longer silences; whether to turn it
+  on by default is Zain's call (it changes the decided handback order).
 - The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
   should partners ever fly with GPS on?

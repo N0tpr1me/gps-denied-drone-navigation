@@ -42,8 +42,11 @@ To judge another policy, add it under `params.controllers` and set `gate_control
 python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu   # ~25 min
 ```
 
-- `baselines/px4_tuned_v1.params`: the frozen tuned-PX4 baseline (docs/baseline.md). Every
-  later result is compared against it.
+- `baselines/px4_tuned_v2.params`: the tuned-PX4 baseline since 2026-11-01: v1 with
+  barometer height (`EKF2_HGT_REF 1`, docs/decisions.md). Every result from then on is
+  compared against it.
+- `baselines/px4_tuned_v1.params`: the first tuned-PX4 baseline (docs/baseline.md), vision
+  height; frozen, kept for the results flown on it up to 2026-11-01.
 - `baselines/run_baseline.py`: fly a parameter set over the `wall1m_*` scenarios and seeds in
   Gazebo SITL (GPS-free, corrupted estimate), tabulate p95, worst toward the wall, crash and
   failsafe, and compare two sets.

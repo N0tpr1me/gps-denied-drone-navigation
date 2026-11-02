@@ -30,7 +30,7 @@ station, vision in the policy. The module consumes the drone's existing position
   Run it before saying anything works. Launch runs through `training/launch.py`.
 - Real runs are logged in `experiments/LOG.md` (date, commit, config, result, baseline),
   failures included; smoke runs never are. Every reported result is compared against the
-  tuned-PX4 baseline (`eval/baselines/px4_tuned_v1.params`), or in the mock against the
+  tuned-PX4 baseline (`eval/baselines/px4_tuned_v2.params`), or in the mock against the
   cascaded PD yardstick, saying which.
 - Run `nvidia-smi` before any GPU job; use only free GPUs. Ask before any run over 1 hour
   or on more than 1 GPU (`launch.py` enforces both; `--approved` overrides only with a yes).
@@ -68,7 +68,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/route_follow/` | Route Follow (second capability): random corridor and tunnel routes, plus arched drifts, narrowed stretches and side branches (`routes.py`), walls, target and rangefinder beams on tensors (`geometry.py`), the env, the PD yardsticks (estimate only, and with range centring) |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live |
 | `training/` | `launch.py`, `train_ppo.py`, `train_route_ppo.py` (Route Follow), `eval_policy.py`, configs, released `policies/` (README lists each version) |
-| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `partner_session.py` (scores a partner's real flight session against tuned PX4), `route_follow.py` (scores Route Follow controllers on true position against the PD yardsticks), `field_faults.py` (scores Gazebo flights on the scripted field faults), `baselines/` (tuned PX4, `run_baseline.py`) |
+| `eval/` | `metrics.py` (one scorer for sim/SITL/real, on TRUE position), `gate1.py`, `gazebo_check.py`, `sim_parity.py`, `vio_fit.py` (fits `envs/estimate` to real VIO error; `vio_basalt/` runs Basalt VIO on EuRoC in Docker), `settle_split.py` (settle vs steady hold), `partner_session.py` (scores a partner's real flight session against tuned PX4), `route_follow.py` (scores Route Follow controllers on true position against the PD yardsticks), `field_faults.py` (scores Gazebo flights on the scripted field faults), `fit_wind.py` (fits `envs/disturbance`'s drag, wind, turbulence and wall shelter to flight logs; `docs/wind-fit.md`), `fit_airframe.py` (fits a drone's thrust curve, motor lag, torque per axis and rate gains from one PX4 autotune log into an env airframe YAML that `airframe:` loads; `docs/airframe-fit.md`), `baselines/` (tuned PX4, `run_baseline.py`) |
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...), scripted field faults (`field_faults.py`: VIO reset, restart, silence, freeze, drift; `field_*` profiles, `docs/field-faults.md`) |
@@ -76,7 +76,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
-| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker), `route-follow.md` (the second capability: route flying through tunnels and corridors), `market-research.md` (what drone engineers need, ranked gaps, Nov 2026), `field-faults.md` (VIO reset, restart, link loss, freeze and drift flown in Gazebo vs tuned PX4) |
+| `docs/` | `decisions.md`, `conventions.md`, `metrics.md`, `gate1.md`, `baseline.md` (Gate 2 evidence), `gazebo_check.md`, `fallback.md`, `isaac-lab.md`, `real-flight-gap.md`, `bench-test.md`, `logging-flight.md`, `fan-rig.md`, `near-wall-flow.md`, `vio-fit.md`, `hold-offset.md`, `wall-range.md` (the rangefinder policy input), `gpu-server.md` (server setup, Claude access, parallel SITL), `partner-pack.md` (confidential flight test pack for a partner drone maker), `route-follow.md` (the second capability: route flying through tunnels and corridors), `market-research.md` (what drone engineers need, ranked gaps, Nov 2026), `field-faults.md` (VIO reset, restart, link loss, freeze and drift flown in Gazebo vs tuned PX4), `wind-fit.md` (the wind model fitted from flight logs, checked on Gazebo holds with known wind), `airframe-fit.md` (a customer's drone fitted from one autotune flight, checked on the Gazebo x500), `integration-guide.md` (confidential interface spec for a drone maker: inputs, outputs, modes, trips, parameters, ground-station messages, resource budget; its parameter table is pinned to the module by `sim2real/px4/tests/test_integration_guide.py`), `safety-manual.md` (operating envelope, do-not-use cases, safety layers, pilot messages and the failure table (FMEA) with a test reference per row) |
 
 ## Conventions (details in docs/conventions.md)
 
@@ -126,9 +126,9 @@ bash training/server_setup.sh
 # SITL (needs Docker: the GPU server; --jobs auto flies many seeds at once on CPU cores)
 sim2real/docker/run.sh build && sim2real/docker/run.sh hover-test
 python -m eval.baselines.run_baseline --runner hold --label <name> --jobs auto \
-    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_engage    # policy
+    --params eval/baselines/px4_tuned_v2.params -- --profile vio_at_engage    # policy
 python -m eval.baselines.run_baseline --label tuned_v1 --jobs auto \
-    --params eval/baselines/px4_tuned_v1.params -- --profile vio_at_hover     # tuned PX4
+    --params eval/baselines/px4_tuned_v2.params -- --profile vio_at_hover     # tuned PX4
 ```
 
 CI (`.github/workflows/ci.yml`): ruff + pytest on 3.10/3.11/3.12 with CPU torch, the
@@ -152,8 +152,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
-- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): v22 mean p95 -54 to -55 % (v19 -47 to
-  -48 %), 0 crashes (`docs/baseline.md`). Crash is judged on the 60 s hold only; seed 6 is the hard seed.
+- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): on barometer height (`px4_tuned_v2.params`,
+  Decided 2026-11-01) v22 mean p95 -43 to -45 %, 0 crashes; on the earlier vision-height
+  set-up v22 -54 to -55 %, v19 -47 to -48 % (`docs/baseline.md`). Crash is judged on the 60 s
+  hold only; seed 6 is the hard seed.
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second

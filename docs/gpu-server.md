@@ -92,10 +92,10 @@ The same commands as on the Mac, plus `--jobs auto`:
 ```bash
 source .venv/bin/activate
 python -m eval.baselines.run_baseline --runner hold --label v22_server \
-    --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 4 5 6 7 8 --jobs auto \
+    --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8 --jobs auto \
     -- --profile vio_at_engage                  # the policy
 python -m eval.baselines.run_baseline --label tuned_v1_server \
-    --params eval/baselines/px4_tuned_v1.params --seeds 1 2 3 4 5 6 7 8 --jobs auto \
+    --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8 --jobs auto \
     -- --profile vio_at_hover                   # tuned PX4
 ```
 
