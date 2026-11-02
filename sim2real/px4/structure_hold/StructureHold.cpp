@@ -96,6 +96,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_land_en, param_limits::SH_LAND_EN, "SH_LAND_EN");
 	sanitizeParam(_param_hb_guard, param_limits::SH_HB_GUARD, "SH_HB_GUARD");
 	sanitizeParam(_param_hb_range, param_limits::SH_HB_RANGE, "SH_HB_RANGE");
+	sanitizeParam(_param_gcs_per, param_limits::SH_GCS_PER, "SH_GCS_PER");
 
 	WatchdogLimits limits{};
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
@@ -104,6 +105,7 @@ void StructureHold::updateParams()
 	limits.reset_holdoff_us = static_cast<uint64_t>(_param_rst_hold.get() * 1e6f);
 	limits.max_fix_frozen_s = _param_wd_frz_t.get();
 	_watchdog.setLimits(limits);
+	_pilot.setLimits(limits);
 
 	_gains.p_pos = _param_p_pos.get();
 	_gains.p_vel = _param_p_vel.get();
@@ -331,6 +333,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	if (_landed) {
 		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: engaged on the ground (SH_BENCH 1), props off only");
 	}
+	sayEngaged(_engaged_us, MODE_NAME);
 	PX4_INFO("engaged (%s): holding N %.2f E %.2f D %.2f m, yaw %.0f deg",
 		 _param_ctrl.get() == 1 ? "policy" : "cascade",
 		 (double)_setpoint.pos(0), (double)_setpoint.pos(1), (double)_setpoint.pos(2),
@@ -395,6 +398,7 @@ void StructureHold::engageGuarded(const vehicle_local_position_s &lpos, bool des
 	_wall_out = WallGuardOutput{};
 	_range_hover.stop();
 	_range_hover_xy_back_us = 0;
+	sayEngaged(hrt_absolute_time(), descend ? LAND_MODE_NAME : HOVER_MODE_NAME);
 	PX4_INFO("%s: N %.2f E %.2f D %.2f m, yaw %.0f deg%s", descend ? LAND_MODE_NAME : HOVER_MODE_NAME,
 		 (double)_setpoint.pos(0), (double)_setpoint.pos(1), (double)_setpoint.pos(2),
 		 (double)math::degrees(_setpoint.yaw), descend ? ", descending" : "");
@@ -749,6 +753,7 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 	// Measured floor under the hold point before either controller reads it.
 	applyWallGuard(now, pos, r);
+	pilotStep(now, MODE_NAME, r, position_error_m, false);
 
 	Vector3f vel(_local_position.vx, _local_position.vy, _local_position.vz);
 
@@ -893,6 +898,7 @@ void StructureHold::guardedStep(const hrt_abstime now)
 	}
 
 	applyWallGuard(now, pos, r);
+	pilotStep(now, descend ? LAND_MODE_NAME : HOVER_MODE_NAME, r, position_error_m, false);
 
 	// A guard that keeps pushing means the wall is closing in at that rate (the estimate
 	// recovering after a jump). Position-only setpoints leave PX4's xy loop one P-lag
@@ -1059,6 +1065,7 @@ void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
 	_wall_out.wall_m = PX4_ISFINITE(wall) ? wall : -1.f;
 	_wall_out.clearance_m = _range_hover.reference();
 	_last_output = HoldOutput{};
+	pilotStep(now, HOVER_MODE_NAME, r, 0.f, true);
 }
 
 void StructureHold::publishAccelerationSetpoint(float ax_ned, float ay_ned)
@@ -1130,6 +1137,11 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.wall_distance_m = _wall_out.wall_m;
 	status.hold_clearance_m = _wall_out.clearance_m;
 	status.standoff_shift_m = _wall_guard.totalShift();
+	const bool flying = _state == structure_hold_status_s::STATE_ENGAGED
+			    || _state == structure_hold_status_s::STATE_HOVER
+			    || _state == structure_hold_status_s::STATE_LANDING;
+	status.watchdog_used = flying ? _margin.used : -1.f;
+	status.watchdog_closest = flying ? static_cast<uint8_t>(_margin.limit) : 0;
 
 	for (int i = 0; i < 4; i++) { status.action[i] = _last_action[i]; }
 	_last_output.rates.copyTo(status.rates_setpoint);
@@ -1137,6 +1149,142 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.loop_time_us = _last_loop_time_us;
 	_status_pub.publish(status);
 	_last_status_us = now;
+}
+
+// ---------------------------------------------------------------------------------------
+// The pilot's live view (PilotStatus.hpp, docs/pilot-status.md): the trip messages say what
+// a safety function did; these say how close the vehicle is to one before it acts.
+
+float StructureHold::watchdogStaleS(const hrt_abstime now, bool range_only) const
+{
+	// Counted as checkWatchdog() counts it: from the older of the last fix and the last
+	// EKF2 update, or from EKF2 alone on the rangefinder hover, which flies without a fix.
+	const hrt_abstime ts = range_only ? _local_position.timestamp
+			       : math::min(_last_fix_us, static_cast<hrt_abstime>(_local_position.timestamp));
+	return now > ts ? (now - ts) * 1e-6f : 0.f;
+}
+
+void StructureHold::wallText(char *buf, size_t len, float wall_m) const
+{
+	if (!_wall_guard.enabled()) {
+		snprintf(buf, len, "wall guard off");
+
+	} else if (PX4_ISFINITE(wall_m) && wall_m >= 0.f) {
+		snprintf(buf, len, "%.2f m from the wall", (double)wall_m);
+
+	} else {
+		snprintf(buf, len, "no wall range");
+	}
+}
+
+void StructureHold::sayEngaged(const hrt_abstime now, const char *mode)
+{
+	// The pilot hears at once that the switch took, and whether the wall guard sees the wall.
+	_pilot.start(now);
+	_margin = Margin{};
+	_hold_error_m = 0.f;
+	_wd_stale_s = 0.f;
+	char wall[32];
+	wallText(wall, sizeof(wall), measuredWall(now, Dcmf(Quatf(_attitude.q))));
+	mavlink_log_info(&_mavlink_log_pub, "%s: engaged, %s", mode, wall);
+}
+
+void StructureHold::pilotStep(const hrt_abstime now, const char *mode, const Dcmf &r, float position_error_m,
+			      bool range_only)
+{
+	// Called on every flying tick the watchdog let through, with what it judged.
+	MarginInputs in{};
+	in.stale_s = watchdogStaleS(now, range_only);
+	in.fix_frozen_s = _fix_frozen_s;
+	in.tilt_rad = acosf(math::constrain(r(2, 2), -1.f, 1.f));
+	in.position_error_m = position_error_m;
+	in.frozen_checked = _state == structure_hold_status_s::STATE_ENGAGED;  // as checkWatchdog()
+	in.position_checked = !range_only;
+	_margin = _pilot.closest(in);
+	_hold_error_m = range_only ? -1.f : position_error_m;
+	_wd_stale_s = in.stale_s;
+
+	const PilotEvent ev = _pilot.update(now, in);
+
+	if (ev.kind == PilotEvent::Warn) {
+		switch (ev.limit) {
+		case Trip::EstimateStale:
+			mavlink_log_warning(&_mavlink_log_pub, "%s: no position fix for %.1f s, watchdog hands back at %.1f s",
+					    mode, (double)ev.value, (double)ev.max);
+			break;
+
+		case Trip::EstimateFrozen:
+			mavlink_log_warning(&_mavlink_log_pub, "%s: position fix has not moved for %.1f s, watchdog trips at %.1f s",
+					    mode, (double)ev.value, (double)ev.max);
+			break;
+
+		case Trip::Tilt:
+			mavlink_log_warning(&_mavlink_log_pub, "%s: tilted %.0f deg, watchdog trips at %.0f deg",
+					    mode, (double)math::degrees(ev.value), (double)math::degrees(ev.max));
+			break;
+
+		case Trip::PositionError:
+			mavlink_log_warning(&_mavlink_log_pub, "%s: %.2f m off the hold point, watchdog trips at %.1f m",
+					    mode, (double)ev.value, (double)ev.max);
+			break;
+
+		default:
+			break;
+		}
+
+	} else if (ev.kind == PilotEvent::Clear) {
+		mavlink_log_info(&_mavlink_log_pub, "%s: back inside the watchdog limits", mode);
+	}
+
+	if (_pilot.summaryDue(now, _param_gcs_per.get())) {
+		if (range_only) {
+			mavlink_log_info(&_mavlink_log_pub, "Structure Hover: on the rangefinder, %.2f m from the wall, holding %.2f m",
+					 (double)_wall_out.wall_m, (double)_wall_out.clearance_m);
+
+		} else {
+			char wall[32];
+			wallText(wall, sizeof(wall), _wall_out.wall_m);
+			mavlink_log_info(&_mavlink_log_pub, "%s: %.2f m off the hold point, %s, fix %.2f s old",
+					 mode, (double)position_error_m, wall, (double)_stale_s);
+		}
+	}
+}
+
+void StructureHold::publishLive(const hrt_abstime now)
+{
+	// The same view as numbers, a few times a second; MAVLink sends the newest at the
+	// stream's rate (DEBUG_FLOAT_ARRAY: 1 Hz on a normal ground-station link, 10 Hz onboard).
+	if (now - _last_live_us < LIVE_INTERVAL) {
+		return;
+	}
+
+	_last_live_us = now;
+	const bool flying = _state == structure_hold_status_s::STATE_ENGAGED
+			    || _state == structure_hold_status_s::STATE_HOVER
+			    || _state == structure_hold_status_s::STATE_LANDING;
+
+	debug_array_s live{};
+	live.timestamp = now;
+	live.id = LIVE_ARRAY_ID;
+	static_assert(sizeof("SH_STATUS") <= sizeof(live.name), "array name");
+	memcpy(live.name, "SH_STATUS", sizeof("SH_STATUS"));
+	static_assert(LIVE_COUNT <= debug_array_s::ARRAY_SIZE, "live array size");
+	float *d = live.data;
+	d[LIVE_STATE] = _state;
+	d[LIVE_HOLD_ERROR] = flying ? _hold_error_m : -1.f;
+	// Before engaging, the forward range as it reads (whether the guard will see the wall).
+	d[LIVE_WALL] = flying ? _wall_out.wall_m : (rangeFresh(now) ? _range.distance_m : -1.f);
+	d[LIVE_CLEARANCE] = flying ? _wall_out.clearance_m : -1.f;
+	d[LIVE_GUARD_SHIFT] = _wall_guard.totalShift();
+	d[LIVE_FIX_AGE] = _stale_s;
+	d[LIVE_WD_SECONDS] = flying ? _pilot.secondsToStaleTrip(_wd_stale_s) : -1.f;
+	d[LIVE_WD_USED] = flying ? 100.f * _margin.used : -1.f;
+	d[LIVE_WD_CLOSEST] = flying ? static_cast<float>(_margin.limit) : 0.f;
+	d[LIVE_TRIP] = static_cast<float>(_last_trip);
+	d[LIVE_TRIP_COUNT] = _trip_count;
+	d[LIVE_TILT] = math::degrees(acosf(math::constrain(Dcmf(Quatf(_attitude.q))(2, 2), -1.f, 1.f)));
+	d[LIVE_FALLBACK] = _fallback_active ? 1.f : 0.f;
+	_live_pub.publish(live);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1331,6 +1479,8 @@ void StructureHold::Run()
 	if ((controlling && _last_control_us == now) || now - _last_status_us >= STANDBY_STATUS_INTERVAL) {
 		publishStatus(now);
 	}
+
+	publishLive(now);
 }
 
 // ---------------------------------------------------------------------------------------

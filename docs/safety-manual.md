@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.0, ready for sign-off (section 8) |
+| Version | 1.1, ready for sign-off (section 8); 1.0 was not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4`: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -93,7 +93,7 @@ Each layer works without the one above it. Only the first contains learning.
 | Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point. With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
 | Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid or frozen estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
 | Parameter clamps | The module clamps every `SH_` parameter to its range (`ParamLimits.hpp`); PX4 itself does not enforce limits | No |
-| Ground station | Every safety action is sent to QGroundControl as a text message (section 4) | No |
+| Ground station | Every safety action is sent to QGroundControl as a text message (section 4), and so is a warning when the vehicle nears a watchdog limit, before the trip; a status line and a live number array show the hold while it flies (`docs/pilot-status.md`) | No |
 | PX4 itself | Stock failsafes (battery, RC loss, geofence) and the pilot's mode switch override the module at any time | No |
 
 ## 4. What the pilot sees, and what to do
@@ -111,8 +111,22 @@ Each layer works without the one above it. Only the first contains learning.
 | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | warning | Bench-test setting left on | Props off. Set `SH_BENCH` 0 before any flight |
 | `Structure Hover: position lost, holding X m from the wall on the rangefinder` | critical | `SH_HB_RANGE` 1: the horizontal estimate is gone and Structure Hover holds the distance on the range alone. It slides along the wall with the wind | Take over and land soon; nothing controls the position along the wall |
 | `Structure Hover: position back, holding on the estimate` | info | The estimate came back | Continue or land |
+| `<mode>: no position fix for X s, watchdog hands back at Y s` | warning | No fix for half of `SH_WD_EST_TO`; at Y s the watchdog hands back | Be ready for the handback; move away from the structure if you can |
+| `<mode>: position fix has not moved for X s, watchdog trips at Y s` | warning | The VIO repeats its last position (half of `SH_WD_FRZ_T`) | Be ready for the handback; check the VIO after landing |
+| `<mode>: tilted X deg, watchdog trips at Y deg` | warning | Three quarters of `SH_WD_TILT`: the wind is near what the drone can hold against | Back away from the structure and land; do not hold in this wind |
+| `<mode>: X m off the hold point, watchdog trips at Y m` | warning | Half of `SH_WD_POS_ERR` from the hold point | Watch the wall distance; take Position mode if it keeps growing |
+| `<mode>: back inside the watchdog limits` | info | Every limit is under 40 % again after a warning | Continue |
+| `<mode>: engaged, <wall>` | info | The mode took over; `<wall>` is the measured distance, `no wall range` or `wall guard off` | If it says `no wall range` next to a structure, the wall guard is blind: take Position mode |
+| `<mode>: X m off the hold point, <wall>, fix Y s old` | info | The status line every `SH_GCS_PER` s (10 s) | None; it shows the hold is healthy |
+| `Structure Hover: on the rangefinder, X m from the wall, holding Y m` | info | The same, while holding on the rangefinder alone | Take over and land soon, as above |
 
-`sitl_test.py` checks that the trip and wall-guard messages arrive in every SIH run, and
+`<mode>` is Structure Hold, Structure Hover or Structure Land. A warning comes once per
+crossing and at most every 10 s per limit; the levels and the reasons for them are in
+`docs/pilot-status.md`, with the live number array (`DEBUG_FLOAT_ARRAY` "SH_STATUS") a
+flight-test engineer can watch in QGroundControl's MAVLink Inspector.
+
+`sitl_test.py` checks that the trip, wall-guard, engage and status messages and the live
+array arrive in every SIH run (the near-limit warning with `--pilot-warning`), and
 `sim2real/px4/tests/test_safety_manual.py` checks every message above against the module's
 code.
 
@@ -243,6 +257,7 @@ signed again. Record each one below.
 | Version | Date | Commit | What changed | Signed by |
 | --- | --- | --- | --- | --- |
 | 1.0 | 2026-11-02 | `868aeb4` | First signed version: checked against the module after `SH_HB_RANGE` and `SH_WD_FRZ_T` went on by default | |
+| 1.1 | 2026-11-02 | this PR | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
 
 ## Change control
 
