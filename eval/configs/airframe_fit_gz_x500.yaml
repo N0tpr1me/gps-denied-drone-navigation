@@ -1,0 +1,25 @@
+# Airframe fit (eval/fit_airframe.py, docs/airframe-fit.md) on the Gazebo x500, whose true
+# numbers come from its SDF (envs/structure_hold/airframes.py gz_x500). The ID flight is
+# PX4's own attitude autotune, flown in Gazebo with the partner pack's logging profile:
+#   python -m eval.baselines.autotune --params eval/baselines/px4_tuned_v1.params --set SDLOG_PROFILE=147
+#   python -m training.launch --config eval/configs/airframe_fit_gz_x500.yaml --device cpu
+# A customer's fit is the same with their log, their parameter file and their weighed mass,
+# and no truth.
+name: airframe_fit_gz_x500
+entrypoint: eval.fit_airframe
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.05
+gpus: 1
+params:
+  ulog: "runs/*_px4_autotune_*/flight.ulg"
+  params_file: eval/baselines/px4_tuned_v1.params
+  mass_kg: 2.0643076923076924  # gz_x500 base plus rotors
+  inertia: null  # unknown for a customer: the x500's, scaled (only torque / inertia matters)
+  truth: gz_x500
+  fit: {}
+  # --smoke: a model-made flight with known answers instead of the log.
+  synthetic: null
+smoke:
+  synthetic: {seconds: 20.0}
+  mass_kg: 1.6
+  truth: null
