@@ -1,0 +1,21 @@
+# Wind fit check (eval/fit_wind.py, docs/wind-fit.md): 1.5 m from the wall at 8 m/s into it
+# Every disturbance value is fixed, not drawn, so the fit can be scored against the truth:
+# shelter L 1.4 m and g0 0.12 (not the nominal 1.06 m and 0), k_quad 0.032 N/(m/s)^2,
+# turbulence sigma 0.8 m/s with a 1.5 s correlation time, two gusts inside the hover.
+name: windfit_wall1p5m_8ms
+seed: 3
+spawn: {x: -1.5, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 1.5 m from the wall (x = 0)
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0  # into the wall
+disturbance:
+  mean_speed: 8.0
+  num_gusts: 2
+  gust_start: [40.0, 60.0]   # inside the 60 s hover (it starts ~25 s sim time)
+  gust_duration: [1.0, 2.0]
+  gust_speed: [2.0, 3.0]
+  turb_sigma: 0.8
+  turb_tau: 1.5
+  k_quad: 0.032
+  wall_decay: 1.4
+  wall_floor: 0.12
+hover: {altitude: 2.5, hover_s: 60.0}

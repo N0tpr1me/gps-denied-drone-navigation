@@ -1,0 +1,60 @@
+# Wind fit (eval/fit_wind.py, docs/wind-fit.md) on Gazebo SITL flights where the wind is
+# known: the fan rig's procedure flown in simulation. Stock PX4 holds in free air at 8 and
+# 4 m/s, at 0.75, 1, 1.5, 2 and 3 m from the wall in 8 m/s blowing into it, and in calm air.
+# Every disturbance value in the windfit_* scenarios is fixed, so the fit is scored against
+# the truth below. Fly the holds first (one at a time in the cloud, ~2 min each):
+#   for s in calm free_8ms free_4ms wall0p75m_8ms wall1m_8ms wall1p5m_8ms wall2m_8ms wall3m_8ms; do
+#     python -m sim2real.gazebo.run_scenario windfit_$s; done
+#   python -m training.launch --config eval/configs/wind_fit_gazebo.yaml --device cpu
+# The free-air reference speed is read from the plugin's trace over each hold, as an
+# anemometer at the hold point would read it; gusts are cut out from the scenario's times.
+name: wind_fit_gazebo
+entrypoint: eval.fit_wind
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.02
+gpus: 1
+params:
+  airframe: gz_x500
+  fit: {}
+  segments:
+    - {name: calm, kind: calm, sitl_run: "runs/*_sitl_wind_windfit_calm_*"}
+    - {name: free_8ms, kind: free, case: 8ms, ref_speed_m_s: trace,
+       sitl_run: "runs/*_sitl_wind_windfit_free_8ms_*"}
+    - {name: free_4ms, kind: free, case: 4ms, ref_speed_m_s: trace,
+       sitl_run: "runs/*_sitl_wind_windfit_free_4ms_*"}
+    - {name: wall_0.75m, kind: wall, case: 8ms, sitl_run: "runs/*_sitl_wind_windfit_wall0p75m_8ms_*"}
+    - {name: wall_1m, kind: wall, case: 8ms, sitl_run: "runs/*_sitl_wind_windfit_wall1m_8ms_*"}
+    - {name: wall_1.5m, kind: wall, case: 8ms, sitl_run: "runs/*_sitl_wind_windfit_wall1p5m_8ms_*"}
+    - {name: wall_2m, kind: wall, case: 8ms, sitl_run: "runs/*_sitl_wind_windfit_wall2m_8ms_*"}
+    - {name: wall_3m, kind: wall, case: 8ms, sitl_run: "runs/*_sitl_wind_windfit_wall3m_8ms_*"}
+  # The scenarios' values. Turbulence is held to the plugin's own air over the same samples
+  # instead (rows "[same air]"): a 60 s hold shows only part of the model's long-run sigma
+  # (0.8 m/s) and tau (1.5 s), however well it is measured.
+  truth:
+    heading_deg: 0.0
+    k_quad: 0.032
+    k_lin: 0.0
+    wall_decay: 1.4
+    wall_floor: 0.12
+  # --smoke: the same procedure on model-made logs (no Gazebo needed), 30 s holds.
+  smoke_segments:
+    - name: free_8ms
+      kind: free
+      window_s: [10.0, 40.0]
+      synthetic: &syn
+        seed: 3
+        hold_point: [-30.0, 0.0, 2.5]
+        duration_s: 30.0
+        rate_hz: 100.0
+        wall_point: [0.0, 0.0, 0.0]
+        wall_normal: [-1.0, 0.0, 0.0]
+        disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, num_gusts: 0, turb_sigma: 0.8,
+                      turb_tau: 1.5, k_quad: 0.032, wall_decay: 1.4, wall_floor: 0.12}
+    - {name: wall_0.75m, kind: wall, distance_m: 0.75, window_s: [10.0, 40.0],
+       synthetic: {<<: *syn, hold_point: [-0.75, 0.0, 2.5]}}
+    - {name: wall_1.5m, kind: wall, distance_m: 1.5, window_s: [10.0, 40.0],
+       synthetic: {<<: *syn, hold_point: [-1.5, 0.0, 2.5]}}
+    - {name: wall_3m, kind: wall, distance_m: 3.0, window_s: [10.0, 40.0],
+       synthetic: {<<: *syn, hold_point: [-3.0, 0.0, 2.5]}}
+smoke:
+  fit: {k_quad: 0.032, min_segment_s: 10.0}

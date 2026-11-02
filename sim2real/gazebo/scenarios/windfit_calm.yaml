@@ -1,0 +1,16 @@
+# Wind fit check (eval/fit_wind.py, docs/wind-fit.md): the calm hold, no wind at all, 20 m
+# from the wall. It gives the accelerometer's own x and y offset, which the fit removes from
+# every other hold, as the fan rig's calm case does.
+name: windfit_calm
+seed: 3
+spawn: {x: -20.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 20 m out: free air
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0
+disturbance:
+  mean_speed: 0.0
+  num_gusts: 0
+  turb_sigma: 0.0
+  k_quad: 0.032
+  wall_decay: 1.4
+  wall_floor: 0.12
+hover: {altitude: 2.5, hover_s: 60.0}

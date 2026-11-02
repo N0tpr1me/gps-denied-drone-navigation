@@ -69,11 +69,14 @@ piece):
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from envs.sims.torch_quad import GRAVITY
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------- gz x500 sources
 X500_BASE_MASS = 2.0
@@ -196,8 +199,27 @@ AIRFRAMES = {
 }
 
 
+def _tuples(value: Any) -> Any:
+    """YAML lists back to the tuples the config dataclasses hold."""
+    if isinstance(value, dict):
+        return {k: _tuples(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return tuple(_tuples(v) for v in value)
+    return value
+
+
 def airframe_config(name: str) -> dict[str, Any]:
-    """The config mapping of a named airframe (a fresh copy)."""
+    """The config mapping of a named airframe (a fresh copy), or of a YAML file of the same
+    shape (a name ending in ``.yaml``, relative to the repo root unless absolute), such as
+    the ``airframe.yaml`` that ``eval/fit_airframe.py`` writes for a customer's drone."""
+    if name.endswith((".yaml", ".yml")):
+        import yaml
+
+        path = Path(name) if Path(name).is_absolute() else REPO_ROOT / name
+        data = yaml.safe_load(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: expected an airframe mapping")
+        return _tuples(data)
     if name not in AIRFRAMES:
         raise ValueError(f"unknown airframe {name!r}; known: {sorted(AIRFRAMES)}")
     return AIRFRAMES[name]()

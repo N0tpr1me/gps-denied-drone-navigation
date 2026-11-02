@@ -10,6 +10,10 @@ follows, from building our module into their firmware to sending us flight logs 
 own scoring code reads. Every step points at the script or document it uses, so nothing in
 here is a second copy of a number that lives elsewhere.
 
+The module's interface (topics, modes, trips, every parameter, ground-station messages,
+resource budget) is `docs/integration-guide.md`; the hazards and what covers each one are
+in the safety manual, `docs/safety-manual.md`.
+
 ## What Structure Hold is, in one paragraph
 
 A PX4 flight mode ("Structure Hold", external mode 1) that holds a multicopter 1 to 3 m
