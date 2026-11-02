@@ -72,7 +72,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/docker/` | PX4 SITL + Gazebo image (`run.sh build|hover-test|sitl|shell`) |
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...), scripted field faults (`field_faults.py`: VIO reset, restart, silence, freeze, drift; `field_*` profiles, `docs/field-faults.md`) |
-| `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts, `boards/structurehold.px4board` (multicopter-only variant that fits a 2 MB flight controller) |
+| `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, keep-out (`KeepOut.hpp`), header exporter, SIH and Gazebo flight scripts, `boards/structurehold.px4board` (multicopter-only variant that fits a 2 MB flight controller) |
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
@@ -118,7 +118,8 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
-# also test_params.cpp and test_handback.cpp, same flags (sim2real/px4/README.md "Unit tests")
+# also test_params.cpp, test_handback.cpp, test_range_hover.cpp and test_keep_out.cpp, same flags
+# (sim2real/px4/README.md "Unit tests")
 
 # GPU server, once (docs/gpu-server.md): env, tests, smoke runs, SITL image, parallel check
 bash training/server_setup.sh
@@ -176,6 +177,11 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   freeze and drift flown vs tuned PX4; `SH_HB_RANGE` (on by default since 2026-11-02) keeps
   Structure Hover off the wall on the rangefinder alone when the position estimate is gone,
   and `SH_WD_FRZ_T` (1 s, on by default since 2026-11-02) trips on a VIO fix that stops moving.
+  Keep-out (Nov 2026, `KeepOut.hpp`, `SH_KO_DIST`, -1 follows PX4's `CP_DIST`): PX4's
+  collision-prevention data (`obstacle_distance`, side-facing `distance_sensor`s) keeps the
+  hold point of all three modes that far from obstacles other than the structure; not
+  avoidance. `structurehold.px4board` also drops the Septentrio GNSS driver so the fmu-v6x
+  build still fits (99.5 %).
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
