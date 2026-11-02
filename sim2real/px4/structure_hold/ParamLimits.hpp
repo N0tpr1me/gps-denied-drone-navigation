@@ -77,6 +77,9 @@ static constexpr IntRange SH_LAND_EN{0, 1, 1};
 static constexpr IntRange SH_HB_GUARD{0, 1, 1};
 static constexpr IntRange SH_HB_RANGE{0, 1, 1};
 
+// Ground station (PilotStatus.hpp)
+static constexpr FloatRange SH_GCS_PER{0.0f, 60.0f, 10.0f};
+
 // Not ours: PX4's hover thrust (MPC_THR_HOVER, or hover_thrust_estimate). Outside this the
 // thrust scaling of every controller here is wrong by more than any airframe needs.
 static constexpr FloatRange HOVER_THRUST{0.1f, 0.9f, 0.5f};

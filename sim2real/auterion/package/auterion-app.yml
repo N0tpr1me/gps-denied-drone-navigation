@@ -1,0 +1,15 @@
+# AuterionOS app manifest for Structure Hold (docs/auterion-app.md). Built by
+# `auterion-cli app build` in the folder stage_app.sh writes, which holds this file, the
+# Dockerfile, the app's sources and the module headers it shares with the PX4 module.
+# app-author is a placeholder until the company's reverse-domain id is chosen.
+auterion-api-version: 3
+auterion-app-base: v2
+
+app-name: structure-hold
+app-author: com.structurehold
+app-version: 0.1.0
+target-platform: skynode
+
+services:
+  structure-hold:
+    build: .
