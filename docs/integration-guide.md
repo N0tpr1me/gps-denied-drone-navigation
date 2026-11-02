@@ -280,7 +280,10 @@ must do, is the safety manual, `docs/safety-manual.md`.
 1. Send us the airframe sheet, parameter dump and one logging flight (`docs/partner-pack.md`,
    step 0). We check your drone against the training range, with the airframe fit.
 2. Build the module into your firmware (step 1); `structure_hold status` says `standby`.
-3. Check EKF2, the forward rangefinder and the `SH_` parameters (step 2).
+3. Check EKF2, the forward rangefinder and the `SH_` parameters (step 2). Run
+   `python -m eval.log_health <flight.ulg>` on one flight log: it says in plain English whether
+   EKF2 really fuses your VIO, in the right frame, with the right heading source and
+   `EKF2_EV_DELAY` (`docs/log-health.md`).
 4. Bench test, props off (step 3, `docs/bench-test.md`).
 5. Tethered checks with tight watchdog limits (step 4).
 6. Scored sessions against your own tuned stock PX4 (steps 5 and 6).

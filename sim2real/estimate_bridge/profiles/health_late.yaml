@@ -1,0 +1,8 @@
+# Log health check test flight (eval/log_health.py, docs/log-health.md): a VIO 300 ms late while EKF2_EV_DELAY stays 100 ms: the check must say set about 300 ms.
+# No noise, bias, jump or dropout, so the only thing wrong is the one mistake on purpose.
+name: health_late
+seed: 1
+estimate: {delay_min_s: 0.3, delay_max_s: 0.3, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0,
+           bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0,
+           dropout_rate_hz: 0.0}
+frame_mistake: null

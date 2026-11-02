@@ -9,6 +9,7 @@ from envs.frames import enu_to_ned, flu_to_frd, ned_to_enu
 from sim2real.estimate_bridge.bridge import (
     TRACE_COLUMNS,
     EstimateBridge,
+    FrameMistake,
     Rangefinder,
     TraceWriter,
     odometry_ned,
@@ -98,6 +99,28 @@ def test_odometry_is_ned():
     p, v = odometry_ned(s)
     np.testing.assert_array_equal(p, [2.0, 1.0, -3.0])
     np.testing.assert_array_equal(v, 0.0)
+
+
+def test_frame_mistakes_change_only_what_goes_to_px4():
+    b = EstimateBridge(EstimateCorruptionConfig.clean(), DT, 0)
+    s = b.update(0.0, [1.0, 2.0, 3.0])  # ENU: 1 m east, 2 m north, 3 m up
+    p, _ = odometry_ned(s, FrameMistake("enu_as_ned"))
+    np.testing.assert_array_equal(p, [1.0, 2.0, 3.0])
+    # VIO x axis pointing east (NED yaw 90 deg): north becomes -y, east becomes +x
+    p, _ = odometry_ned(s, FrameMistake("yaw_offset", 90.0))
+    np.testing.assert_allclose(p, [1.0, -2.0, -3.0], atol=1e-12)
+    np.testing.assert_array_equal(s.est_pos, [1.0, 2.0, 3.0])  # the trace keeps the truth
+    with pytest.raises(ValueError):
+        FrameMistake("upside_down")
+
+
+def test_health_profiles_load_with_their_mistakes():
+    good, yaw = load_profile("health_good"), load_profile("health_yaw90")
+    assert good.frame_mistake is None and good.estimate.delay_min_s == 0.1
+    assert yaw.frame_mistake == FrameMistake("yaw_offset", 90.0)
+    assert load_profile("health_enu_as_ned").frame_mistake.kind == "enu_as_ned"
+    assert load_profile("health_late").estimate.delay_max_s == 0.3
+    assert EstimateProfile.from_dict(yaw.to_dict()) == yaw
 
 
 def test_trace_round_trips_and_verifies(tmp_path):

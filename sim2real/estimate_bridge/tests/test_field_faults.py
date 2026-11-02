@@ -83,6 +83,61 @@ def test_drift_ramps_then_holds():
     assert err[-1] == pytest.approx([0.2, 0.0, 0.0])  # held after 4 s
 
 
+DEGRADE = {"kind": "degrade", "at_s": 2.0, "duration_s": 6.0, "ramp_s": 2.0, "noise_m": 0.05,
+           "vel_noise_mps": 0.2, "walk_mps": 0.1, "loss_hz": 0.5, "loss_s": 0.4,
+           "range_noise_m": 0.05, "range_loss_frac": 0.2, "range_short_frac": 0.1}
+
+
+def test_degrade_adds_noise_losses_and_a_walk_that_stays():
+    t, pos, out = fly([DEGRADE], n=800)
+    a, b = int(round(2.0 / DT)), int(round(8.0 / DT))
+    err = np.array([s.est_pos - p for s, p in zip(out, pos, strict=True)])
+    assert np.all(err[:a] == 0)  # clean until the fault
+    early, late = err[a:a + 25], err[b - 50:b]
+    assert np.abs(early).std() < np.abs(late).std()  # the ramp: worse as it goes on
+    assert np.abs(late).max() > 0.05 and np.abs(late).max() < 1.0
+    vel_err = np.array([np.abs(s.est_vel[2]) for s in out[b - 50:b]])  # truth hovers
+    assert vel_err.max() > 0.1
+    losses = [i for i in range(a, b) if not out[i].publish]
+    assert losses and all(out[i].publish for i in range(0, a))
+    assert all(s.publish for s in out[b:])  # tracking is back after the window
+    after = err[b:]
+    assert np.all(after == after[0]) and np.linalg.norm(after[0]) > 0  # the walk is kept
+
+
+def test_degrade_is_reproducible_from_the_seed_and_differs_across_seeds():
+    def run(seed):
+        prof = EstimateProfile.from_dict({"name": "t", "seed": seed, "estimate": "clean",
+                                          "field_faults": [DEGRADE]})
+        b = prof.bridge()
+        t, pos = climb_then_hover(500)
+        return np.array([b.update(ti, p).est_pos for ti, p in zip(t, pos, strict=True)])
+    np.testing.assert_array_equal(run(3), run(3))
+    assert np.abs(run(3) - run(4)).max() > 0
+
+
+def test_degrade_spoils_the_rangefinder_without_touching_the_estimate_replay(tmp_path):
+    prof = EstimateProfile.from_dict({"name": "t", "seed": 2, "field_faults": [DEGRADE]})
+    b = prof.bridge()
+    t, pos = climb_then_hover(500)
+    path = tmp_path / "trace.csv"
+    w = TraceWriter(path)
+    readings = []
+    for ti, p in zip(t, pos, strict=True):
+        w.write(b.update(ti, p))
+        readings.append(b.field_faults.range_reading(1.0, 0.1, b.t_rel(ti)))
+    w.close()
+    assert verify(prof, path)["ok"]  # the range draws are a separate stream
+    a = int(round(2.0 / DT))
+    assert all(r == 1.0 for r in readings[:a])
+    window = readings[a + 150:]
+    assert any(r is None for r in window)  # lost returns
+    assert any(r is not None and r < 0.7 for r in window)  # short returns
+    assert any(r is not None and 0.9 < r < 1.3 and r != 1.0 for r in window)  # noise
+    assert all(r is None or r >= 0.1 for r in window)
+    assert b.field_faults.range_reading(None, 0.1, 5.0) is None
+
+
 def test_engage_anchor_times_faults_from_the_engage_only():
     t, pos, out = fly([{"kind": "silence", "at_s": 1.0, "duration_s": 1.0}],
                       anchor="engage", engage_at=6.0)
@@ -125,6 +180,12 @@ def test_profile_round_trips_field_faults():
     {"kind": "reset_origin", "at_s": 1, "axes": "xw"},
     {"kind": "drift", "at_s": 1, "duration_s": 2, "rate_mps": 0.1, "direction": [0, 0, 0]},
     {"kind": "reset_origin", "at_s": 1, "colour": "red"},
+    {"kind": "degrade", "at_s": 1, "duration_s": 2},  # no effect
+    {"kind": "degrade", "at_s": 1, "duration_s": 2, "loss_hz": 1},  # loss needs a length
+    {"kind": "degrade", "at_s": 1, "duration_s": 2, "noise_m": -0.1},
+    {"kind": "degrade", "at_s": 1, "duration_s": 2, "range_loss_frac": 0.6,
+     "range_short_frac": 0.6},
+    {"kind": "silence", "at_s": 1, "duration_s": 2, "noise_m": 0.1},  # degrade only
 ])
 def test_bad_field_faults_are_rejected(bad):
     with pytest.raises(ValueError):
@@ -132,7 +193,7 @@ def test_bad_field_faults_are_rejected(bad):
 
 
 @pytest.mark.parametrize("name", ["field_reset", "field_restart", "field_silence",
-                                  "field_freeze", "field_drift"])
+                                  "field_freeze", "field_drift", "field_degrade"])
 @pytest.mark.parametrize("runner", ["engage", "hover"])
 def test_shipped_field_profiles_pair_up(name, runner):
     """Each field fault ships as a hold-runner and a stock-runner profile that differ only in

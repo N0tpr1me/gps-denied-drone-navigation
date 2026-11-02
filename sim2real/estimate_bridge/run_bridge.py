@@ -163,7 +163,7 @@ class Bridge:
             self.engaged = engaged
 
     def send(self, sample) -> None:
-        p, v = odometry_ned(sample)
+        p, v = odometry_ned(sample, self.profile.frame_mistake)
         self.mav.mav.odometry_send(
             int(round(sample.t * 1e6)),
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
@@ -180,6 +180,9 @@ class Bridge:
         q = pose.orientation
         r = self.rangefinder.range_m((pose.position.x, pose.position.y, pose.position.z),
                                      (q.w, q.x, q.y, q.z))
+        # A degrade fault (dust, fog) spoils the range too; before the anchor nothing applies.
+        r = self.bridge.field_faults.range_reading(r, self.rangefinder.min_m,
+                                                  self.bridge.t_rel(t))
         if r is None:
             return
         self.mav.mav.distance_sensor_send(
