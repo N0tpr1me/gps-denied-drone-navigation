@@ -15,7 +15,8 @@ params:
   history: 3
   sim: torch
   save_interval: 50
-  resume: null
+  # Chained: the first 1000 iterations were run 20261102-015210 (resume: null).
+  resume: runs/20261102-015210_route_follow_ppo_worlds_scratch_s2_7aeac4e/policy.pt
   env:
     airframe: gz_x500_sitl
     episode_length_s: 30.0
