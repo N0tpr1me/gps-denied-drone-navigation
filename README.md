@@ -35,6 +35,7 @@ pier, the underside of a bridge deck) in gusts, without GPS.
 | Gate 1 (simulator) | **Passed** on the x500 through an EKF2-like estimator, normal and stress test sets, against a classical PD controller (`docs/gate1.md`). Customer interviews, the other half of Gate 1, are still open. |
 | Gate 2 (PX4 Gazebo SITL vs tuned PX4) | On barometer height, 8 seeds, 3 wind cases: v22 holds **43 to 45 % tighter** than tuned PX4 (95th-percentile hold error) and comes 46 to 65 % less close to the wall, with 0 crashes (`docs/baseline.md`). |
 | Field failures | The failures integrators actually report (VIO reset to zero, VIO restart, link loss, a frozen estimate, slow drift) are scripted and flown in Gazebo against tuned PX4 (`docs/field-faults.md`). |
+| Evaluation kit | `./evaluate.sh` flies all five field failures with Structure Hold and with tuned PX4 in one command and prints the comparison table; a partner's real flight session becomes a one-page benchmark report (`docs/eval-kit.md`). |
 | Wall-distance hover | `SH_HB_RANGE`, **on by default**: if the position estimate is lost next to a measured wall, the drone keeps hovering at its distance from the wall on the rangefinder alone instead of drifting. |
 | Frozen-fix trip | `SH_WD_FRZ_T` (1 s), **on by default**: the watchdog trips when the VIO keeps sending a position that has stopped moving. |
 | Pilot warnings | Every trip, refused engage and wall-guard action is sent to the ground station (QGroundControl) as a plain-English message, with the reason and the parameter behind it. |

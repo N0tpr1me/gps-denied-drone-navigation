@@ -53,4 +53,10 @@ python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu  
 - `baselines/autotune.py` (+ `autotune_flight.py`, in the image): PX4's attitude autotune,
   GPS-free.
 
-Planned: `report.py`.
+- `field_faults.py`: scores Gazebo flights flown on the scripted field faults
+  (`docs/field-faults.md`).
+- `eval_kit.py` (run by `../evaluate.sh`): the evaluation kit, the five field faults flown
+  with Structure Hold and with tuned PX4 in one command, one comparison table
+  (`docs/eval-kit.md`).
+- `partner_session.py` + `partner_report.py`: score a partner's real flight session and turn
+  it into a one-page benchmark report (`docs/partner-pack.md`, `docs/eval-kit.md`).

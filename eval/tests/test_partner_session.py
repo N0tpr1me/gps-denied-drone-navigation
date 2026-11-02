@@ -165,3 +165,24 @@ def test_the_partner_template_parses(tmp_path):
     assert {e["file"] for e in result["errors"]} == {"01_tuned_calm_1.ulg",
                                                     "02_hold_calm_1.ulg"}
     assert result["session"]["wall"]["normal"] == [1.0, 0.0, 0.0]
+
+
+def test_a_refused_engage_before_the_hold_is_skipped():
+    """The module refuses to engage on the ground: nav_state flicks to External 1 for one
+    sample and back. The scored hold is the first real stretch."""
+    topics = flight()
+    vs = topics["vehicle_status"]
+    ts = (vs["timestamp"] - START_US) * 1e-6
+    vs["nav_state"] = np.where(np.isclose(ts, 3.0), NAV_EXTERNAL1, vs["nav_state"])
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, SESSION)
+    assert row["window_s"] == pytest.approx([22.0, 80.0]) and not row["ended_early"]
+
+
+def test_hold_mode_on_the_ground_before_arming_is_not_the_hold():
+    """PX4's SITL sits in Hold mode on the ground; the scored hold is the one flown."""
+    topics = flight("tuned_px4")
+    vs = topics["vehicle_status"]
+    ts = (vs["timestamp"] - START_US) * 1e-6
+    vs["nav_state"] = np.where(ts < 6.0, NAV_AUTO_LOITER, vs["nav_state"])  # armed at 5 s
+    row = score_run(topics, START_US, {**RUN, "controller": "tuned_px4"}, SESSION)
+    assert row["window_s"] == pytest.approx([22.0, 80.0])

@@ -41,6 +41,7 @@ import yaml
 
 from eval.baselines.run_baseline import aggregate, compare, table
 from eval.metrics import Surface, compute_metrics
+from eval.partner_report import git_commit, render
 from eval.ulog import (
     GROUNDTRUTH,
     MOCAP,
@@ -69,18 +70,38 @@ def seconds(msg: dict[str, np.ndarray], start_us: int) -> np.ndarray:
     return (np.asarray(msg["timestamp"], dtype=np.int64) - int(start_us)) * 1e-6
 
 
-def mode_stretch(status: dict[str, np.ndarray], start_us: int, nav_state: int
-                 ) -> tuple[float, float, int] | None:
-    """(start, end, index after the end) of the first stretch in ``nav_state``, log seconds.
-    The end is the first sample in another mode, or the last sample of the log."""
+def mode_stretch(status: dict[str, np.ndarray], start_us: int, nav_state: int,
+                 min_s: float = 0.0) -> tuple[float, float, int] | None:
+    """(start, end, index after the end) of the first stretch in ``nav_state`` that starts
+    once the vehicle is armed and lasts longer than ``min_s``, log seconds. The end is the
+    first sample in another mode, or the last sample of the log. Shorter stretches are
+    refused engages (the module refuses on the ground or without a usable range and hands
+    straight back), and a stretch before arming is the mode the drone sat in on the ground
+    (Hold, in PX4's SITL), not holds."""
     t = seconds(status, start_us)
     inside = np.asarray(status["nav_state"]) == nav_state
-    if not inside.any():
-        return None
-    a = int(np.argmax(inside))
-    rest = np.flatnonzero(~inside[a:])
-    b = a + int(rest[0]) if rest.size else len(t)
-    return float(t[a]), float(t[b] if b < len(t) else t[-1]), b
+    a, first = 0, None
+    if "arming_state" in status:
+        armed = np.flatnonzero(np.asarray(status["arming_state"]) == ARMING_STATE_ARMED)
+        if armed.size:
+            a = int(armed[0])
+            # A stretch already running at arming started on the ground: skip it.
+            while a < len(t) and inside[a]:
+                a += 1
+    while a < len(t):
+        start = np.flatnonzero(inside[a:])
+        if not start.size:
+            break
+        a += int(start[0])
+        rest = np.flatnonzero(~inside[a:])
+        b = a + int(rest[0]) if rest.size else len(t)
+        stretch = float(t[a]), float(t[b] if b < len(t) else t[-1]), b
+        first = first or stretch
+        if stretch[1] - stretch[0] > min_s:
+            return stretch
+        a = b
+    # Only blips: return the first, so the caller reports how short it was.
+    return first
 
 
 def armed_at(status: dict[str, np.ndarray], start_us: int) -> float | None:
@@ -129,7 +150,7 @@ def score_run(topics: Topics, start_us: int, run: dict[str, Any], session: dict[
     nav = NAV_EXTERNAL1 if controller == "structure_hold" else (
         NAV_POSCTL if session.get("baseline_mode") == "position" else NAV_AUTO_LOITER)
     vs = topics[VEHICLE_STATUS]
-    stretch = mode_stretch(vs, start_us, nav)
+    stretch = mode_stretch(vs, start_us, nav, min_s=settle_s + 1.0)
     if stretch is None:
         raise ValueError(f"the log never enters nav_state {nav} ({controller})")
     m0, m1, after = stretch
@@ -256,7 +277,11 @@ def main(argv: list[str] | None = None) -> int:
     (out / "session_summary.json").write_text(json.dumps(result, indent=2, default=str))
     text = report(result)
     (out / "report.md").write_text(text)
+    # The one-page report reads the same numbers, as session_summary.json holds them.
+    plain = json.loads(json.dumps(result, default=str))
+    (out / "benchmark_report.html").write_text(render(plain, git_commit()))
     print(text)
+    print("one-page report:", out / "benchmark_report.html")
     return 1 if result["errors"] else 0
 
 
