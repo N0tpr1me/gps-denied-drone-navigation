@@ -163,7 +163,7 @@ class Bridge:
             self.engaged = engaged
 
     def send(self, sample) -> None:
-        p, v = odometry_ned(sample)
+        p, v = odometry_ned(sample, self.profile.frame_mistake)
         self.mav.mav.odometry_send(
             int(round(sample.t * 1e6)),
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,

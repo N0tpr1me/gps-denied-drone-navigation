@@ -288,8 +288,53 @@ class Rangefinder:
         return cls(**d)
 
 
-def odometry_ned(sample: BridgeSample) -> tuple[np.ndarray, np.ndarray]:
-    """Position and velocity of the estimate in NED, for the ODOMETRY message."""
+@dataclass(frozen=True)
+class FrameMistake:
+    """An integration mistake made on purpose at the MAVLink boundary, so the log health
+    check (``eval/log_health.py``) can be tested on real PX4 logs: ``enu_as_ned`` sends the
+    ENU numbers in the NED fields (the classic one); ``yaw_offset`` sends a VIO frame whose
+    x axis is ``yaw_deg`` from north (clockwise seen from above, a NED yaw) while still
+    declaring NED. Only what goes to PX4 changes; the trace keeps the true estimate."""
+
+    kind: str
+    yaw_deg: float = 0.0
+
+    KINDS = ("enu_as_ned", "yaw_offset")
+
+    def __post_init__(self) -> None:
+        if self.kind not in self.KINDS:
+            raise ValueError(f"frame mistake kind must be one of {self.KINDS}")
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FrameMistake:
+        unknown = set(d) - {"kind", "yaw_deg"}
+        if unknown:
+            raise ValueError(f"unknown frame mistake keys: {sorted(unknown)}")
+        return cls(kind=str(d["kind"]), yaw_deg=float(d.get("yaw_deg", 0.0)))
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "yaw_deg": self.yaw_deg}
+
+    def apply(self, enu: np.ndarray) -> np.ndarray:
+        """What is sent in the NED fields for an ENU vector."""
+        if self.kind == "enu_as_ned":
+            return np.asarray(enu, dtype=np.float64).copy()
+        ned = enu_to_ned(enu)
+        # coordinates in a frame whose x axis has NED yaw yaw_deg: rotate by -yaw_deg
+        y = np.radians(self.yaw_deg)
+        c, s = np.cos(y), np.sin(y)
+        out = ned.copy()
+        out[0] = c * ned[0] + s * ned[1]
+        out[1] = -s * ned[0] + c * ned[1]
+        return out
+
+
+def odometry_ned(sample: BridgeSample, mistake: FrameMistake | None = None
+                 ) -> tuple[np.ndarray, np.ndarray]:
+    """Position and velocity of the estimate in NED, for the ODOMETRY message (or, with a
+    ``mistake``, what a wrongly wired VIO would send instead)."""
+    if mistake is not None:
+        return mistake.apply(sample.est_pos), mistake.apply(sample.est_vel)
     return enu_to_ned(sample.est_pos), enu_to_ned(sample.est_vel)
 
 
