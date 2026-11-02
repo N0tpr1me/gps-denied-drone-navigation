@@ -1,0 +1,8 @@
+# Log health check test flight (eval/log_health.py, docs/log-health.md): a VIO whose frame is turned 90 deg from north but declared NED.
+# No noise, bias, jump or dropout, so the only thing wrong is the one mistake on purpose.
+name: health_yaw90
+seed: 1
+estimate: {delay_min_s: 0.1, delay_max_s: 0.1, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0,
+           bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0,
+           dropout_rate_hz: 0.0}
+frame_mistake: {kind: yaw_offset, yaw_deg: 90}

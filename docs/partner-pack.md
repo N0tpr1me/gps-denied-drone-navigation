@@ -121,6 +121,13 @@ depends on them (`sim2real/estimate_bridge/ekf2_ev.params` is what our benchmark
 The VIO must reach PX4 as `ODOMETRY` with `estimator_type` VISION or VIO (it is logged as
 `vehicle_visual_odometry`, which the module also uses to tell a fresh fix from a stale one).
 
+Before any Structure Hold flight we run the log health check on your logging flight
+(`python -m eval.log_health flight.ulg`, `docs/log-health.md`). It reads the one log and says
+whether EKF2 fuses the VIO, whether the VIO's frame matches the IMU and compass (ENU sent as
+NED, a mirrored axis or a frame turned from north all show up), where the heading comes from,
+and how late the VIO really is against `EKF2_EV_DELAY`, with the value to set. A climb of a
+metre or two and a few metres side to side give it enough motion.
+
 ### Forward rangefinder (required)
 
 The wall guard needs a rangefinder pointing straight ahead along the body x axis, seen by
