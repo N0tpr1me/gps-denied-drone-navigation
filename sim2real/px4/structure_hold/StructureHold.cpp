@@ -1038,8 +1038,11 @@ void StructureHold::guardedStep(const hrt_abstime now)
 	// away from the wall.
 	const float dt = CONTROL_INTERVAL * 1e-6f;
 	_guard_speed += (_wall_out.shift_m / dt - _guard_speed) * (dt / (GUARD_SPEED_TAU_S + dt));
-	const float vx = -_guard_speed * cosf(_setpoint.yaw);
-	const float vy = -_guard_speed * sinf(_setpoint.yaw);
+	// And when PX4's loop carries the vehicle itself inside the standoff anyway (past the
+	// guarded point), a back-off on the measured range (WallGuard::backOffSpeed).
+	const float away = _guard_speed + _wall_guard.backOffSpeed(_wall_out);
+	const float vx = -away * cosf(_setpoint.yaw);
+	const float vy = -away * sinf(_setpoint.yaw);
 
 	if (descend) {
 		// Slow the descent while the vehicle is still closer to the wall than the guarded
