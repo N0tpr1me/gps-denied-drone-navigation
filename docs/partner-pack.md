@@ -75,9 +75,11 @@ That is more than a stock build has spare. On a Pixhawk 6C (`px4_fmu-v6c_default
 stock firmware plus the module overflows flash by 87 KB. So build a multicopter-only
 variant: `sim2real/px4/boards/structurehold.px4board` drops the fixed-wing, VTOL and
 airspeed modules (as PX4's own `fmu-v6x/multicopter.px4board` does), PX4's built-in
-simulator, the MSP OSD driver and precision landing on a beacon, and turns the module on.
-We built it on 2026-11-01, with the module as of that day, for the Pixhawk 6C (96 % of flash used) and the Pixhawk 6X
-(99.7 %, about 6 KB spare). On another board, tell us and we check it fits.
+simulator, the MSP OSD driver, precision landing on a beacon and the Septentrio GPS driver,
+and turns the module on. We built it on 2026-11-02, with the module as of that day (keep-out
+and pilot status included), for the Pixhawk 6C (95.6 % of flash used) and the Pixhawk 6X (99.0 %, about
+19 KB spare). If your drone flies GPS or RTK from a Septentrio receiver, tell us: the
+driver goes back in (about 14 KB, which still fits the 6X). On another board, tell us and we check it fits.
 
 ```bash
 git clone --depth 1 --branch v1.17.0 --recurse-submodules https://github.com/PX4/PX4-Autopilot.git
@@ -138,6 +140,17 @@ for height is fine alongside it; the module skips it.
 
 **Check:** `listener distance_sensor` on the shell shows a sample with `orientation: 0`
 whose `current_distance` follows a board you move in front of the drone.
+
+### Obstacle sensors (optional)
+
+If your drone already has PX4 collision prevention set up (a 360 deg lidar such as the
+LightWare SF45, `OBSTACLE_DISTANCE` from a companion, or side-facing rangefinders, with
+`CP_DIST` set), Structure Hold honours it: the hold point stays at least `CP_DIST` from any
+obstacle those sensors see, other than the structure itself (`SH_KO_DIST` -1, the default,
+follows `CP_DIST`; set `SH_KO_DIST` to use another distance inside the hold, 0 to turn it
+off). It is a keep-out, not avoidance (`docs/integration-guide.md`, inputs).
+
+**Check:** `structure_hold status` prints `keep-out: <d> m ... obstacle data fresh`.
 
 ### Truth for scoring (mocap)
 

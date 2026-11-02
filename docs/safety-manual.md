@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.5, ready for sign-off (section 8); 1.0 to 1.4 were not signed |
+| Version | 1.6, ready for sign-off (section 8); 1.0 to 1.5 were not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged) and the height-reference value of 1.4: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`) and the keep-out of 1.6: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -59,6 +59,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Height source | Barometer (`EKF2_HGT_REF` 0) or a downward rangefinder (2). **Not vision** (3, see F5), and not GPS (1, PX4's default) | `eval/baselines/px4_tuned_v2.params`, `docs/field-faults.md` |
 | GPS | Off, or on (a GPS or RTK receiver fused by EKF2 beside the VIO) **with the forward rangefinder and `SH_WALL_REQ` 1**: with GPS on, the rangefinder is the only thing that keeps the drone off the wall when the GPS solution moves (F27, F36 to F38). The benchmark numbers are GPS-off | `docs/field-faults.md`, "GPS on"; `docs/decisions.md` 2026-11-02 |
 | Forward rangefinder | Required for the wall guard and the guarded modes: a forward-facing `distance_sensor` that reads 0.3 to 5 m on the wall | `docs/partner-pack.md` step 2 |
+| Obstacle sensors | Optional: PX4 collision-prevention data (`obstacle_distance` from a 360 deg lidar or a companion, side-facing `distance_sensor`s). With them the keep-out holds the hold point `SH_KO_DIST` (default: PX4's `CP_DIST`) from obstacles other than the structure. Tested in SIH with one simulated lidar and one pole | `docs/decisions.md` (keep-out row), `sitl_test.py --keep-out` |
 | Distance from the structure | Engage 1 to 3 m from it, facing it (nose within 35 deg of square to the wall) | Gate 1 and Gate 2 scenarios |
 | Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
 | Estimate faults trained on | Delay 50 to 150 ms, noise, slow bias drift, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
@@ -99,6 +100,7 @@ Each layer works without the one above it. Only the first contains learning.
 | Watchdog | In Structure Hold it trips on: a test fault, an invalid estimate (EKF2 flags or a NaN), a stale estimate (`SH_WD_EST_TO`, 5 s), a frozen fix (`SH_WD_FRZ_T`, 1 s), tilt (`SH_WD_TILT`, 45 deg), hold error (`SH_WD_POS_ERR`, 2 m). In Structure Hover on the rangefinder alone it trips when the range is lost for 0.5 s. A trip latches until disarm | No |
 | Handback order | Decided rows, pinned by `test_handback.cpp`. Next to a measured wall: Structure Hover (with `SH_HB_RANGE` 1 also when the position estimate is gone). Otherwise Position mode (Altitude mode if there is no horizontal estimate), then Hold, then Land, with Land asked for again until it takes. A trip in Structure Land goes to stock Land first | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says | No |
+| Keep-out | With collision-prevention sensors, the hold point (in all three modes) never comes closer than the keep-out to an obstacle they see; the structure ahead keeps `SH_WALL_MIN` instead. It only moves the point away, it does not avoid or plan | No |
 | Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point. With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
 | Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid or frozen estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
 | Parameter clamps | The module clamps every `SH_` parameter to its range (`ParamLimits.hpp`); PX4 itself does not enforce limits | No |
@@ -115,6 +117,9 @@ Each layer works without the one above it. Only the first contains learning.
 | `Structure Hold: engage refused: <code> (<reason>)` | critical | The switch into the mode was refused, e.g. `landed (on the ground)` | Fix the cause; stay in your stock mode |
 | `Structure Hold: engage refused, EKF reset its position N s ago (SH_RST_HOLD N s)` | critical | `SH_RST_HOLD` is waiting out an EKF reset | Wait, then engage again |
 | `Structure Hold: wall guard moved the hold point X m back, to Y m from the wall` | warning | The estimate put the hold point too close to the measured wall; it was moved back | Check the VIO; expect the drone to step back |
+| `Structure Hold: keep-out moved the hold point X m, to Y m from the nearest obstacle` | warning | An obstacle seen by the collision-prevention sensors was inside the keep-out; the hold point moved away from it | Check what it is; expect the drone to step away |
+| `Structure Hold: keep-out has no room, holding between obstacles` | critical | Obstacles on both sides are closer together than twice the keep-out | Take Position mode and fly out |
+| `Structure Hold: keep-out X m is on but no obstacle data is coming in` | warning | At engage: the keep-out is set but no lidar scan or side range is arriving | Check the obstacle sensors, or set `SH_KO_DIST` 0 if the drone has none |
 | `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | warning | The brake-and-hover fallback started or ended (only if `SH_FB_EN` turns it on) | Watch the drift; take over if the fix does not come back |
 | `Structure Hold: policy produced a non-finite action` | critical | The last-step check replaced the output. It should never happen | Take Position mode and land; send the log |
 | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | warning | Bench-test setting left on | Props off. Set `SH_BENCH` 0 before any flight |
@@ -184,6 +189,16 @@ height, F27 over three seeds.
 | F37 | Short returns off dust, fog or spray in front of the sensor | Same air as F36 | The guard reads a close wall and moves the hold point back; the ratchet never brings it forward again, so a long cloud keeps pushing the drone away from the structure (it did, 0.6 to 0.95 m in 20 s, before the gate) | 3 | Spike gate on the guard (0.25 m, since 2026-11-02): a reading that far from the last accepted one waits for the next to agree, and counts as no range for the range hover | A lone short return moves nothing. Re-flown: the two seeds whose VIO did not walk toward the wall saw 0.00 to 0.02 m of shift (0.5 to 0.6 m before); the seed whose VIO did walk the drone toward the wall was backed off 0.6 m, which is the guard's job (F7). 0 of 6 touched, closest 0.82 m | 2: two consecutive short returns that agree within 0.25 m still pass | U, G (`field_degrade`, with and without the gate) |
 | F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | Follows what the range says | 3: keep inside the envelope | none |
 
+### Obstacle sensors (keep-out)
+
+| # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| F41 | An obstacle beside or behind the hold point, inside the keep-out | Engaged next to a pole, pipe or side wall; the estimate drifts toward it | Contact with something other than the wall | 4 | Keep-out on the collision-prevention sensors (`SH_KO_DIST`, or `CP_DIST` by default) | Moves the hold point straight away until it is the keep-out from the obstacle; warning. Without obstacle sensors nothing catches it | **2 with obstacle sensors, 4 without** | U, S (`--keep-out`: pole at 0.5 m, keep-out 1 m) |
+| F42 | Obstacles on two sides closer together than twice the keep-out | Narrow gap, corridor | Contact on either side | 4 | Keep-out has no room | Holds between them; critical message | 3: pilot flies out | U |
+| F43 | An obstacle keeps coming (a person walking up) | Moving obstacle | The hold point is pushed away with no limit, possibly toward something no sensor sees | 3 | Nothing beyond the first warning; the hold-error trip moves with the point | Keeps stepping away | 3: no people within 5 m (envelope) | U (ratchet) |
+| F44 | False obstacle points | Dust, spray, the drone's own props or legs in the lidar's view | A false push away from nothing | 2 | Bins at or below the sensor's minimum or at its maximum are ignored; scans over 0.5 s old are ignored | Moves away from the false point only | 2 | U |
+| F45 | Keep-out set but no obstacle data | Sensor unplugged, wrong MAVLink routing | No keep-out | 3 | Warning at engage | Holds as without the keep-out | As F36 without sensors | U |
+
 ### Controller and module
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
@@ -234,6 +249,7 @@ match the drone, and a policy trained on it being released for that drone.
 | `SH_WD_EST_TO` | 5 s | Keep | F4 |
 | `SH_WD_POS_ERR` | 2 m | 1 m for first flights | Earlier trips while building trust |
 | `SH_WD_TILT` | 45 deg | 30 deg for first flights | Earlier trips while building trust |
+| `SH_KO_DIST` | -1 | Keep -1 and set PX4's `CP_DIST` if the drone has collision-prevention sensors | F41 |
 | `SH_RST_HOLD` | 0 s | Operator choice | F9 (stock PX4 has the same settling problem) |
 | `SH_BENCH` | 0 | Always 0 in flight | Bench test only (`docs/bench-test.md`) |
 
@@ -253,6 +269,8 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   degrade, more seeds and a longer cloud are next.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
+- The keep-out (F41 to F45) is tested in unit tests and one SIH lidar case, not in Gazebo
+  or with a real lidar's noise.
 - The rest of the assurance pack in gap 4: an ASTM F3201 matrix, the argument for the
   learned part, a software bill of materials and a statement of origin.
 
@@ -276,11 +294,12 @@ signed again. Record each one below.
 | Version | Date | Commit | What changed | Signed by |
 | --- | --- | --- | --- | --- |
 | 1.0 | 2026-11-02 | `868aeb4` | First signed version: checked against the module after `SH_HB_RANGE` and `SH_WD_FRZ_T` went on by default | |
-| 1.1 | 2026-11-02 | this PR | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
-| 1.2 | 2026-11-02 | this PR | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
+| 1.1 | 2026-11-02 | `c308113` | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
+| 1.2 | 2026-11-02 | `def668f` | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
 | 1.3 | 2026-11-02 | `abc8fe7` | Envelope widened to GPS on with the rangefinder required (decision row 2026-11-02); F27 flown (GPS jump, 3 seeds, with and without the rangefinder) and F38 to F40 added (RTK float, loss and hand-over, glitch); `SH_WALL_REQ` 1 required with GPS on. No module change | |
-| 1.4 | 2026-11-02 | this PR | Sections 2 and 6: the barometer height reference is `EKF2_HGT_REF` 0, not 1 (PX4 v1.17 numbers 1 GPS; found by the log health check, `docs/log-health.md`); GPS added to the height sources not to use. No module change | |
-| 1.5 | 2026-11-02 | this PR | Spike gate on the wall guard (F13, F37): short returns off dust no longer move the hold point; `field_degrade` re-flown | |
+| 1.4 | 2026-11-02 | `b20dba6` | Sections 2 and 6: the barometer height reference is `EKF2_HGT_REF` 0, not 1 (PX4 v1.17 numbers 1 GPS; found by the log health check, `docs/log-health.md`); GPS added to the height sources not to use. No module change | |
+| 1.5 | 2026-11-02 | `9e0324e` | Spike gate on the wall guard (F13, F37): short returns off dust no longer move the hold point; `field_degrade` re-flown | |
+| 1.6 | 2026-11-02 | this PR | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
 
 ## Change control
 

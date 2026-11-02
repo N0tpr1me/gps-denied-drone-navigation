@@ -58,6 +58,17 @@ descent to judge it (Gazebo does, ``run_gazebo.py``). The same creep runs for ``
 right after the trip, when the handback has gone to Structure Hover (the guarded hover,
 SH_HB_GUARD), which must keep the same distance.
 
+With ``--keep-out`` a 360 deg lidar is simulated over MAVLink (OBSTACLE_DISTANCE at 10 Hz,
+72 bins of 5 deg, body frame, as a LightWare SF45 or a companion computer sends it) that
+sees one thin pole. The keep-out is set to ``--keep-out-m`` through PX4's own CP_DIST
+(SH_KO_DIST stays at its default -1, which follows it), or through SH_KO_DIST with
+``--keep-out-param sh``. The pole first stands ``--obstacle-far-m`` to the right of the
+hold point, beyond the keep-out: nothing may move. Then it jumps to ``--obstacle-m``, inside
+it: the hold point must move away (KeepOut.hpp), the vehicle must end at least the
+keep-out (less ``--wall-tol``) from the pole and still be in Structure Hold, and the ground
+station must get a "keep-out" warning. The ulog check then expects a nonzero
+keep_out_shift_m.
+
 Afterwards the ulog is checked for the structure_hold_status topic (states standby,
 engaged and handback all logged, with the test-fault trip reason).
 
@@ -103,6 +114,12 @@ LIVE_TRIP, LIVE_TRIP_COUNT = 9, 10
 # Broken forward-range readings for --range-faults: (centimetres, MAVLink signal_quality,
 # where 0 = unknown and 1 = invalid). Min 10 cm, max 1200 cm as in the wall's own readings.
 RANGE_FAULTS = [(0, 0), (5, 0), (2000, 0), (65535, 0), (50, 1)]
+# The simulated lidar for --keep-out: 72 bins of 5 deg (MAVLink OBSTACLE_DISTANCE), 0.2 to
+# 10 m; an empty bin reads max + 1 ("nothing there").
+LIDAR_BINS = 72
+LIDAR_MIN_CM = 20
+LIDAR_MAX_CM = 1000
+MAV_FRAME_BODY_FRD = 12
 
 
 @dataclass
@@ -150,6 +167,27 @@ class VirtualWall:
 
 
 @dataclass
+class VirtualPole:
+    """A thin pole at a fixed NED point, seen by a 360 deg lidar."""
+
+    north: float
+    east: float
+
+    def distance_m(self, tel: Telemetry) -> float:
+        return math.hypot(self.north - tel.north, self.east - tel.east)
+
+    def scan(self, tel: Telemetry) -> list[int]:
+        """72 body-frame bins (centimetres), the pole in the bin of its bearing."""
+        bins = [LIDAR_MAX_CM + 1] * LIDAR_BINS
+        bearing = math.atan2(self.east - tel.east, self.north - tel.north) - tel.yaw
+        i = round(math.degrees(bearing) / 5.0) % LIDAR_BINS
+        cm = int(round(self.distance_m(tel) * 100))
+        if LIDAR_MIN_CM < cm < LIDAR_MAX_CM:
+            bins[i] = cm
+        return bins
+
+
+@dataclass
 class Samples:
     hold_drift: list[float] = field(default_factory=list)
     hold_alt_err: list[float] = field(default_factory=list)
@@ -164,6 +202,9 @@ class Vehicle:
         self._last_joystick = 0.0
         self._last_heartbeat = 0.0
         self._last_range = 0.0
+        self._last_scan = 0.0
+        self.pole: VirtualPole | None = None
+        self.scans = 0
         self.wall: VirtualWall | None = None
         self.ranges: list[float] = []  # every range sent, for the wall checks
         self.stick_y = 0                # MANUAL_CONTROL y (roll), -1000..1000
@@ -183,6 +224,7 @@ class Vehicle:
             self._send_heartbeat()
             self._send_joystick()
             self._send_range()
+            self._send_scan()
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return
@@ -227,6 +269,19 @@ class Vehicle:
         self.m.mav.distance_sensor_send(boot_ms, 10, int(self.wall.max_m * 100),
                                         int(round(r * 100)), mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
                                         mavlink.MAV_SENSOR_ROTATION_NONE, 0)
+
+    def _send_scan(self) -> None:
+        """360 deg lidar at 10 Hz against the virtual pole, when there is one."""
+        if self.pole is None or math.isnan(self.tel.yaw):
+            return
+        if time.monotonic() - self._last_scan < 0.1:
+            return
+        self._last_scan = time.monotonic()
+        self.scans += 1
+        self.m.mav.obstacle_distance_send(int(time.monotonic() * 1e6),
+                                          mavlink.MAV_DISTANCE_SENSOR_LASER,
+                                          self.pole.scan(self.tel), 0, LIDAR_MIN_CM,
+                                          LIDAR_MAX_CM, 5.0, 0.0, MAV_FRAME_BODY_FRD)
 
     def _handle(self, msg) -> None:
         t = msg.get_type()
@@ -373,6 +428,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--moving-stick", type=int, default=700,
                    help="MANUAL_CONTROL roll stick before the moving engage (-1000..1000)")
     p.add_argument("--moving-push-s", type=float, default=2.0)
+    p.add_argument("--keep-out", action="store_true",
+                   help="simulate a 360 deg lidar seeing a pole beside the hold (keep-out check)")
+    p.add_argument("--keep-out-m", type=float, default=1.0, help="keep-out distance flown, m")
+    p.add_argument("--keep-out-param", choices=("cp", "sh"), default="cp",
+                   help="set it through PX4's CP_DIST (default) or SH_KO_DIST")
+    p.add_argument("--obstacle-far-m", type=float, default=1.6,
+                   help="pole distance right of the hold point first (beyond the keep-out), m")
+    p.add_argument("--obstacle-m", type=float, default=0.5,
+                   help="pole distance right of the hold point after the jump, m")
+    p.add_argument("--keep-out-s", type=float, default=12.0, help="time after the jump, s")
     p.add_argument("--hover-s", type=float, default=8.0,
                    help="with --wall: time after the trip with the wall creeping in, s")
     return p.parse_args()
@@ -442,6 +507,8 @@ def fly(args: argparse.Namespace) -> dict:
         v.set_param(name, int(value) if value.lstrip("-").isdigit() else float(value))
     if args.wall:
         v.set_param("SH_WALL_MIN", args.wall_min)
+    if args.keep_out:
+        v.set_param("CP_DIST" if args.keep_out_param == "cp" else "SH_KO_DIST", args.keep_out_m)
     result["params"] = args.param
 
     # 0. On the ground. First wait until the vehicle can arm at all (estimator, preflight),
@@ -482,6 +549,8 @@ def fly(args: argparse.Namespace) -> dict:
     pilot_view_hold(v, args, t_engage, result)
     if args.wall:
         wall_guard_step(v, args, engage_point, result)
+    if args.keep_out:
+        keep_out_step(v, args, result)
 
     # 3. Disengage to the stock mode and check PX4 keeps holding.
     ack = v.set_mode(stock[0], stock[1])
@@ -783,6 +852,54 @@ def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, flo
         "wall guard" in t for t in v.texts_since(t_close, mavlink.MAV_SEVERITY_WARNING))
 
 
+def keep_out_step(v: Vehicle, args: argparse.Namespace, result: dict) -> None:
+    """A pole beside the hold point, first beyond the keep-out, then inside it."""
+    checks = result["checks"]
+    # The hold point is where the vehicle sits now; the pole goes to its right (FRD +y).
+    here = (v.tel.north, v.tel.east)
+    right = v.tel.yaw + math.pi / 2
+
+    def pole_at(d: float) -> VirtualPole:
+        return VirtualPole(here[0] + d * math.cos(right), here[1] + d * math.sin(right))
+
+    v.pole = pole_at(args.obstacle_far_m)
+    t_far = time.monotonic()
+    p0 = (v.tel.north, v.tel.east)
+    far_moved = 0.0
+    end = time.monotonic() + 5.0
+    while time.monotonic() < end:
+        v.pump(0.1)
+        far_moved = max(far_moved, math.hypot(v.tel.north - p0[0], v.tel.east - p0[1]))
+    far_warned = any("keep-out" in t for t in v.texts_since(t_far, mavlink.MAV_SEVERITY_WARNING))
+
+    v.pole = pole_at(args.obstacle_m)
+    t_close = time.monotonic()
+    dists: list[float] = []
+    end = time.monotonic() + args.keep_out_s
+    while time.monotonic() < end:
+        v.pump(0.05)
+        dists.append(v.pole.distance_m(v.tel))
+    tail = dists[-int(3.0 / 0.05):] or [math.nan]
+    result["keep_out"] = {
+        "keep_out_m": args.keep_out_m,
+        "set_through": "CP_DIST" if args.keep_out_param == "cp" else "SH_KO_DIST",
+        "far_m": args.obstacle_far_m,
+        "far_max_move_m": round(far_moved, 3),
+        "close_m": args.obstacle_m,
+        "after_min_m": round(min(dists), 3) if dists else None,
+        "after_last3s_mean_m": round(sum(tail) / len(tail), 3),
+        "scans_sent": v.scans,
+    }
+    v.pole = None
+    # Beyond the keep-out the pole changes nothing (the policy's own wander in SIH is a few
+    # cm to 0.2 m, as in the range-fault check).
+    checks["keep_out_ignores_far_obstacle"] = not far_warned and far_moved <= args.range_fault_tol
+    checks["keep_out_backed_off"] = sum(tail) / len(tail) >= args.keep_out_m - args.wall_tol
+    checks["still_engaged_after_keep_out"] = in_structure_hold(v)
+    checks["keep_out_warning_sent"] = any(
+        "keep-out" in t for t in v.texts_since(t_close, mavlink.MAV_SEVERITY_WARNING))
+
+
 def check_ulog(path: Path, result: dict) -> None:
     """Confirm the status topic made it into the log with the expected transitions."""
     from pyulog import ULog
@@ -818,6 +935,13 @@ def check_ulog(path: Path, result: dict) -> None:
         shift = float(max(status.data["standoff_shift_m"]))
         result["ulog"]["max_standoff_shift_m"] = round(shift, 3)
         checks["wall_guard_shift_logged"] = shift > 0.0
+    if "keep_out" in result and "keep_out_shift_m" in status.data:
+        shift = float(max(status.data["keep_out_shift_m"]))
+        result["ulog"]["max_keep_out_shift_m"] = round(shift, 3)
+        result["ulog"]["keep_out_m_logged"] = round(float(max(status.data["keep_out_m"])), 3)
+        checks["keep_out_shift_logged"] = shift > 0.0
+        checks["keep_out_distance_logged"] = abs(
+            float(max(status.data["keep_out_m"])) - result["keep_out"]["keep_out_m"]) < 1e-3
 
     # Handback latency: first HANDBACK sample to commander's first nav_state change after it.
     vs = by_name.get("vehicle_status")

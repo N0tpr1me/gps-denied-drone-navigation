@@ -13,6 +13,7 @@ px4_add_module(
 		StructureHold.hpp
 		Watchdog.hpp
 		WallGuard.hpp
+		KeepOut.hpp
 		Handback.hpp
 		RangeHover.hpp
 		ParamLimits.hpp

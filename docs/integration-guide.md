@@ -22,10 +22,11 @@ on PX4 v1.17.0. The code is the authority: the parameter table below is checked 
 ```
  your VIO ──ODOMETRY──▶ EKF2 ──vehicle_local_position──┐
  forward rangefinder ──distance_sensor─────────────────┤
+ obstacle sensors (optional) ──obstacle_distance───────┤
  gyro, attitude, land detector, hover thrust ──────────┤
                                                        ▼
                                   Structure Hold module (one work-queue item, 100 Hz)
-                                    policy (MLP) ─ fallback ─ watchdog ─ wall guard
+                         policy (MLP) ─ fallback ─ watchdog ─ wall guard ─ keep-out
                                                        │
          Structure Hold (ext1):  vehicle_rates_setpoint ──▶ PX4 rate controller ──▶ mixer
          Structure Land/Hover (ext2/ext3): trajectory_setpoint ──▶ PX4 position controller
@@ -48,6 +49,7 @@ interface, and commander can take the vehicle out of it at any time.
 | Position estimate | VIO into EKF2 as external vision (`ODOMETRY`, `estimator_type` VISION or VIO), logged as `vehicle_visual_odometry` | The hold point and the policy's position error come from EKF2's `vehicle_local_position`; the VIO samples tell a fresh fix from a stale one |
 | Heading | A heading that points the same way relative to the wall for the whole hold | The heading at engage is taken as the wall's normal (VIO yaw is safer than a compass near steel) |
 | Forward rangefinder | `distance_sensor` with orientation forward (`ROTATION_NONE`), reading 0.3 m to at least 5 m on your structure | The wall guard, Structure Land and Structure Hover use it to keep off the wall. Optional to the code, required for flights near a structure (`SH_WALL_REQ` 1) |
+| Obstacle sensors (optional) | PX4 collision-prevention data: `obstacle_distance` (a 360 deg lidar, or `OBSTACLE_DISTANCE` from a companion) and side-facing `distance_sensor`s, with `CP_DIST` set | The keep-out holds the hold point that far from any obstacle they see (`SH_KO_DIST`). Without them nothing changes |
 | Pilot | An RC mode switch with Position mode on it, and a kill switch | Position mode is the pilot's way out of anything |
 
 Height: fly the barometer (`EKF2_HGT_REF` 0) or a downward rangefinder (2) as EKF2's height
@@ -64,6 +66,8 @@ in `docs/partner-pack.md`, step 2.
 | `vehicle_attitude` | Attitude for the observation, the tilt trip and the heading at engage | A NaN heading refuses the engage |
 | `vehicle_visual_odometry` | Fix freshness (`SH_FIX_SRC`), the frozen-fix trip | No new sample for `SH_FIX_GAP` marks the fix stale for the policy; for `SH_FB_T` starts the fallback; for `SH_WD_EST_TO` trips |
 | `distance_sensor` (any instance) | The forward range for the wall guard, the range input of rangefinder policies, Structure Hover's range hold | A sample counts if under 0.2 s old, inside the sensor's own limits, not flagged bad, and the body x axis is within 35 deg of the wall normal |
+| `obstacle_distance` | The keep-out (`SH_KO_DIST`, `KeepOut.hpp`): every bin above the sensor's minimum and below its maximum is an obstacle point; north-aligned (`MAV_FRAME_GLOBAL`, `LOCAL_NED`) or body-aligned (`MAV_FRAME_BODY_FRD`) | A scan counts if under 0.5 s old (PX4 collision prevention's own timeout) |
+| `distance_sensor` facing 45 to 315 deg (yaw orientations 1 to 7) | Keep-out obstacle points, one per instance, on the sensor's bearing | Under 0.5 s old, inside the sensor's limits, not flagged bad |
 | `hover_thrust_estimate` | Scales the policy's thrust to your drone | Falls back to `MPC_THR_HOVER` when invalid; clamped to 0.1 to 0.9 |
 | `vehicle_land_detected` | Refuses an engage on the ground | |
 | `vehicle_status` | Armed state and the active mode | A disarm ends the hold and any handback |
@@ -81,7 +85,7 @@ reckons.
 | `trajectory_setpoint` | Every tick in Structure Land and Structure Hover | xy position on the guarded point, yaw, descent rate (Land) or held height (Hover); acceleration-only xy in the range hold (`SH_HB_RANGE`) |
 | `vehicle_command` | On a trip or refusal | `DO_SET_MODE` for each handback target in turn |
 | `register_ext_component_request`, `arming_check_reply`, `config_control_setpoints` | At start and on every commander poll | Mode registration, availability, and which PX4 controllers commander must enable |
-| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
+| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, keep-out distance, nearest obstacle and shift, loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
 | STATUSTEXT (via `mavlink_log`) | Whenever a safety function acts, at each engage, near a watchdog limit, and every `SH_GCS_PER` s while a mode flies | Below |
 | `debug_array` (MAVLink `DEBUG_FLOAT_ARRAY` "SH_STATUS") | 5 Hz; PX4 streams it at 1 Hz on a ground-station link, 10 Hz onboard | The live numbers: state, hold error, wall distance, clearance, guard shift, fix age, time left before the no-fix trip, closest watchdog limit and how much of it is used, trip, tilt (`docs/pilot-status.md`) |
 
@@ -157,6 +161,7 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | --- | --- | --- | --- | --- |
 | `SH_EN` | 1 | 0 or 1 | | Start the module at boot (reboot) |
 | `SH_WALL_MIN` | 0.7 | 0 to 5 | m | The hold point never comes closer than this to the measured wall; set your prop reach plus at least 0.3 m. 0 turns the guard off |
+| `SH_KO_DIST` | -1.0 | -1 to 5 | m | Keep-out from obstacles PX4's collision-prevention sensors see (not the structure ahead, which keeps `SH_WALL_MIN`). -1 follows PX4's `CP_DIST` (off unless you set it); 0 off |
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
@@ -204,8 +209,11 @@ Inspector).
 | Critical | `Structure Hold: engage refused: <name> (<reason in plain words>)` | An engage refused (on the ground, frozen fix, a NaN estimate) |
 | Critical | `Structure Hold: engage refused, EKF reset its position <t> s ago (SH_RST_HOLD <t> s)` | Within the reset hold-off |
 | Critical | `Structure Hold: policy produced a non-finite action` | Should never happen; the setpoint is replaced by a safe one |
+| Critical | `Structure Hold: keep-out has no room, holding between obstacles` | Obstacles closer together than twice the keep-out; the hold point sits between them |
 | Critical | `Structure Hover: position lost, holding <d> m from the wall on the rangefinder` | `SH_HB_RANGE` 1 only |
 | Warning | `Structure Hold: wall guard moved the hold point <s> m back, to <d> m from the wall` | The guard pushed the hold point |
+| Warning | `Structure Hold: keep-out moved the hold point <s> m, to <d> m from the nearest obstacle` | The keep-out pushed the hold point (first push of each engage) |
+| Warning | `Structure Hold: keep-out <d> m is on but no obstacle data is coming in` | At engage, with the keep-out on and no fresh `obstacle_distance` or side range |
 | Warning | `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | The fallback starts and ends |
 | Warning | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | Bench test |
 | Info | `Structure Hold: locked out until disarm` | After a latched trip |
@@ -263,8 +271,11 @@ it beats the released policy in our simulator checks and in Gazebo
 
 ## What it does not do
 
-- It makes no position estimate, map or plan, and does no obstacle avoidance beyond keeping
-  the hold point off one measured wall (`docs/decisions.md`, out of scope).
+- It makes no position estimate, map or plan, and does no obstacle avoidance. It keeps the
+  hold point off the measured wall (`SH_WALL_MIN`) and, with your collision-prevention
+  sensors, at least `SH_KO_DIST` from any obstacle they see, by moving the point away from
+  what is too close; it never steers round anything (`docs/decisions.md`, keep-out row).
+  An obstacle that keeps coming keeps pushing the hold point away.
 - It does not choose the standoff: the hold point is where the vehicle was at engage,
   pushed back by the wall guard if too close.
 - It does not cover stock modes: in Position mode, Land and failsafes PX4 flies as stock,

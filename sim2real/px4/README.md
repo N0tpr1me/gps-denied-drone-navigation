@@ -113,6 +113,21 @@ What it does today:
   (`CollisionPrevention::_calculateConstrainedSetpoint`), so with centred sticks the
   position lock follows a recovering estimate into the wall. `structure_hold_status` gains
   `wall_distance_m`, `hold_clearance_m` and `standoff_shift_m`.
+- **Keep-out from PX4's collision-prevention data** (`KeepOut.hpp`, plain C++,
+  unit-tested; `SH_KO_DIST`, default -1 = PX4's `CP_DIST`, 0 = off; decided 2026-11-02).
+  PX4's own collision prevention only bends the sticks in Position mode, so inside the
+  module's modes a drone maker's obstacle sensors did nothing. Each tick every bin of a
+  fresh `obstacle_distance` scan (a 360 deg lidar, or `OBSTACLE_DISTANCE` from a companion;
+  north- or body-aligned) and every side-facing `distance_sensor` (yaw orientations 1 to 7)
+  becomes an obstacle point, and the hold point of Structure Hold, Hover and Land moves
+  straight away from any point closer than the keep-out, never back (a ratchet). Points on
+  the structure ahead (within 0.3 m of the wall plane the forward rangefinder or the lidar's
+  forward 10 deg measures) are not obstacles; they keep `SH_WALL_MIN` instead, so a drone
+  with a lidar and no forward rangefinder gets a wall floor too. Obstacles on both sides
+  are solved together (averaged projections), so a narrow gap leaves the point between them
+  with a "no room" message rather than flicking it side to side. Not used by Structure Hover
+  on the range alone. `structure_hold_status` gains `keep_out_m`, `obstacle_clearance_m`,
+  `keep_out_shift_m`, `keep_out_points` and `keep_out_no_room`.
 - **Structure Land: a landing that keeps the wall guard** (`SH_LAND_EN`, default on; a
   second registered external mode, ext2, named "Structure Land"). After a handback on a
   jumped estimate, stock Land holds xy on the estimate, and as the estimate recovers the
@@ -213,7 +228,7 @@ sim2real/px4/
   bench_test.py          props-off bench checks on a flight controller (docs/bench-test.md)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
-  tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
+  tests/                 test_watchdog.cpp, test_wall_guard.cpp, test_keep_out.cpp, test_policy.cpp (+ PolicyTestVectors.hpp),
                          test_params.cpp, test_handback.cpp, test_range_hover.cpp, test_policy_header.py,
                          test_param_limits.py
 ```
@@ -268,12 +283,17 @@ a stock 2 MB board does not have that spare: `px4_fmu-v6c_default` plus the modu
 overflowed flash by 87 KB (2026-10-31). `boards/structurehold.px4board` is a board variant
 that drops the fixed-wing, VTOL and airspeed modules (as PX4's own
 `fmu-v6x/multicopter.px4board` does), SIH, the MSP OSD driver and the precision-landing
-target estimator, none of which a GPS-denied multicopter next to a wall uses, and turns the
+target estimator and the Septentrio GNSS driver (u-blox and
+the other GPS drivers stay), none of which a GPS-denied multicopter next to a wall uses, and turns the
 module on. With only the fixed-wing, VTOL and airspeed modules dropped, the fmu-v6x build
 still overflowed by 2 KB. Since 2026-11-02 it also drops the AUAV airspeed driver and
 EKF2's airspeed and sideslip fusion (PX4's own multicopter variant drops sideslip too): on
 that day the fmu-v6x build of `main` was at 99.97 % of flash (556 bytes spare), and the
 pilot's live status (`docs/pilot-status.md`, about 3.2 KB) overflowed it by 2.7 KB.
+The keep-out (about 3.7 KB) came on top of that, so the variant also drops the Septentrio
+GNSS driver (about 14 KB). u-blox and the other GPS drivers stay, so GPS-on flights
+(`docs/field-faults.md` "GPS on") are unaffected unless the receiver is a Septentrio; then
+put `CONFIG_DRIVERS_GNSS_SEPTENTRIO=y` back (the 6X then has about 5 KB spare).
 
 ```bash
 cp sim2real/px4/boards/structurehold.px4board /path/to/PX4-Autopilot/boards/px4/fmu-v6c/
@@ -284,9 +304,9 @@ cd /path/to/PX4-Autopilot && make px4_fmu-v6c_structurehold
 Checked in the cloud container with Ubuntu 24.04's `gcc-arm-none-eabi` 13.2.1 (`apt-get
 install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`; PX4's
 venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
-uses 96.1 % of flash, `px4_fmu-v6x_structurehold` 99.5 % (2026-11-02, with the pilot's live status; about 9 KB spare, so a partner
-adding drivers to a 6X drops something else they do not fly). The first such build also
-caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946,952 B,
+about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
+in. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it
@@ -320,7 +340,11 @@ over runs; stock Land 0.15 m). Gazebo judges the landing.
 5 cm, beyond the maximum, 65535 cm, a 50 cm reading flagged invalid); the vehicle must not
 back off. `--moving-engage` pushes the vehicle sideways in Position mode (about 2 m/s in
 SIH) and engages while it moves, the re-engage mid-gust case; it must stop and hold with no
-trip.
+trip. `--keep-out` simulates a 360 deg lidar (`OBSTACLE_DISTANCE`, 72 bins, body frame)
+that sees one pole to the right of the hold point, sets the keep-out to 1 m through PX4's
+`CP_DIST` (`--keep-out-param sh` for `SH_KO_DIST`), puts the pole 1.6 m away (nothing may
+move), then 0.5 m away: the vehicle must settle at least 0.85 m from it, still in Structure
+Hold, with a "keep-out" warning. First runs (2026-11-02): settled 1.00 and 1.02 m away.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
 Structure Land, `commander mode ext3` hovers in Structure Hover, `commander mode posctl` disengages,
@@ -361,6 +385,8 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_policy.cpp -o test_policy && ./test_policy
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_keep_out.cpp -o test_keep_out && ./test_keep_out
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_params.cpp -o test_params && ./test_params
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \

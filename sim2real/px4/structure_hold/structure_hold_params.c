@@ -350,6 +350,31 @@ PARAM_DEFINE_FLOAT(SH_FB_TILT, 4.0f);
 PARAM_DEFINE_FLOAT(SH_WALL_MIN, 0.7f);
 
 /**
+ * Keep-out: minimum distance from obstacles that PX4's collision prevention sees
+ *
+ * The hold point of Structure Hold, Structure Hover and Structure Land is kept at least this
+ * far from every obstacle in PX4's collision-prevention data: obstacle_distance (a 360 deg
+ * lidar, or OBSTACLE_DISTANCE from a companion computer) and distance sensors facing a
+ * horizontal direction other than forward (KeepOut.hpp). PX4's own collision prevention
+ * only bends the sticks in Position mode, so without this the hold ignored them. A point
+ * too close moves the hold point straight away from it by the shortfall, never back toward
+ * it. The structure ahead is not an obstacle: points on the wall face (within 0.3 m of the
+ * wall the forward rangefinder or the lidar's forward 10 deg measures) keep SH_WALL_MIN
+ * instead. Not obstacle avoidance: nothing is planned and an obstacle moving in keeps
+ * pushing the hold point away. Readings older than 0.5 s are ignored, and Structure Hover
+ * on the rangefinder alone (SH_HB_RANGE) does not use it.
+ * -1 (default) follows PX4's CP_DIST, which is -1 (off) unless the drone maker set up
+ * collision prevention; 0 turns it off; above 0 is the distance in metres.
+ *
+ * @unit m
+ * @min -1.0
+ * @max 5.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_KO_DIST, -1.0f);
+
+/**
  * Wall guard: require a forward range to engage
  *
  * When set, the mode reports itself unavailable to commander while no usable forward
