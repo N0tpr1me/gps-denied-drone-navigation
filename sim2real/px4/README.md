@@ -141,8 +141,8 @@ What it does today:
   (Gazebo seed 3: 0.59 to 0.31 m before the landing); here the range keeps the point off
   the wall. The pilot leaves it for Position mode as usual. State `hover` (5). Chosen by
   Zain over handing straight into Structure Land, or no change (2026-10-28).
-- **Structure Hover on the rangefinder alone** (`SH_HB_RANGE`, default off; Proposed,
-  `docs/decisions.md` 2026-11-01). With the horizontal estimate gone the decided handback
+- **Structure Hover on the rangefinder alone** (`SH_HB_RANGE`, default on since
+  2026-11-02; Decided, `docs/decisions.md`). With the horizontal estimate gone the decided handback
   goes to Altitude mode, which keeps the vehicle level while a wind into the wall pushes it
   onto the face (`docs/field-faults.md`, the link-loss fault). With 1, a trip next to a
   measured wall goes to Structure Hover even without a horizontal estimate, and Structure
@@ -153,8 +153,8 @@ What it does today:
   The estimate back and fresh for 1 s: it holds a point on the estimate again. No usable
   range for 0.5 s trips it (`range_lost`) to Altitude mode, Hold, Land. Structure Hover then
   no longer needs a local position to be selected.
-- **Frozen-fix trip** (`SH_WD_FRZ_T`, seconds, default 0 = off; Proposed,
-  `docs/decisions.md` 2026-11-01). A stuck VIO pipeline can keep sending its last pose on
+- **Frozen-fix trip** (`SH_WD_FRZ_T`, seconds, default 1.0 since 2026-11-02,
+  0 = off; Decided, `docs/decisions.md`). A stuck VIO pipeline can keep sending its last pose on
   time: nothing goes stale and EKF2 keeps it valid (`docs/field-faults.md`, the freeze
   fault). With a limit set, a VIO odometry fix that has not moved by 0.1 mm for that long
   (timed by its own sample times; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
@@ -355,7 +355,7 @@ re-engage mid-flight (bit for bit a fresh controller), NaN and inf in every inpu
 finite setpoint) and the policy step time on the host. `test_wall_guard.cpp` covers the
 broken readings real drivers and MAVLink send (inf, 0, negative, 65535 cm, unset or NaN
 limits, bad quality, the age and range edges). `test_handback.cpp` walks every handback
-sequence of the decided rows (and the Proposed `SH_HB_RANGE` one); `test_range_hover.cpp`
+sequence of the decided rows (including the `SH_HB_RANGE` one); `test_range_hover.cpp`
 flies the range hover on a point mass with a tilt lag (a 4 m/s wind into the wall, with and
 without the wind feed-forward, a drifting entry, an entry inside the standoff);
 `test_watchdog.cpp` has one test per watchdog rule, the frozen fix included;

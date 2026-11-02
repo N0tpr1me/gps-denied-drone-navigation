@@ -1497,7 +1497,7 @@ position controller descends at MPC_LAND_SPEED while the wall guard keeps the xy
 SH_WALL_MIN from the measured wall. It stays available after a latched trip. With
 SH_HB_GUARD a third mode, "Structure Hover" (ext3), holds the same guarded setpoint
 without descending; a trip next to a measured wall hands back into it first. With
-SH_HB_RANGE (off by default) it also flies with the horizontal estimate gone, holding the
+SH_HB_RANGE (on by default) it also flies with the horizontal estimate gone, holding the
 measured wall distance on the rangefinder alone.
 
 Engage from the shell with `commander mode ext1` (first registered external mode; Structure

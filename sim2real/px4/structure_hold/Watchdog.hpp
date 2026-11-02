@@ -23,7 +23,8 @@
  * who flies into it. Once the mode is flying, a reset is the policy's to handle (it is
  * trained on them), so check() ignores it.
  *
- * A frozen fix (Proposed, off by default: max_fix_frozen_s 0, PX4 param SH_WD_FRZ_T): a
+ * A frozen fix (PX4 param SH_WD_FRZ_T, 1 s by default since 2026-11-02; this struct's
+ * max_fix_frozen_s stays 0 = off so the plain watchdog tests start without it): a
  * stuck camera pipeline or VIO process can keep republishing its last pose on time, so the
  * stale trip never sees it and EKF2 keeps it valid (docs/field-faults.md, the freeze fault).
  * A real VIO on a flying vehicle never repeats its position to a tenth of a millimetre for a

@@ -159,11 +159,11 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
-| `SH_HB_RANGE` | 0 | 0 or 1 | | Proposed: Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |
+| `SH_HB_RANGE` | 1 | 0 or 1 | | Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |
 | `SH_WD_EST_TO` | 5.0 | 0.05 to 10 | s | Watchdog: no fresh fix for this long trips |
 | `SH_WD_POS_ERR` | 2.0 | 0.2 to 10 | m | Watchdog: this far from the hold point trips |
 | `SH_WD_TILT` | 45.0 | 10 to 80 | deg | Watchdog: this much tilt trips |
-| `SH_WD_FRZ_T` | 0.0 | 0 to 10 | s | Proposed: a VIO fix that has not moved for this long trips. 0 off |
+| `SH_WD_FRZ_T` | 1.0 | 0 to 10 | s | A VIO fix that has not moved for this long trips. 0 off |
 | `SH_RST_HOLD` | 0.0 | 0 to 60 | s | Refuse an engage this long after an EKF2 xy reset. 0 off |
 | `SH_FIX_SRC` | 0 | 0 to 2 | | What counts as a fix: 0 auto (VIO odometry if present, else local position), 1 VIO odometry, 2 local position |
 | `SH_FIX_GAP` | 0.1 | 0.01 to 1 | s | A gap this long between fixes tells the policy its fix is stale; about twice your VIO's sample period |
@@ -184,9 +184,10 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_VEL_SRC` | 0 | 0 or 1 | | Placeholder cascade velocity: 0 estimator, 1 differentiated position |
 
 For scored flights load `sim2real/partner/structure_hold_flight.params`, which sets every
-`SH_` value the benchmark flew plus the logger (`docs/partner-pack.md`, step 2). The two
-Proposed options (`SH_HB_RANGE`, `SH_WD_FRZ_T`) are off until their decision rows are
-settled; turning them on changes what happens after a fault (`docs/field-faults.md`).
+`SH_` value the benchmark flew plus the logger (`docs/partner-pack.md`, step 2). The
+rangefinder hover (`SH_HB_RANGE`) and the frozen-fix trip (`SH_WD_FRZ_T`) are on by default
+since 2026-11-02 (`docs/decisions.md`); setting them to 0 goes back to Altitude mode after a
+lost estimate and to no frozen-fix trip (`docs/field-faults.md`).
 
 ## What the pilot sees
 

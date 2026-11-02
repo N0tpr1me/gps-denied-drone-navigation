@@ -99,9 +99,9 @@ Altitude mode, which keeps the vehicle level, and the wind blew it into the wall
 touching at 2.4 m height, 8.9 s after the link went; closest 0.26 m) and down. Stock PX4 with baro height did what it
 did before: failsafe descent, wall touched on the way down.
 
-### The same link loss with the range hover (`SH_HB_RANGE` 1, Proposed)
+### The same link loss with the range hover (`SH_HB_RANGE` 1, on by default since 2026-11-02)
 
-`SH_HB_RANGE` (off by default, `sim2real/px4/structure_hold/RangeHover.hpp`) keeps Structure
+`SH_HB_RANGE` (on by default since 2026-11-02, `sim2real/px4/structure_hold/RangeHover.hpp`) keeps Structure
 Hover flying when the horizontal estimate is gone next to a measured wall, instead of the
 decided handback to Altitude mode. It sends PX4's position controller an acceleration-only
 horizontal setpoint (PX4 needs no horizontal estimate for that, as in Altitude mode, and
@@ -158,9 +158,9 @@ about 4.5 s and then its failsafe landed it, touching the wall on the way down i
 One flight per cell; the movement along the wall (up to 0.97 m at 8 m/s) is the axis the
 range cannot see.
 
-### The freeze with the frozen-fix trip (`SH_WD_FRZ_T`, Proposed)
+### The freeze with the frozen-fix trip (`SH_WD_FRZ_T`, 1 s by default since 2026-11-02)
 
-`SH_WD_FRZ_T` (seconds, off by default; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
+`SH_WD_FRZ_T` (seconds, 1 s by default since 2026-11-02, 0 off; `FrozenFix` in `Watchdog.hpp`) trips Structure Hold
 (`estimate_frozen`) when the VIO odometry keeps arriving but has not moved by 0.1 mm for
 that long. A real VIO on a flying vehicle is never that still: its noise and the vehicle's
 own motion move it every sample. The trip follows the decided order: next to a measured wall
@@ -194,22 +194,21 @@ What this says, in plain words:
   hold of its own.
 - **A frozen estimate is invisible to both, until the module looks for it.** No trip fired;
   both wandered about half a metre and stayed 0.94 m from the wall. The frozen-fix trip
-  (`SH_WD_FRZ_T`, above, off by default) caught it in 1 s and the guarded hover then moved
-  0.2 m; turning it on is Zain's call.
+  (`SH_WD_FRZ_T`, above) caught it in 1 s and the guarded hover then moved 0.2 m; it is on
+  by default since 2026-11-02 (Zain).
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
   should fly the barometer (or a downward rangefinder) as the height reference, and the
   benchmark now does too (Zain's call, 2026-11-01: `px4_tuned_v2.params`). With
   the height fixed, the decided handback to Altitude mode lets the wind push the vehicle
-  into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead. Turning
-  it on changes the decided handback order, so it ships off by default (Zain's call).
+  into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead, and 0 of
+  12 touched over three winds. It is on by default since 2026-11-02 (Zain).
 
 ## Next
 
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
-- The range hover (`SH_HB_RANGE`) over seeds 5 to 8 and longer silences; whether to turn it
-  on by default is Zain's call (it changes the decided handback order).
+- The range hover (`SH_HB_RANGE`, now on by default) over seeds 5 to 8 and longer silences.
 - The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
   should partners ever fly with GPS on?
