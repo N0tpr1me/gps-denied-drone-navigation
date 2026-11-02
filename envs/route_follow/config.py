@@ -63,6 +63,22 @@ class RouteGen:
     corridor_width_m: tuple[float, float] = (2.0, 4.0)
     corridor_height_m: tuple[float, float] = (2.4, 4.0)
     tunnel_radius_m: tuple[float, float] = (1.1, 2.0)
+    # The worlds beyond plain corridors and round tunnels (all off by default, so the v0
+    # sets are unchanged; docs/route-follow.md, "Worlds"):
+    # a corridor whose roof is a half circle as wide as the corridor, on vertical walls (a
+    # mine drift or an arched culvert), with this probability; its height is kept at least
+    # 0.6 of its width so the walls stand above the floor;
+    arch_prob: float = 0.0
+    # each segment narrowed (a doorway, a collapsed stretch, a smaller pipe section) with
+    # this probability, its cross-section scaled by a draw from pinch_frac;
+    pinch_prob: float = 0.0
+    pinch_frac: tuple[float, float] = (0.6, 0.85)
+    # up to ``branches`` dead-end side passages, each present with branch_prob, leaving a
+    # random segment at right angles, left or right, branch_len_m long (crosscuts in a mine,
+    # side corridors, junctions): open air the side rangefinders see past.
+    branches: int = 0
+    branch_prob: float = 1.0
+    branch_len_m: tuple[float, float] = (2.0, 6.0)
     speed_mps: tuple[float, float] = (0.5, 1.5)  # the target's cruise speed
     accel_mps2: float = 0.5  # the target's acceleration and braking
     # The target's speed at a 90 degree (or sharper) corner, as a fraction of cruise; it
@@ -80,8 +96,13 @@ class RouteGen:
             raise ValueError("min_segment_m must be positive")
         if self.segment_weight[0] <= 0:
             raise ValueError("segment_weight must be positive")
-        if not 0.0 <= self.tunnel_prob <= 1.0:
-            raise ValueError("tunnel_prob must be in [0, 1]")
+        for name in ("tunnel_prob", "arch_prob", "pinch_prob", "branch_prob"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if self.branches < 0 or self.branch_len_m[0] <= 0:
+            raise ValueError("branches must be >= 0 and branch_len_m positive")
+        if not (0.0 < self.pinch_frac[0] and self.pinch_frac[1] <= 1.0):
+            raise ValueError("pinch_frac must lie in (0, 1]")
         if self.speed_mps[0] <= 0 or self.accel_mps2 <= 0:
             raise ValueError("speed_mps and accel_mps2 must be positive")
         if not 0.0 <= self.corner_speed_min_frac <= 1.0:
@@ -228,8 +249,11 @@ class RouteFollowConfig:
             raise ValueError("rate_lag_s must be >= 0")
         if self.max_rate_rad_s <= 0 or self.heading_lookahead_m <= 0 or self.preview_m[0] <= 0:
             raise ValueError("max_rate_rad_s, heading_lookahead_m and preview_m must be > 0")
-        narrow = min(0.5 * self.route.corridor_width_m[0], 0.5 * self.route.corridor_height_m[0],
-                     self.route.tunnel_radius_m[0])
+        r = self.route
+        narrow = min(0.5 * r.corridor_width_m[0], 0.5 * r.corridor_height_m[0],
+                     r.tunnel_radius_m[0])
+        if r.pinch_prob > 0:
+            narrow *= r.pinch_frac[0]
         if narrow <= self.contact_radius_m + 0.1:
             raise ValueError("the narrowest corridor or tunnel leaves no room for the drone")
 

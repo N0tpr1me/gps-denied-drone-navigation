@@ -91,6 +91,24 @@ Gazebo (below).
 - **Airframe:** the Gazebo x500 presets (`gz_x500`, `gz_x500_sitl`), so the numbers carry
   over to SITL as they did for Structure Hold.
 
+### Worlds
+
+Beyond plain corridors and round tunnels, the route generator (`RouteGen`) builds the places
+customers fly, each off by default so the first results' sets stay exactly as they were:
+
+| World | Setting | What it is |
+| --- | --- | --- |
+| Arched drift | `arch_prob` (of the corridors) | vertical walls under a half-circle roof as wide as the passage: a mine drift, an arched culvert or rail tunnel |
+| Narrow pipe | `tunnel_radius_m` down to 0.8 m | a sewer or culvert where the props are 0.4 m from the wall |
+| Narrowed stretch | `pinch_prob`, `pinch_frac` | a segment whose cross-section shrinks (a doorway, a collapsed stretch, a smaller pipe section) |
+| Side branches | `branches`, `branch_prob`, `branch_len_m` | dead-end passages leaving the route at right angles (crosscuts, side corridors, junctions); the side rangefinders see down them, so a controller that centres on the walls is pulled sideways there |
+| Ramps | `climb_deg` up to 25 degrees | steep slopes between levels (ramps in mines, car parks) |
+
+Each is one more piece in the same union-of-pieces geometry (`geometry.py`), so contact and
+the rangefinder beams work the same way in all of them. `eval/configs/route_follow_worlds.yaml`
+scores every world on its own and a mix of all of them, and
+`training/configs/route_follow_ppo_worlds.yaml` trains on the mix.
+
 ## The code
 
 | Piece | Where |
@@ -151,6 +169,53 @@ all three, is a wall contact; at 256 routes a set, 1 to 7 % is 2 to 19 flights, 
 numbers are rough. This is the mock only: the lesson from Structure
 Hold is that the mock alone does not predict Gazebo, so nothing is claimed until a Gazebo
 tunnel flight against tuned PX4 Mission mode.
+
+## Worlds results (mock, 2026-11-02)
+
+Every controller on 256 new routes per world (run `20261102-010928`,
+`eval/configs/route_follow_worlds.yaml`), x500 as SITL flies it, true position. v0 is the
+first policy (corridors and round tunnels only); v1 is v0 trained on for 1000 more
+iterations (35 min) on the mix of worlds (run `20261102-003213`). Each cell: cross-track p95,
+routes finished, crashes.
+
+| World | v0 | v1 | PD | PD + centring |
+| --- | --- | --- | --- | --- |
+| arched drift | 0.27 m, 92 %, 4 % | 0.27 m, 92 %, 2 % | 0.36 m, 88 %, 6 % | 0.36 m, 88 %, 6 % |
+| arched drift, rangefinders | 0.23 m, 95 %, 2 % | 0.23 m, 92 %, 4 % | 0.35 m, 90 %, 4 % | 0.33 m, 92 %, 4 % |
+| narrow pipe | 0.22 m, 83 %, 16 % | 0.23 m, 82 %, 16 % | 0.26 m, 70 %, 29 % | 0.26 m, 70 %, 29 % |
+| narrow pipe, rangefinders | 0.21 m, 89 %, 9 % | 0.20 m, 85 %, 14 % | 0.27 m, 69 %, 30 % | 0.25 m, 46 %, 53 % |
+| narrowed stretches | 0.26 m, 91 %, 6 % | 0.27 m, 91 %, 6 % | 0.31 m, 86 %, 11 % | 0.31 m, 86 %, 11 % |
+| narrowed, rangefinders | 0.22 m, 92 %, 7 % | 0.23 m, 90 %, 7 % | 0.32 m, 82 %, 15 % | 0.31 m, 76 %, 22 % |
+| side branches | 0.29 m, 93 %, 3 % | 0.28 m, 93 %, 2 % | 0.37 m, 89 %, 5 % | 0.37 m, 89 %, 5 % |
+| side branches, rangefinders | 0.31 m, 97 %, 0 % | 0.26 m, 94 %, 2 % | 0.38 m, 88 %, 4 % | 0.50 m, 59 %, 35 % |
+| ramps to 25 degrees | 0.30 m, 95 %, 2 % | 0.28 m, 95 %, 1 % | 0.37 m, 95 %, 3 % | 0.37 m, 95 %, 3 % |
+| ramps, rangefinders | 0.27 m, 96 %, 2 % | 0.26 m, 95 %, 1 % | 0.36 m, 90 %, 4 % | 0.37 m, 86 %, 12 % |
+| all mixed, rangefinders on 70 % | 0.28 m, 91 %, 6 % | 0.25 m, 93 %, 5 % | 0.33 m, 87 %, 10 % | 0.37 m, 76 %, 19 % |
+| plain corridor, rangefinders | 0.24 m, 96 %, 1 % | 0.28 m, 91 %, 2 % | 0.38 m, 89 %, 4 % | 0.33 m, 91 %, 7 % |
+| plain tunnel, rangefinders | 0.24 m, 95 %, 2 % | 0.24 m, 95 %, 2 % | 0.39 m, 88 %, 6 % | 0.34 m, 93 %, 5 % |
+
+What this says:
+
+- **v0 already copes with worlds it never saw.** It follows the route tighter than both PD
+  yardsticks in every world and crashes less, though nothing in its training had an arch, a
+  side branch, a pipe under 1.1 m or a slope over 10 degrees.
+- **Wall centring, the classical way to use rangefinders, breaks in real places.** A side
+  branch makes one side beam read far, and the centring PD steers into the opening: 35 %
+  crashes against 4 % for the plain PD. It also does worse in narrow pipes (53 %) and
+  narrowed stretches. The policies use the same beams without that failure.
+- **Narrow pipes are the hard world.** With the props 0.4 to 0.7 m from the wall and the
+  estimate allowed to drift 0.5 m, every controller crashes there most (v0 9 to 16 %, PD
+  about 30 %). All crashes are wall contacts.
+- **Short CPU training does not move it much.** v1 (v0 plus 35 min on the mix) is level
+  with v0: a little tighter on the mix, side branches and ramps, a little worse in the plain
+  corridor and pipes; its action noise had shrunk to almost nothing, so it was barely
+  exploring. A fresh policy on the mix (with pipes down to 0.8 m) was still behind the PD
+  after 1000 iterations (runs `20261102-015210`, cross-track p95 0.41 m against 0.37 m on the
+  mix) and only level with it after 2000 (`20261102-023213`, 0.34 m against 0.37 m, 12 %
+  against 11 % crashes). The harder mix needs far longer training than the cloud CPUs give
+  in an hour: that is GPU server work.
+
+As before, this is the mock only; Gazebo against tuned PX4 Mission mode decides.
 
 ## Plan, and what needs the GPU server
 

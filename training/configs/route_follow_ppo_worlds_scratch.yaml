@@ -1,0 +1,55 @@
+# Route Follow on the mix of worlds trained from scratch (not from v0), with the tunnels
+# down to the narrow pipes' 0.8 m radius: the second short worlds run (docs/route-follow.md,
+# "Worlds"). Training v0 on further on the mix (route_follow_ppo_worlds.yaml) changed little,
+# its action noise had collapsed, so this run starts fresh.
+#   python -m training.launch --config training/configs/route_follow_ppo_worlds_scratch.yaml --smoke --device cpu
+name: route_follow_ppo_worlds_scratch
+entrypoint: training.train_route_ppo
+seed: 2
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 1024
+  iterations: 1000
+  num_steps_per_env: 48
+  history: 3
+  sim: torch
+  save_interval: 50
+  # Chained: the first 1000 iterations were run 20261102-015210 (resume: null).
+  resume: runs/20261102-015210_route_follow_ppo_worlds_scratch_s2_7aeac4e/policy.pt
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    route:
+      arch_prob: 0.4  # of the corridors
+      pinch_prob: 0.25
+      pinch_frac: [0.7, 0.9]
+      branches: 2
+      branch_prob: 0.5
+      climb_deg: [-20.0, 20.0]
+      tunnel_radius_m: [0.8, 2.0]  # down to the narrow pipes
+    ranges:
+      present_prob: 0.7
+      outlier_prob: 0.01
+  eval:
+    num_envs: 128
+    episodes: 1
+    env: {}
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  resume: null
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
+    route: {arch_prob: 0.4, pinch_prob: 0.25, pinch_frac: [0.7, 0.9], branches: 2,
+            branch_prob: 0.5, climb_deg: [-20.0, 20.0], tunnel_radius_m: [0.9, 2.0]}
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  eval:
+    num_envs: 8
+    episodes: 1
+    env: {}

@@ -164,3 +164,82 @@ def test_config_rejects_a_corridor_too_narrow_for_the_drone():
         RouteFollowConfig.from_dict({"contact_radius_m": 0.9})
     with pytest.raises(ValueError, match="unknown"):
         RouteFollowConfig.from_dict({"route": {"segmnts": 3}})
+
+
+# ---------------------------------------------------------------- the other worlds
+
+
+def test_extra_worlds_leave_the_route_draws_unchanged():
+    plain = sample_routes(RouteGen(), 32, 30.0, np.random.default_rng(4))
+    worlds = sample_routes(RouteGen(arch_prob=0.5, pinch_prob=0.5, branches=2), 32, 30.0,
+                           np.random.default_rng(4))
+    np.testing.assert_array_equal(plain.waypoints, worlds.waypoints)
+    np.testing.assert_array_equal(plain.tunnel, worlds.tunnel)
+    assert not plain.arched.any() and plain.branch_len.shape == (32, 0)
+    assert np.all(plain.seg_scale == 1.0)
+    assert worlds.arched.any() and not (worlds.arched & worlds.tunnel).any()
+    assert ((worlds.seg_scale < 1.0).any() and worlds.seg_scale.min() >= 0.6)
+
+
+def test_arched_corridor_walls_and_roof():
+    r = straight_route(10.0, tunnel=False, half_width=1.5, half_height=2.0)
+    r.arched = np.array([True])  # springline 0.5 m above the centreline
+    g = RouteGeometry.from_routes(r)
+    centre = torch.tensor([[5.0, 0.0, 2.0]])
+    np.testing.assert_allclose(g.trace(centre, beams(), 20.0)[0, :4].numpy(),
+                               [1.5, 1.5, 2.0, 2.0], atol=2e-3)
+    high = torch.tensor([[5.0, 0.0, 3.5]])  # 1 m above the springline
+    assert float(g.clearance(high)) == pytest.approx(0.5, abs=1e-5)
+    side = math.sqrt(1.5**2 - 1.0**2)  # the roof's circle at that height
+    np.testing.assert_allclose(g.trace(high, beams(), 20.0)[0, :2].numpy(), [side, side],
+                               atol=3e-3)
+    # The top corner of a plain corridor is solid rock under an arch.
+    assert float(g.clearance(torch.tensor([[5.0, 1.3, 3.8]]))) < 0
+
+
+def test_a_narrowed_segment_shrinks_its_cross_section():
+    r = turn_route(6.0, 6.0, 0.0, tunnel=False, half_width=1.5, half_height=1.5)
+    r.seg_scale = np.array([[1.0, 0.5]])
+    g = RouteGeometry.from_routes(r)
+    # Past the wide segment's end extension (1.5 m) the walls are 0.75 m from the centre.
+    assert float(g.clearance(torch.tensor([[8.0, 0.3, 2.0]]))) == pytest.approx(0.45, abs=1e-5)
+    assert float(g.clearance(torch.tensor([[4.0, 0.3, 2.0]]))) == pytest.approx(1.2, abs=1e-5)
+    rt = straight_route(10.0, tunnel=True, radius=1.5)
+    rt.seg_scale = np.array([[0.6]])
+    assert float(RouteGeometry.from_routes(rt).clearance(torch.tensor([[5.0, 0.0, 2.0]]))) == (
+        pytest.approx(0.9, abs=1e-5))
+
+
+def test_a_side_branch_opens_the_wall():
+    r = straight_route(10.0, tunnel=False, half_width=1.0, half_height=1.5)
+    r.branch_start = np.array([[[5.0, 0.0, 2.0]]])
+    r.branch_dir = np.array([[[0.0, 1.0, 0.0]]])
+    r.branch_len, r.branch_scale = np.array([[4.0]]), np.array([[1.0]])
+    g = RouteGeometry.from_routes(r)
+    assert float(g.clearance(torch.tensor([[5.0, 2.5, 2.0]]))) > 0.5  # inside the branch
+    assert float(g.clearance(torch.tensor([[2.0, 2.5, 2.0]]))) < 0  # rock beside it
+    rr = g.trace(torch.tensor([[5.0, 0.0, 2.0]]), beams(), 20.0)[0]
+    assert float(rr[0]) == pytest.approx(5.0, abs=1e-2)  # down the branch to its dead end
+    assert float(rr[1]) == pytest.approx(1.0, abs=1e-3)
+    # An empty branch slot is no wall and no air.
+    r.branch_len = np.array([[0.0]])
+    g0 = RouteGeometry.from_routes(r)
+    assert float(g0.clearance(torch.tensor([[5.0, 0.5, 2.0]]))) == pytest.approx(0.5)
+    assert float(g0.clearance(torch.tensor([[5.0, 2.5, 2.0]]))) < 0
+
+
+def test_sampled_branches_leave_the_route_at_right_angles():
+    cfg = RouteGen(branches=2, branch_prob=0.7)
+    r = sample_routes(cfg, 64, 30.0, np.random.default_rng(5))
+    g = RouteGeometry.from_routes(r)
+    on = r.branch_len > 0
+    assert on.any() and (~on).any()
+    starts = torch.as_tensor(r.branch_start, dtype=torch.float32)
+    for j in range(2):
+        assert float(g.distance_to_route(starts[:, j]).max()) < 1e-4
+    assert np.allclose(r.branch_dir[..., 2], 0.0)
+    assert np.allclose(np.linalg.norm(r.branch_dir, axis=-1), 1.0)
+    seg = np.diff(r.waypoints, axis=1)
+    # Each branch is perpendicular to the horizontal part of some segment of its route.
+    dots = np.abs(np.einsum("nbk,nsk->nbs", r.branch_dir, seg)).min(-1)
+    assert dots.max() < 1e-9
