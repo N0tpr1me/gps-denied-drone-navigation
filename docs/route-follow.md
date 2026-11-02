@@ -91,6 +91,24 @@ Gazebo (below).
 - **Airframe:** the Gazebo x500 presets (`gz_x500`, `gz_x500_sitl`), so the numbers carry
   over to SITL as they did for Structure Hold.
 
+### Worlds
+
+Beyond plain corridors and round tunnels, the route generator (`RouteGen`) builds the places
+customers fly, each off by default so the first results' sets stay exactly as they were:
+
+| World | Setting | What it is |
+| --- | --- | --- |
+| Arched drift | `arch_prob` (of the corridors) | vertical walls under a half-circle roof as wide as the passage: a mine drift, an arched culvert or rail tunnel |
+| Narrow pipe | `tunnel_radius_m` down to 0.8 m | a sewer or culvert where the props are 0.4 m from the wall |
+| Narrowed stretch | `pinch_prob`, `pinch_frac` | a segment whose cross-section shrinks (a doorway, a collapsed stretch, a smaller pipe section) |
+| Side branches | `branches`, `branch_prob`, `branch_len_m` | dead-end passages leaving the route at right angles (crosscuts, side corridors, junctions); the side rangefinders see down them, so a controller that centres on the walls is pulled sideways there |
+| Ramps | `climb_deg` up to 25 degrees | steep slopes between levels (ramps in mines, car parks) |
+
+Each is one more piece in the same union-of-pieces geometry (`geometry.py`), so contact and
+the rangefinder beams work the same way in all of them. `eval/configs/route_follow_worlds.yaml`
+scores every world on its own and a mix of all of them, and
+`training/configs/route_follow_ppo_worlds.yaml` trains on the mix.
+
 ## The code
 
 | Piece | Where |
