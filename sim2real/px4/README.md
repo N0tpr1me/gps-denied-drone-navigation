@@ -282,7 +282,7 @@ cd /path/to/PX4-Autopilot && make px4_fmu-v6c_structurehold
 Checked in the cloud container with Ubuntu 24.04's `gcc-arm-none-eabi` 13.2.1 (`apt-get
 install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`; PX4's
 venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
-uses 96.0 % of flash, `px4_fmu-v6x_structurehold` 99.7 % (about 6 KB spare, so a partner
+uses 96.1 % of flash, `px4_fmu-v6x_structurehold` 99.5 % (2026-11-02, with the pilot's live status; about 9 KB spare, so a partner
 adding drivers to a 6X drops something else they do not fly). The first such build also
 caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.

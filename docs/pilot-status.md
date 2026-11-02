@@ -84,7 +84,7 @@ bytes of RAM, and one 250-byte MAVLink message per second on a normal link. That
 than the fmu-v6x build had spare (99.97 % full on `main`, 2026-11-02), so the
 `structurehold` board variant now also drops the AUAV airspeed driver and EKF2's airspeed
 and sideslip fusion, which a multicopter does not use: fmu-v6x is at 99.53 % with this
-feature (9.2 KB spare); the fmu-v6c numbers are in `sim2real/px4/README.md`. PX4 builds the
+feature (9.2 KB spare), fmu-v6c at 96.1 %. PX4 builds the
 `DEBUG_FLOAT_ARRAY` stream on every board without `CONSTRAINED_FLASH`, fmu-v6c and fmu-v6x
 included; on a constrained board the array is simply not sent and the text still is.
 
@@ -99,4 +99,5 @@ included; on a constrained board the array is simply not sent and the text still
   line during the 20 s hold, the live array while engaged (hold error, margin and time
   left all in range) and showing the test-fault trip afterwards. `--pilot-warning` lowers
   `SH_WD_POS_ERR` before the trip so the hold error sits at about 60 % of it, and expects
-  the near-limit warning. Results of the run that added this are in the PR.
+  the near-limit warning. The runs that added this (2026-11-02, plain and `--wall`, every
+  check passed) are in `experiments/LOG.md`.
