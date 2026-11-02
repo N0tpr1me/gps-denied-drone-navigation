@@ -36,9 +36,10 @@ which keeps the wall guard down to touchdown) or stock Land (``--land stock``, t
 before 2026-10-28).
 
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
-EKF2 fused the vision stream. For the benchmark, ``eval.baselines.run_baseline --runner
-hold`` flies this over the baseline's scenarios and seeds and tabulates it next to the
-tuned-PX4 rows.
+EKF2 fused the vision stream (a profile with a ``gps`` block flies with GPS on instead, and
+EKF2 must have used it: ``run_estimate.gps_as_expected``). For the benchmark,
+``eval.baselines.run_baseline --runner hold`` flies this over the baseline's scenarios and
+seeds and tabulates it next to the tuned-PX4 rows.
 """
 
 from __future__ import annotations
@@ -61,8 +62,8 @@ from eval.ulog import load_topics as load_trace_topics
 from eval.ulog import trace_from_topics
 from sim2real.estimate_bridge.bridge import Rangefinder
 from sim2real.estimate_bridge.config import load_profile
-from sim2real.estimate_bridge.params import read_params, to_environment
-from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS
+from sim2real.estimate_bridge.params import to_environment
+from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS, gps_as_expected, px4_params_for
 from sim2real.estimate_bridge.ulog_checks import analyse
 from sim2real.estimate_bridge.verify_trace import verify as verify_estimate
 from sim2real.gazebo.params_io import write_params
@@ -316,9 +317,10 @@ def judge_hold_on_truth(summary: dict[str, Any], hold: dict[str, Any], drift_tol
 
 
 def assemble(report: dict[str, Any]) -> dict[str, Any]:
-    """The pass line: the flight's own checks, both traces, GPS-free, vision fused."""
+    """The pass line: the flight's own checks, both traces, GPS as the profile says (off,
+    or on and fused), vision fused."""
     report["ok"] = bool(report.get("flight_ok") and report.get("estimate_ok")
-                        and report.get("wind_ok") and report.get("gps_free")
+                        and report.get("wind_ok") and report.get("gps_ok")
                         and report.get("vision_fused"))
     return report
 
@@ -365,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.rangefinder:
         prof = dataclasses.replace(prof, rangefinder=Rangefinder(sc.wall_point,
                                                                  sc.wall_normal_toward))
-    px4_params = read_params(args.params)
+    px4_params = px4_params_for(prof, args.params)
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = make_run_dir(args.runs_dir, f"{stamp}_sitl_hold_{sc.name}_{prof.name}_{commit}")
@@ -438,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             report["hold"] = hold
             report["metrics"] = hold["metrics"]  # where run_baseline's rows read it
             report["gps_free"] = ekf["gps_free"]
+            report["gps_ok"] = gps_as_expected(prof, ekf)
             report["vision_fused"] = ekf["vision_fused"]
             if "flight" in report:
                 judge_hold_on_truth(report["flight"], hold, args.drift_tol)
@@ -445,10 +448,10 @@ def main(argv: list[str] | None = None) -> int:
                 summary_path.write_text(json.dumps(report["flight"], indent=2) + "\n")
         except Exception as exc:  # the flight already happened; record why scoring failed
             report["ulog_error"] = f"{type(exc).__name__}: {exc}"
-            report["gps_free"] = report["vision_fused"] = False
+            report["gps_free"] = report["gps_ok"] = report["vision_fused"] = False
     else:
         report["ulog_error"] = "no flight.ulg"
-        report["gps_free"] = report["vision_fused"] = False
+        report["gps_free"] = report["gps_ok"] = report["vision_fused"] = False
 
     assemble(report)
     (out / "hold_summary.json").write_text(json.dumps(report, indent=2) + "\n")

@@ -127,7 +127,7 @@ def test_docker_command_forwards_module_params(tmp_path):
 
 
 def test_pass_line_needs_every_check():
-    good = {"flight_ok": True, "estimate_ok": True, "wind_ok": True, "gps_free": True,
+    good = {"flight_ok": True, "estimate_ok": True, "wind_ok": True, "gps_ok": True,
             "vision_fused": True}
     assert run_gazebo.assemble(dict(good))["ok"]
     for key in good:

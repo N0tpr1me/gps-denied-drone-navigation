@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.2, ready for sign-off (section 8); 1.0 and 1.1 were not signed |
+| Version | 1.3, ready for sign-off (section 8); 1.0 to 1.2 were not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1 and the `field_degrade` flights of 1.2 (`def668f`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`) and the GPS-on flights of 1.3 (`abc8fe7`, module unchanged): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -57,7 +57,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Flight stack | PX4 v1.17.0 exactly, multicopter, with the module built in (`boards/structurehold.px4board` on 2 MB flight controllers) | `docs/decisions.md` (PX4 pin) |
 | Position source | VIO (or another external position) into EKF2 as `ODOMETRY` VISION/VIO, 20 Hz or faster, its latency set in `EKF2_EV_DELAY` | `docs/partner-pack.md` step 2 |
 | Height source | Barometer (`EKF2_HGT_REF` 1) or a downward rangefinder. **Not vision** (see F5) | `eval/baselines/px4_tuned_v2.params`, `docs/field-faults.md` |
-| GPS | Off (`EKF2_GPS_CTRL` 0). Flying with GPS on is untested (F27) | `docs/field-faults.md`, Next |
+| GPS | Off, or on (a GPS or RTK receiver fused by EKF2 beside the VIO) **with the forward rangefinder and `SH_WALL_REQ` 1**: with GPS on, the rangefinder is the only thing that keeps the drone off the wall when the GPS solution moves (F27, F36 to F38). The benchmark numbers are GPS-off | `docs/field-faults.md`, "GPS on"; `docs/decisions.md` 2026-11-02 |
 | Forward rangefinder | Required for the wall guard and the guarded modes: a forward-facing `distance_sensor` that reads 0.3 to 5 m on the wall | `docs/partner-pack.md` step 2 |
 | Distance from the structure | Engage 1 to 3 m from it, facing it (nose within 35 deg of square to the wall) | Gate 1 and Gate 2 scenarios |
 | Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
@@ -71,7 +71,8 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 - With vision as EKF2's height reference (`EKF2_HGT_REF` 3).
 - Without a working forward rangefinder pointing at the structure, unless the reviewer
   accepts losing every guard that uses it (wall guard, Structure Hover, Structure Land's
-  guard, `SH_HB_RANGE`).
+  guard, `SH_HB_RANGE`). With GPS on, never: a GPS jump walked the unguarded hold into the
+  wall (F27).
 - Next to a structure the rangefinder cannot see reliably: thin poles, mesh, glass, water
   spray, or a face more than 35 deg off the heading.
 - In dust, fog, steam, smoke or darkness that the VIO cannot track through: the drone holds
@@ -150,7 +151,8 @@ Gazebo SITL flight, **M** mock simulator, **none** not tested yet.
 Gazebo field faults (`docs/field-faults.md`) are one flight on one seed and one scenario (1 m
 from the wall, 4 m/s wind blowing into it) unless a row says otherwise. F1, F2, F6 and F7
 were flown on the earlier vision-height set-up; F4 was flown on barometer height, as the
-envelope requires, over three winds and four seeds.
+envelope requires, over three winds and four seeds; F27 and F38 to F40 (GPS on) on barometer
+height, F27 over three seeds.
 
 ### Position estimate
 
@@ -169,6 +171,9 @@ envelope requires, over three winds and four seeds.
 | F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies on garbage | 4 | Invalid-estimate trip, same step | Handback | 1 | U |
 | F36 | VIO degrades but keeps running: noisier, walks off, loses tracking in bursts | Rotor-blown dust, fog, steam, a dark underside | Both the policy and stock PX4 follow the walk: tuned PX4 touched the wall on 3 of 6 flights (seed 1, every wind) | 4 | Nothing: 5 cm of noise and 0.5 s losses are inside the trained range and under every trip; the rangefinder (wall guard) catches the walk toward the wall only | Held through 20 s of it, 0 of 6 touched, closest 0.85 m, height within 0.46 m; moved with the walk up to 1 m | 2 with the rangefinder, 4 without it | G (`field_degrade`, barometer height, 3 winds x 2 seeds) |
 | F12 | Heading at engage is wrong | Magnetometer near steel | Wall direction wrong: guard and hold axes off | 3 | Only the rangefinder's 35 deg limit | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
+| F38 | GPS on: RTK fix drops to float, solution 0.8 m off | Fix lost under a structure | EKF2 walks 0.3 m toward the float solution; tuned PX4 went to 0.66 m from the wall | 3 | Rangefinder (wall guard) | Hold point held at `SH_WALL_MIN` 0.70 m (closest 0.72 m), no trip | 2 | G (`field_rtk_float`) |
+| F39 | GPS on: receiver quiet for 10 s, comes back 1 m off (hand-over) | Receiver lost under the structure | EKF2 re-aligns the vision stream to the returning GPS over about 15 s: the estimate walks 0.3 m; tuned PX4 went to 0.69 m | 3 | Rangefinder (wall guard) | Held at 0.70 m (closest 0.73 m), no trip. The walk is not an EKF reset, so nothing else sees it | 2 | G (`field_gps_loss`) |
+| F40 | GPS on: a 4 m glitch for half a second | Receiver glitch | None: EKF2's innovation gate rejects it | 1 | EKF2 | Nothing (moved 0.05 m, as tuned PX4) | 1 | G (`field_gps_glitch`) |
 
 ### Rangefinder
 
@@ -199,7 +204,7 @@ envelope requires, over three winds and four seeds.
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | F26 | Low battery, RC loss, geofence | PX4 failsafes | — | — | PX4 commander | PX4's failsafe overrides the external mode; the module stops when PX4 leaves it | As stock PX4 | PX4 |
-| F27 | GPS returns and the estimate jumps to it | GPS on, hand-over | A jump of metres | 3 | As F1 | Untested | 3: GPS off (envelope) | none |
+| F27 | GPS on: the GPS solution steps 1.5 m and stays (inside EKF2's gate) | Multipath under a deck, base-station change | EKF2 follows it fully and the controller walks into the wall: tuned PX4 touched the wall and fell to the ground on 3 of 3 seeds; Structure Hold without a rangefinder touched it too (`position_error` trip at the wall) | 4 | Rangefinder (wall guard) | Held at 0.70 m on 3 of 3 seeds, no trip. A step along the wall is not caught (nothing measures that axis) | **2 with the rangefinder, 4 without** | G (`field_gps_jump`, 3 seeds, with and without the rangefinder) |
 | F28 | Air pushed back off the wall (near-wall flow) | Prop wash on the face | Pulled toward the wall | 3 | Hold-error trip, wall guard | The model exists but is off by default; the v24 candidate tests it | 3 | M (`docs/near-wall-flow.md`) |
 
 ### Fitting the simulator to a new drone (offline)
@@ -223,7 +228,7 @@ match the drone, and a policy trained on it being released for that drone.
 | --- | --- | --- | --- |
 | `EKF2_HGT_REF` | PX4's | 1 (barometer) or a downward rangefinder | F5 |
 | `SH_WALL_MIN` | 0.7 m | Prop reach plus at least 0.3 m | F7, F9 |
-| `SH_WALL_REQ` | 0 | 1 | F13 |
+| `SH_WALL_REQ` | 0 | 1; required with GPS on | F13, F27 |
 | `SH_HB_RANGE` | 1 | Keep 1 if the rangefinder is reliable on your structure | F4 is 2 with it, 4 without |
 | `SH_WD_FRZ_T` | 1 s | Keep 1 s | F6 |
 | `SH_WD_EST_TO` | 5 s | Keep | F4 |
@@ -243,10 +248,12 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
 - F1, F2, F6 and F7 are one flight each on the earlier vision-height set-up; they should be
   re-flown on barometer height over more seeds and winds. F4 has seeds 1 to 4; seeds 5 to 8
   and longer silences are next (`docs/field-faults.md`, Next).
-- No test yet for F12 (wrong heading), F15 (wrong surface) or F27 (GPS hand-over).
+- No test yet for F12 (wrong heading) or F15 (wrong surface).
 - F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; the wall
   guard's reaction to short returns (F37) has no fix yet, and a harsher degrade, more seeds
   and a longer cloud are next.
+- The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
+  along the wall is untested and uncaught.
 - The rest of the assurance pack in gap 4: an ASTM F3201 matrix, the argument for the
   learned part, a software bill of materials and a statement of origin.
 
@@ -272,6 +279,7 @@ signed again. Record each one below.
 | 1.0 | 2026-11-02 | `868aeb4` | First signed version: checked against the module after `SH_HB_RANGE` and `SH_WD_FRZ_T` went on by default | |
 | 1.1 | 2026-11-02 | this PR | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
 | 1.2 | 2026-11-02 | this PR | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
+| 1.3 | 2026-11-02 | `abc8fe7` | Envelope widened to GPS on with the rangefinder required (decision row 2026-11-02); F27 flown (GPS jump, 3 seeds, with and without the rangefinder) and F38 to F40 added (RTK float, loss and hand-over, glitch); `SH_WALL_REQ` 1 required with GPS on. No module change | |
 
 ## Change control
 

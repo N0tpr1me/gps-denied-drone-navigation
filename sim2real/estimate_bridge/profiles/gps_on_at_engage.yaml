@@ -1,0 +1,11 @@
+# vio_at_engage with GPS on (docs/field-faults.md, "GPS on"): the same corrupted vision
+# stream, faults keyed to the engage, plus a healthy RTK receiver (10 Hz, RTK fixed, 1 cm
+# noise, sim2real/estimate_bridge/gps.py) that EKF2 fuses beside it (the runner lays
+# gps_on.params over the PX4 set). Scored like the benchmark: does fusing a good GPS change
+# the hold against the GPS-off flight on the same seed?
+name: gps_on_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+gps: {rate_hz: 10.0, fix: rtk_fixed}

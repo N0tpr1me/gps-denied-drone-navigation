@@ -1,0 +1,17 @@
+# PX4 parameters laid over the benchmark's set when a profile has a `gps` block (the runners
+# do this themselves): the bridge's scripted GPS is the receiver, EKF2 fuses it beside the
+# vision stream (docs/field-faults.md, "GPS on"; sim2real/estimate_bridge/gps.py).
+#
+# MAV_USEHILGPS 1: PX4's mavlink receiver turns the bridge's HIL_GPS into sensor_gps.
+# SIM_GPS_USED 0: Gazebo's own navsat receiver reports no fix, so PX4's GPS selection takes
+#   the bridge's (a receiver with no fix is never selected, and never blended).
+# EKF2_GPS_CTRL 7: fuse GPS horizontal position, height and 3D velocity (PX4's default).
+# SYS_HAS_GPS 1: the preflight GPS checks run, as on a GPS-equipped drone.
+1	1	MAV_USEHILGPS	1	6
+1	1	SIM_GPS_USED	0	6
+1	1	EKF2_GPS_CTRL	7	6
+1	1	SYS_HAS_GPS	1	6
+# EKF2_HGT_REF 0: the barometer is the height reference. PX4 v1.17 numbers this 0 = barometer,
+#   1 = GPS, 2 = range sensor, 3 = vision; the benchmark set's 1 only ever flew on the
+#   barometer because EKF2 falls back to it with no GPS, and with GPS on it would use GPS height.
+1	1	EKF2_HGT_REF	0	6

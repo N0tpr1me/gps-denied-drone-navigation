@@ -111,7 +111,7 @@ depends on them (`sim2real/estimate_bridge/ekf2_ev.params` is what our benchmark
 
 | Parameter | Why it matters |
 | --- | --- |
-| `EKF2_GPS_CTRL` 0, `SYS_HAS_GPS` 0 | No GPS anywhere in the loop: the claim is GPS-denied flight |
+| `EKF2_GPS_CTRL` 0, `SYS_HAS_GPS` 0 | No GPS anywhere in the loop: the claim is GPS-denied flight. GPS or RTK may stay on (fused beside the VIO) only with the forward rangefinder and `SH_WALL_REQ` 1: when a GPS solution moves, EKF2's estimate walks with it and the rangefinder is what keeps the drone off the wall (`docs/field-faults.md`, "GPS on"; safety manual F27) |
 | `EKF2_EV_CTRL` fuses VIO position (and velocity if your VIO gives a good one) | The hold is only as good as this |
 | `EKF2_EV_DELAY` set to your VIO's measured latency | A wrong delay makes the estimate lag or lead in gusts (`docs/real-flight-gap.md`, row 7) |
 | `EKF2_EV_POS_X/Y/Z` set to the camera's offset from the IMU | Otherwise rotations look like movement |
