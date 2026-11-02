@@ -21,6 +21,13 @@ Steps, each a check in the summary:
    a stock mode (Structure Hover with ``--wall``), the ground station receives a critical
    STATUSTEXT naming the trip, and a further engage request is refused (trip latched);
 
+The pilot's live view (docs/pilot-status.md) is checked along the way: an "engaged" line at
+each engage, the periodic status line during the hold, and the live number array
+(DEBUG_FLOAT_ARRAY "SH_STATUS") showing the hold while engaged and the trip after it.
+With ``--pilot-warning`` the hold-error limit SH_WD_POS_ERR is lowered for a moment before
+the trip so the live hold error sits at about 60 % of it: the ground station must get the
+near-limit warning, and the limit goes back before it can trip.
+
 A centred joystick (MANUAL_CONTROL at 20 Hz) is streamed throughout, because PX4 only
 offers Position mode when it has a manual control source. With ``--no-joystick`` the
 stock mode on disengage is Hold, and after the trip PX4 refuses Position mode and runs its
@@ -89,6 +96,10 @@ REENGAGE_RETRY_S = 14.0
 # not the wall).
 LAND_AIRBORNE_M = 0.3
 TRIP_LANDED = 7
+# The live array (PilotStatus.hpp, LiveIndex): name, and the indices read here.
+LIVE_NAME = "SH_STATUS"
+LIVE_STATE, LIVE_HOLD_ERROR, LIVE_WD_SECONDS, LIVE_WD_USED = 0, 1, 6, 7
+LIVE_TRIP, LIVE_TRIP_COUNT = 9, 10
 # Broken forward-range readings for --range-faults: (centimetres, MAVLink signal_quality,
 # where 0 = unknown and 1 = invalid). Min 10 cm, max 1200 cm as in the wall's own readings.
 RANGE_FAULTS = [(0, 0), (5, 0), (2000, 0), (65535, 0), (50, 1)]
@@ -162,6 +173,8 @@ class Vehicle:
         # texts reassembled from their chunks (MAVLink 2 ``id``).
         self.statustext: list[tuple[float, int, str]] = []
         self._text_index: dict[int, int] = {}
+        # The module's live array as the ground station sees it: (time, values).
+        self.live: list[tuple[float, list[float]]] = []
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
@@ -238,6 +251,12 @@ class Vehicle:
                 if chunk_id:
                     self._text_index[chunk_id] = len(self.statustext)
                 self.statustext.append((time.monotonic(), msg.severity, msg.text))
+        elif t == "DEBUG_FLOAT_ARRAY" and msg.name == LIVE_NAME:
+            self.live.append((time.monotonic(), list(msg.data)))
+
+    def live_since(self, t0: float) -> list[list[float]]:
+        """Live arrays (DEBUG_FLOAT_ARRAY "SH_STATUS") received since ``t0``."""
+        return [d for when, d in self.live if when >= t0]
 
     def texts_since(self, t0: float, max_severity: int = mavlink.MAV_SEVERITY_DEBUG) -> list[str]:
         """STATUSTEXT received since ``t0`` at ``max_severity`` or more urgent."""
@@ -347,6 +366,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--range-faults-s", type=float, default=6.0)
     p.add_argument("--range-fault-tol", type=float, default=0.3,
                    help="max back-off from the wall during the faults, m")
+    p.add_argument("--pilot-warning", action="store_true",
+                   help="lower SH_WD_POS_ERR before the trip and expect the near-limit warning")
     p.add_argument("--moving-engage", action="store_true",
                    help="engage Structure Hold while the vehicle still moves sideways")
     p.add_argument("--moving-stick", type=int, default=700,
@@ -440,6 +461,7 @@ def fly(args: argparse.Namespace) -> dict:
     samples = Samples()
 
     # 2. Engage Structure Hold and hold.
+    t_engage = time.monotonic()
     ack = v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
     checks["engage_accepted"] = ack == mavlink.MAV_RESULT_ACCEPTED
     v.wait_for(lambda: in_structure_hold(v), 5, "Structure Hold in heartbeat")
@@ -457,6 +479,7 @@ def fly(args: argparse.Namespace) -> dict:
     }
     checks["position_held"] = max(samples.hold_drift) <= args.drift_tol
     checks["altitude_held"] = max(samples.hold_alt_err) <= args.drift_tol
+    pilot_view_hold(v, args, t_engage, result)
     if args.wall:
         wall_guard_step(v, args, engage_point, result)
 
@@ -496,6 +519,8 @@ def fly(args: argparse.Namespace) -> dict:
                           "wait_s": round(time.monotonic() - t_reengage, 1)}
     checks["reengage_accepted"] = ack == mavlink.MAV_RESULT_ACCEPTED
     v.pump(2.0)
+    if args.pilot_warning:
+        pilot_warning_step(v, result)
     v.set_param("SH_TEST_FAULT", 1)
     t_trip = time.monotonic()
     # Which stock mode PX4 ends up in is commander's call once the module has asked
@@ -514,6 +539,10 @@ def fly(args: argparse.Namespace) -> dict:
                   if "watchdog trip" in t]
     result["trip_warning"] = trip_texts[0] if trip_texts else None
     checks["trip_warning_sent"] = bool(trip_texts)
+    # The live array shows the trip: its code, and the module no longer flying the hold.
+    after = v.live_since(t_trip + 0.5)
+    checks["live_shows_trip"] = bool(after) and int(after[-1][LIVE_TRIP]) == TRIP_TEST_FAULT \
+        and int(after[-1][LIVE_STATE]) != STATE_ENGAGED and after[-1][LIVE_TRIP_COUNT] >= 1
     if args.wall:
         # Next to a measured wall the trip hands back to Structure Hover. The wall creeps in
         # as the estimate's recovery would walk stock Position mode toward it.
@@ -631,6 +660,54 @@ def ground_checks(v: Vehicle, args: argparse.Namespace, result: dict,
     if not in_stock(v):
         v.set_mode(stock[0], stock[1])
         v.pump(0.5)
+
+
+def pilot_view_hold(v: Vehicle, args: argparse.Namespace, t_engage: float, result: dict) -> None:
+    """The pilot's view of the first hold: engage line, status line, live array."""
+    checks = result["checks"]
+    texts = v.texts_since(t_engage, mavlink.MAV_SEVERITY_INFO)
+    engaged = [t for t in texts if t.startswith("Structure Hold: engaged")]
+    status = [t for t in texts if "off the hold point" in t and "watchdog" not in t]
+    live = [d for d in v.live_since(t_engage) if int(d[LIVE_STATE]) == STATE_ENGAGED]
+    result["pilot_view"] = {
+        "engaged_line": engaged[0] if engaged else None,
+        "status_lines": status,
+        "live_arrays_engaged": len(live),
+        "live_hold_error_max_m": round(max(d[LIVE_HOLD_ERROR] for d in live), 3) if live else None,
+        "live_wd_used_max_pct": round(max(d[LIVE_WD_USED] for d in live), 1) if live else None,
+        "live_wd_seconds_min": round(min(d[LIVE_WD_SECONDS] for d in live), 2) if live else None,
+    }
+    checks["engaged_line_sent"] = bool(engaged)
+    if args.hold_s >= 12.0:  # SH_GCS_PER is 10 s by default
+        checks["status_line_sent"] = bool(status)
+    # The numbers are sane: a hold error inside the watchdog's, a margin inside 100 %, and
+    # time left before the no-fix trip. The rate depends on the link (10 Hz onboard).
+    checks["live_array_while_engaged"] = len(live) >= 5 and all(
+        0.0 <= d[LIVE_HOLD_ERROR] < 2.0 and 0.0 <= d[LIVE_WD_USED] < 100.0
+        and d[LIVE_WD_SECONDS] > 0.0 for d in live)
+
+
+def pilot_warning_step(v: Vehicle, result: dict) -> None:
+    """Lower SH_WD_POS_ERR so the hold error sits near 60 % of it; expect the warning."""
+    checks = result["checks"]
+    live = [d for d in v.live_since(time.monotonic() - 1.0) if int(d[LIVE_STATE]) == STATE_ENGAGED]
+    err = max((d[LIVE_HOLD_ERROR] for d in live), default=math.nan)
+    limit = max(0.2, err / 0.6) if math.isfinite(err) else 0.2  # 0.2 m is SH_WD_POS_ERR's minimum
+    t0 = time.monotonic()
+    v.set_param("SH_WD_POS_ERR", limit)
+    warned: list[str] = []
+    end = t0 + 4.0  # the module reads parameters once a second
+    while time.monotonic() < end and not warned:
+        v.pump(0.1)
+        warned = [t for t in v.texts_since(t0, mavlink.MAV_SEVERITY_WARNING)
+                  if "watchdog trips at" in t]
+    v.set_param("SH_WD_POS_ERR", 2.0)
+    v.pump(1.5)
+    result["pilot_warning"] = {"hold_error_m": round(err, 3), "limit_m": round(limit, 3),
+                               "text": warned[0] if warned else None}
+    # Only meaningful when the hold error was large enough to reach the warning level.
+    if err >= 0.1:
+        checks["near_limit_warning_sent"] = bool(warned)
 
 
 def moving_engage_step(v: Vehicle, args: argparse.Namespace, result: dict,
