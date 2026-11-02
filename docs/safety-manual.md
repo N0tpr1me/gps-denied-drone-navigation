@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.1, ready for sign-off (section 8); 1.0 was not signed |
+| Version | 1.2, ready for sign-off (section 8); 1.0 and 1.1 were not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1 and the `field_degrade` flights of 1.2 (`def668f`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -63,6 +63,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
 | Estimate faults trained on | Delay 50 to 150 ms, noise, slow bias drift, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
 | Height above ground | Tested 2 to 3.5 m. Engaging on the ground is refused | `sitl_test.py` ground-engage check |
+| Visibility | The VIO must keep tracking: dust, fog, steam or darkness that make it noisier and walk off are simulated (F36, F37) but only up to a VIO that still runs, with its noise about 5 cm, losses under a second and a walk of 0.1 m/sqrt(s). A VIO that stops is F4 | `docs/field-faults.md` (degrade) |
 
 ### Do not use Structure Hold
 
@@ -73,6 +74,13 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
   guard, `SH_HB_RANGE`).
 - Next to a structure the rangefinder cannot see reliably: thin poles, mesh, glass, water
   spray, or a face more than 35 deg off the heading.
+- In dust, fog, steam, smoke or darkness that the VIO cannot track through: the drone holds
+  what the VIO says, so when the VIO walks off, the drone walks with it (F36). Stop the
+  hold and back off as soon as the ground station shows VIO quality dropping, the hold
+  starts to wander, or the camera image goes dark or grey. Lights help the camera; they do
+  not help in dust or fog, which reflect them.
+- Within 2 m of the ground or a loose surface where the rotors throw up dust or spray,
+  unless the VIO and the rangefinder are known to work in it.
 - In mean wind above 8 m/s, in rain or icing, or on an airframe it has not been fitted to.
 - With a VIO whose latency is unknown or above about 150 ms.
 - With people closer than 5 m, or between the drone and the structure.
@@ -159,6 +167,7 @@ envelope requires, over three winds and four seeds.
 | F9 | Hold point taken from a jumped estimate at engage | Engage right after an EKF reset | Hold point on the wall face, contact | 4 | Wall guard; `SH_RST_HOLD` (off by default) | The guard moves the point back to `SH_WALL_MIN` | 2 | U, G (`docs/baseline.md`, wall guard on seed 3) |
 | F10 | Latency above the trained range | Wrong `EKF2_EV_DELAY`, slow VIO | Oscillation, crash (an early policy crashed 68 % of runs at 150 to 250 ms in the mock) | 4 | Tilt or hold-error trip, late | Handback | 3: keep inside the envelope | M (`docs/gate1.md` stress) |
 | F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies on garbage | 4 | Invalid-estimate trip, same step | Handback | 1 | U |
+| F36 | VIO degrades but keeps running: noisier, walks off, loses tracking in bursts | Rotor-blown dust, fog, steam, a dark underside | Both the policy and stock PX4 follow the walk: tuned PX4 touched the wall on 3 of 6 flights (seed 1, every wind) | 4 | Nothing: 5 cm of noise and 0.5 s losses are inside the trained range and under every trip; the rangefinder (wall guard) catches the walk toward the wall only | Held through 20 s of it, 0 of 6 touched, closest 0.85 m, height within 0.46 m; moved with the walk up to 1 m | 2 with the rangefinder, 4 without it | G (`field_degrade`, barometer height, 3 winds x 2 seeds) |
 | F12 | Heading at engage is wrong | Magnetometer near steel | Wall direction wrong: guard and hold axes off | 3 | Only the rangefinder's 35 deg limit | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
 
 ### Rangefinder
@@ -167,6 +176,7 @@ envelope requires, over three winds and four seeds.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Each reading is checked: under 0.2 s old, inside the sensor's range, not flagged, angle under 35 deg | The guard does nothing on a bad reading; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
 | F14 | Range lost while Structure Hover holds on it alone | Sensor fault during `SH_HB_RANGE` | Uncontrolled drift | 4 | No usable range for 0.5 s | `range_lost` trip, then Altitude mode (Position mode if the estimate is back), Hold, Land | 3 | U |
+| F37 | Short returns off dust, fog or spray in front of the sensor | Same air as F36 | The guard reads a close wall and moves the hold point back; the ratchet never brings it forward again, so a long cloud keeps pushing the drone away from the structure | 3 | Nothing: a short return passes every check in F13 | Moved the hold point 0.6 to 0.95 m back over 20 s of dust, on the safe side of the wall; `SH_WALL_MIN` 0 turns the guard off and loses F7, F9 | 3: a spike gate on the guard is the fix (`docs/field-faults.md`, Next) | G (`field_degrade`) |
 | F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | Follows what the range says | 3: keep inside the envelope | none |
 
 ### Controller and module
@@ -234,6 +244,9 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   re-flown on barometer height over more seeds and winds. F4 has seeds 1 to 4; seeds 5 to 8
   and longer silences are next (`docs/field-faults.md`, Next).
 - No test yet for F12 (wrong heading), F15 (wrong surface) or F27 (GPS hand-over).
+- F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; the wall
+  guard's reaction to short returns (F37) has no fix yet, and a harsher degrade, more seeds
+  and a longer cloud are next.
 - The rest of the assurance pack in gap 4: an ASTM F3201 matrix, the argument for the
   learned part, a software bill of materials and a statement of origin.
 
@@ -258,6 +271,7 @@ signed again. Record each one below.
 | --- | --- | --- | --- | --- |
 | 1.0 | 2026-11-02 | `868aeb4` | First signed version: checked against the module after `SH_HB_RANGE` and `SH_WD_FRZ_T` went on by default | |
 | 1.1 | 2026-11-02 | this PR | Section 3 and 4: warnings before a watchdog trip, the engage and status lines, the live number array (`docs/pilot-status.md`) | |
+| 1.2 | 2026-11-02 | this PR | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
 
 ## Change control
 

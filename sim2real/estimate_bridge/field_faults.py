@@ -26,6 +26,18 @@ seed meets the same failure at the same moment:
 ``drift``
     A slow ramp of ``rate_mps`` along ``direction`` (ENU, normalised) for ``duration_s``,
     then held: scale drift, or the slow walk-off a spoofed source produces.
+``degrade``
+    The camera sees less for ``duration_s`` (dust thrown up by the rotors, fog or steam, a
+    dark underside): the VIO keeps running on fewer and worse features, so it gets noisier
+    (``noise_m``, ``vel_noise_mps``), walks off faster (``walk_mps``, m/sqrt(s), kept after
+    the window: a VIO has no way to take it back), and loses tracking for ``loss_s`` at
+    random (``loss_hz``; nothing is sent). A laser rangefinder in the same dust or fog
+    gets noisy (``range_noise_m``), misses returns (``range_loss_frac``) and sees short
+    returns off the particles (``range_short_frac``); ``range_reading`` applies that. Every
+    effect scales with a severity that ramps from 0 to 1 over ``ramp_s`` from ``at_s``.
+    The random draws come from the profile's seed (``FieldFaultInjector(seed=...)``); the
+    rangefinder's from their own stream, so ``verify_trace``, which replays the estimate
+    only, still matches.
 
 Faults apply only once the bridge's anchor is set (``start``: from the first sample) and are
 timed from it, so they do not depend on how long PX4 took to take off. The corruptor runs
@@ -40,8 +52,11 @@ from typing import Any
 
 import numpy as np
 
-FIELD_FAULT_KINDS = ("reset_origin", "restart", "silence", "freeze", "drift")
-_NEEDS_DURATION = ("restart", "silence", "freeze", "drift")
+FIELD_FAULT_KINDS = ("reset_origin", "restart", "silence", "freeze", "drift", "degrade")
+_NEEDS_DURATION = ("restart", "silence", "freeze", "drift", "degrade")
+_DEGRADE_KEYS = ("ramp_s", "noise_m", "vel_noise_mps", "walk_mps", "loss_hz", "loss_s",
+                 "range_noise_m", "range_loss_frac", "range_short_frac")
+_ESTIMATE_STREAM, _RANGE_STREAM = 0xD0, 0xD1  # degrade draws: separate streams per seed
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,16 @@ class FieldFault:
     direction: tuple[float, float, float] = (1.0, 0.0, 0.0)  # drift direction, ENU
     axes: str = "xyz"  # reset_origin / restart: the axes that snap back to the origin
     signal: bool = True  # reset_origin / restart: bump ODOMETRY reset_counter
+    # degrade only (module docstring): full-severity values, reached ramp_s after at_s
+    ramp_s: float = 0.0
+    noise_m: float = 0.0  # extra white position noise, per axis
+    vel_noise_mps: float = 0.0  # extra white velocity noise, per axis
+    walk_mps: float = 0.0  # extra random walk, m/sqrt(s) per axis
+    loss_hz: float = 0.0  # tracking losses per second
+    loss_s: float = 0.0  # length of each loss
+    range_noise_m: float = 0.0  # rangefinder white noise
+    range_loss_frac: float = 0.0  # share of rangefinder readings with no return
+    range_short_frac: float = 0.0  # share of readings that return short, off the particles
 
     def __post_init__(self) -> None:
         if self.kind not in FIELD_FAULT_KINDS:
@@ -70,6 +95,28 @@ class FieldFault:
             raise ValueError("direction must be a nonzero ENU 3-vector")
         if not self.axes or set(self.axes) - set("xyz"):
             raise ValueError("axes must be a non-empty subset of 'xyz'")
+        values = {k: getattr(self, k) for k in _DEGRADE_KEYS}
+        if any(not v >= 0 for v in values.values()):
+            raise ValueError(f"degrade values must be >= 0: {values}")
+        if self.kind != "degrade":
+            if any(values.values()):
+                raise ValueError(f"{sorted(k for k, v in values.items() if v)} "
+                                 "apply to degrade only")
+            return
+        if not any(values[k] for k in _DEGRADE_KEYS if k != "ramp_s"):
+            raise ValueError("degrade needs at least one effect")
+        if (self.loss_hz > 0) != (self.loss_s > 0):
+            raise ValueError("degrade needs loss_hz and loss_s together")
+        if self.range_loss_frac + self.range_short_frac > 1:
+            raise ValueError("range_loss_frac + range_short_frac must be <= 1")
+
+    def severity(self, t_rel: float) -> float:
+        """degrade: 0 outside the window, ramping to 1 over ramp_s inside it."""
+        if not self.active(t_rel):
+            return 0.0
+        if self.ramp_s <= 0:
+            return 1.0
+        return min(1.0, (t_rel - self.at_s) / self.ramp_s)
 
     @property
     def reset_at_s(self) -> float | None:
@@ -87,7 +134,8 @@ class FieldFault:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FieldFault:
         d = dict(d)
-        known = {"kind", "at_s", "duration_s", "rate_mps", "direction", "axes", "signal"}
+        known = {"kind", "at_s", "duration_s", "rate_mps", "direction", "axes", "signal",
+                 *_DEGRADE_KEYS}
         unknown = set(d) - known
         if unknown:
             raise ValueError(f"unknown field fault keys: {sorted(unknown)}")
@@ -96,21 +144,30 @@ class FieldFault:
         return cls(**d)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "at_s": self.at_s, "duration_s": self.duration_s,
-                "rate_mps": self.rate_mps, "direction": list(self.direction),
-                "axes": self.axes, "signal": self.signal}
+        d = {"kind": self.kind, "at_s": self.at_s, "duration_s": self.duration_s,
+             "rate_mps": self.rate_mps, "direction": list(self.direction),
+             "axes": self.axes, "signal": self.signal}
+        if self.kind == "degrade":  # old profiles stay as they were
+            d.update({k: getattr(self, k) for k in _DEGRADE_KEYS})
+        return d
 
 
 class FieldFaultInjector:
     """Applies a profile's field faults to the corruptor's output, one sample at a time."""
 
-    def __init__(self, faults: tuple[FieldFault, ...]):
+    def __init__(self, faults: tuple[FieldFault, ...], seed: int = 0):
         self.faults = tuple(faults)
         self.origin: np.ndarray | None = None
         self.offset = np.zeros(3)  # accumulated frame snaps
         self.resets = 0  # ODOMETRY reset_counter value to send
         self._reset_done = [False] * len(self.faults)
         self._frozen: list[np.ndarray | None] = [None] * len(self.faults)
+        # degrade: the walk it has added so far, the end of the current tracking loss
+        self._walk = [np.zeros(3) for _ in self.faults]
+        self._loss_until = [-np.inf] * len(self.faults)
+        self._last_t: float | None = None
+        self._rng = np.random.default_rng([int(seed), _ESTIMATE_STREAM])
+        self._range_rng = np.random.default_rng([int(seed), _RANGE_STREAM])
 
     def start(self, origin_enu: np.ndarray) -> None:
         """Where the VIO frame starts: the bridge's first truth sample."""
@@ -124,6 +181,8 @@ class FieldFaultInjector:
             return est_pos, est_vel, stale
         if self.origin is None:
             raise RuntimeError("call start() before apply()")
+        dt = 0.0 if self._last_t is None else max(0.0, t_rel - self._last_t)
+        self._last_t = t_rel
         pos = np.asarray(est_pos, dtype=np.float64) + self.offset
         vel = np.asarray(est_vel, dtype=np.float64).copy()
         for i, f in enumerate(self.faults):
@@ -142,6 +201,20 @@ class FieldFaultInjector:
                 d = np.asarray(f.direction, dtype=np.float64)
                 pos = pos + d / np.linalg.norm(d) * f.rate_mps * min(t_rel - f.at_s,
                                                                      f.duration_s)
+            if f.kind == "degrade":
+                sev = f.severity(t_rel)
+                if sev > 0:
+                    # Fixed draws per sample in the window, so a replay meets the same ones.
+                    z = self._rng.standard_normal(9)
+                    u = self._rng.random()
+                    self._walk[i] = self._walk[i] + f.walk_mps * sev * np.sqrt(dt) * z[6:9]
+                    pos = pos + f.noise_m * sev * z[0:3]
+                    vel = vel + f.vel_noise_mps * sev * z[3:6]
+                    if t_rel >= self._loss_until[i] and u < f.loss_hz * sev * dt:
+                        self._loss_until[i] = t_rel + f.loss_s
+                    if t_rel < self._loss_until[i]:
+                        stale = True
+                pos = pos + self._walk[i]  # kept after the window
         for i, f in enumerate(self.faults):
             if f.kind == "freeze":
                 if f.active(t_rel):
@@ -151,6 +224,29 @@ class FieldFaultInjector:
             elif f.kind in ("silence", "restart") and f.active(t_rel):
                 stale = True
         return pos, vel, stale
+
+
+    def range_reading(self, r: float | None, min_m: float,
+                      t_rel: float | None) -> float | None:
+        """A rangefinder reading through the degrade faults' dust or fog: noisier, sometimes
+        missing (None), sometimes short. ``r`` is the clean reading (None: no return)."""
+        if r is None or t_rel is None:
+            return r
+        for f in self.faults:
+            if f.kind != "degrade":
+                continue
+            sev = f.severity(t_rel)
+            if sev <= 0:
+                continue
+            u, z, v = self._range_rng.random(), self._range_rng.standard_normal(), \
+                self._range_rng.random()
+            if u < f.range_loss_frac * sev:
+                return None
+            if u < (f.range_loss_frac + f.range_short_frac) * sev:
+                r = min_m + v * (r - min_m)  # a return off the particles in front
+            else:
+                r = max(min_m, r + f.range_noise_m * sev * z)
+        return r
 
 
 def parse_field_faults(data: Any) -> tuple[FieldFault, ...]:
