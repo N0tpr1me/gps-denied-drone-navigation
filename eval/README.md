@@ -43,7 +43,8 @@ python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu  
 ```
 
 - `baselines/px4_tuned_v2.params`: the tuned-PX4 baseline since 2026-11-01: v1 with
-  barometer height (`EKF2_HGT_REF 1`, docs/decisions.md). Every result from then on is
+  barometer height (`EKF2_HGT_REF 0`; it read 1, GPS in PX4 v1.17, until 2026-11-02 and flew
+  on the barometer by fallback; docs/decisions.md). Every result from then on is
   compared against it.
 - `baselines/px4_tuned_v1.params`: the first tuned-PX4 baseline (docs/baseline.md), vision
   height; frozen, kept for the results flown on it up to 2026-11-01.

@@ -1,9 +1,12 @@
 # Tuned-PX4 baseline v2: v1 (px4_tuned_v1.params, frozen, kept for the results flown on it)
-# with one change, barometer height: EKF2_HGT_REF 1 instead of 3 (vision). Zain's call on
+# with one change, barometer height: EKF2_HGT_REF 0 instead of 3 (vision). Zain's call on
 # 2026-11-01 (docs/decisions.md): with vision as the height reference EKF2's height freezes
 # when the VIO goes quiet and the vehicle can sink unseen (docs/field-faults.md), and the
 # partner pack tells partners not to fly it, so the benchmark no longer measures that set-up.
-# Every result from 2026-11-01 on is compared against this file. Nothing else differs from v1;
+# Every result from 2026-11-01 on is compared against this file. Until 2026-11-02 the line read
+# EKF2_HGT_REF 1, which PX4 v1.17 numbers GPS height, not barometer; with GPS off EKF2 falls
+# back to the barometer, so every flight on this file flew on barometer height either way, and
+# 0 says so directly (docs/decisions.md, 2026-11-02; docs/log-health.md). Nothing else differs from v1;
 # its notes on each value apply:
 #
 # 1. EKF2 on vision for xy and velocity, barometer height, GPS off: as
@@ -13,7 +16,7 @@
 # QGroundControl plain-text format (vehicle_id, component_id, name, value, type 6 int / 9 float),
 # applied at boot as PX4_PARAM_* by sim2real/estimate_bridge/run_estimate.py --params.
 1	1	EKF2_EV_CTRL	7	6
-1	1	EKF2_HGT_REF	1	6
+1	1	EKF2_HGT_REF	0	6
 1	1	EKF2_GPS_CTRL	0	6
 1	1	SYS_HAS_GPS	0	6
 1	1	EKF2_EV_DELAY	100.0	9

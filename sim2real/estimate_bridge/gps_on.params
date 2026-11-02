@@ -12,6 +12,6 @@
 1	1	EKF2_GPS_CTRL	7	6
 1	1	SYS_HAS_GPS	1	6
 # EKF2_HGT_REF 0: the barometer is the height reference. PX4 v1.17 numbers this 0 = barometer,
-#   1 = GPS, 2 = range sensor, 3 = vision; the benchmark set's 1 only ever flew on the
-#   barometer because EKF2 falls back to it with no GPS, and with GPS on it would use GPS height.
+#   1 = GPS, 2 = range sensor, 3 = vision. The benchmark set says 0 too since 2026-11-02 (it
+#   said 1 before, which with GPS on would be GPS height); kept here so this file stands alone.
 1	1	EKF2_HGT_REF	0	6

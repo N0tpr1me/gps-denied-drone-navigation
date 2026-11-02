@@ -1541,7 +1541,7 @@ closest approaches after a re-engage only next to the entry state.
 Zain switched the benchmark's height reference from vision to the barometer on 2026-11-01
 (decision row of that date): with vision height EKF2's height freezes when the VIO goes
 silent and the vehicle can sink unseen (`docs/field-faults.md`). The benchmark EKF2 file
-(`sim2real/estimate_bridge/ekf2_ev.params`) now has `EKF2_HGT_REF` 1, and the tuned
+(`sim2real/estimate_bridge/ekf2_ev.params`) now has `EKF2_HGT_REF` 1 (0 since 2026-11-02: PX4 v1.17 numbers 1 GPS, and with GPS off it fell back to the barometer, so these flights were on barometer height), and the tuned
 baseline is the new frozen file `eval/baselines/px4_tuned_v2.params` (v1 plus that one
 line; nothing re-tuned). Both controllers re-flown on it, same protocol as the v22 section
 above: corrected stream, stock runner `vio_at_hover`, hold runner `vio_at_engage`, no
