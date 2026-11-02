@@ -1,45 +1,67 @@
 # Structure Hold: safety manual and failure table (FMEA)
 
-Draft for a drone maker's safety review. Gap 4 of `docs/market-research.md`. Owner: Zain;
-it is not a certified document and nobody has signed it. The interfaces it refers to (inputs,
-modes, trips, parameters, messages) are specified in `docs/integration-guide.md`.
+| | |
+| --- | --- |
+| Document | Structure Hold safety manual, with the failure table (FMEA) |
+| Version | 1.0, ready for sign-off (section 8) |
+| Date | 2026-11-02 |
+| Checked against | `main` at `868aeb4`: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Owner | Zain |
+| Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
+
+This is the safety case a drone maker's reviewer reads before flying Structure Hold (gap 4
+of `docs/market-research.md`). It says where the mode may be used, how it is built to fail
+safely, what the pilot sees, and every failure we know of with the test behind it. It is
+our own engineering document, not a certification.
 
 **Status, in one line: every result here is from simulation (the mock, PX4 SIH and Gazebo
 SITL) and unit tests. Structure Hold has not flown on a real drone.** Each row of the failure
 table names the test behind it, so a reviewer can rerun it, and says plainly where there is
 no test yet.
 
+### Words used
+
+- **VIO**: visual-inertial odometry, the camera-based position source the drone already has.
+- **EKF2**: PX4's state estimator; it fuses the VIO with the IMU and the barometer.
+- **Estimate**: EKF2's position, the only position the module sees.
+- **Policy**: the small learned controller inside the module.
+- **Trip**: the watchdog stopping the policy and handing control back.
+- **Handback**: the switch from Structure Hold to a stock or guarded mode after a trip.
+- **Structure Hover, Structure Land**: the module's two guarded modes. PX4's own position
+  controller flies them; the module only keeps their target point off the wall.
+- **p95**: the hold error that 95 % of the flight stays inside.
+
 ## 1. What Structure Hold is, and is not
 
 Structure Hold is one onboard PX4 flight mode (a plain C++ module in PX4 v1.17.0, registered
 as an external mode, `sim2real/px4/structure_hold/`). It holds a multicopter still 1 to 3 m
 from a flat structure (a wall, a pier, a deck underside) in gusts, without GPS, on the
-position estimate the drone already has (VIO into EKF2). A small learned controller (a
-policy, an 8k-parameter neural network compiled into the firmware, no runtime and no heap)
-commands body rates and collective thrust to PX4's own rate controller. A classical
-watchdog with no learning in it watches every tick and hands control back to stock PX4
-modes when anything is wrong.
+position estimate the drone already has (VIO into EKF2). The policy is a small neural
+network (about 25,000 numbers, compiled into the firmware: no runtime, no memory allocated
+in flight). It commands body rates and total thrust to PX4's own rate controller. A
+classical watchdog, with no learning in it, checks every control step and hands control back
+to stock PX4 modes when anything is wrong.
 
 It is not: a navigation system, VIO or SLAM, obstacle avoidance, a planner, a landing
-system for unknown ground, or a replacement for the pilot. It does not make a bad position
-estimate good; it is built to stay safe when the estimate is bad for a while, and to hand
-back when it is bad for too long (`docs/decisions.md`, scope rows).
+system for unknown ground, or a replacement for the pilot. It cannot make a bad position
+estimate good. It is built to stay safe while the estimate is bad for a short time, and to
+hand back when it is bad for too long (`docs/decisions.md`, scope rows).
 
 ## 2. Operating envelope
 
-Flown and tested in simulation inside this envelope. Outside it, nothing is claimed.
+Tested in simulation inside this envelope. Outside it, nothing is claimed.
 
 | Item | Envelope | Where it comes from |
 | --- | --- | --- |
-| Airframe | A quadrotor like the PX4 Gazebo x500 (2 kg, 0.36 m prop reach). Another airframe needs its own fit and test | `envs/structure_hold/airframes.py`, `docs/partner-pack.md` step 0 |
-| Flight stack | PX4 v1.17.0 exactly, multicopter, the module built in (`boards/structurehold.px4board` on 2 MB flight controllers) | `docs/decisions.md` (PX4 pin) |
-| Position source | VIO (or another external position) into EKF2 as `ODOMETRY` VISION/VIO, 20 Hz or faster, latency set in `EKF2_EV_DELAY` | `docs/partner-pack.md` step 2 |
+| Airframe | A quadrotor like the PX4 Gazebo x500 (2 kg, 0.36 m prop reach). Another airframe needs its own fit and test | `envs/structure_hold/airframes.py`, `docs/airframe-fit.md`, `docs/partner-pack.md` step 0 |
+| Flight stack | PX4 v1.17.0 exactly, multicopter, with the module built in (`boards/structurehold.px4board` on 2 MB flight controllers) | `docs/decisions.md` (PX4 pin) |
+| Position source | VIO (or another external position) into EKF2 as `ODOMETRY` VISION/VIO, 20 Hz or faster, its latency set in `EKF2_EV_DELAY` | `docs/partner-pack.md` step 2 |
 | Height source | Barometer (`EKF2_HGT_REF` 1) or a downward rangefinder. **Not vision** (see F5) | `eval/baselines/px4_tuned_v2.params`, `docs/field-faults.md` |
-| GPS | Off (`EKF2_GPS_CTRL` 0). Flying with GPS on is untested (F23) | `docs/field-faults.md`, Next |
-| Forward rangefinder | Required for the wall guard and the guarded modes: forward-facing `distance_sensor`, reads 0.3 to 5 m on the wall | `docs/partner-pack.md` step 2 |
-| Distance from the structure | Engage 1 to 3 m from it, facing it (body x within 35 deg of the wall normal) | Gate 1 and Gate 2 scenarios |
-| Wind | Mean wind up to 8 m/s with gusts, from any direction including straight into the wall | `docs/gate1.md`, `docs/baseline.md` |
-| Estimate faults trained on | Delay 50 to 150 ms, noise, bias walk, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
+| GPS | Off (`EKF2_GPS_CTRL` 0). Flying with GPS on is untested (F27) | `docs/field-faults.md`, Next |
+| Forward rangefinder | Required for the wall guard and the guarded modes: a forward-facing `distance_sensor` that reads 0.3 to 5 m on the wall | `docs/partner-pack.md` step 2 |
+| Distance from the structure | Engage 1 to 3 m from it, facing it (nose within 35 deg of square to the wall) | Gate 1 and Gate 2 scenarios |
+| Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
+| Estimate faults trained on | Delay 50 to 150 ms, noise, slow bias drift, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
 | Height above ground | Tested 2 to 3.5 m. Engaging on the ground is refused | `sitl_test.py` ground-engage check |
 
 ### Do not use Structure Hold
@@ -63,15 +85,15 @@ Each layer works without the one above it. Only the first contains learning.
 | Layer | What it does | Learned? |
 | --- | --- | --- |
 | Policy | Holds the point in wind and through short estimate faults | Yes |
-| Last-step check | A non-finite rate becomes 0, a non-finite thrust the hover thrust; rates clamped to the policy's scale | No |
-| Brake-and-hover fallback | After `SH_FB_T` of stale fix, brakes to a level hover (`docs/fallback.md`). Off by default for v22, which flies dropouts itself; `SH_FB_EN` 1 turns it on | No |
-| Watchdog | Trips on: test fault, invalid estimate (EKF2 flags or NaN), stale estimate (`SH_WD_EST_TO`), frozen fix (`SH_WD_FRZ_T`, 1 s by default), tilt (`SH_WD_TILT`), hold error (`SH_WD_POS_ERR`). A trip latches until disarm | No |
-| Handback order | Decided rows, pinned by `test_handback.cpp`: next to a measured wall, Structure Hover; else Position (Altitude if no horizontal estimate), then Hold, then Land, Land repeated until it takes. A trip in Structure Land goes to stock Land first | No |
+| Last-step check | A non-finite rate becomes 0 and a non-finite thrust becomes hover thrust; rates are clamped to the policy's range | No |
+| Brake-and-hover fallback | After `SH_FB_T` (0.5 s) without a fresh fix, brakes to a level hover (`docs/fallback.md`). Off for v22, which flies dropouts itself (`SH_FB_EN` -1 follows the policy's own setting); `SH_FB_EN` 1 turns it on | No |
+| Watchdog | In Structure Hold it trips on: a test fault, an invalid estimate (EKF2 flags or a NaN), a stale estimate (`SH_WD_EST_TO`, 5 s), a frozen fix (`SH_WD_FRZ_T`, 1 s), tilt (`SH_WD_TILT`, 45 deg), hold error (`SH_WD_POS_ERR`, 2 m). In Structure Hover on the rangefinder alone it trips when the range is lost for 0.5 s. A trip latches until disarm | No |
+| Handback order | Decided rows, pinned by `test_handback.cpp`. Next to a measured wall: Structure Hover (with `SH_HB_RANGE` 1 also when the position estimate is gone). Otherwise Position mode (Altitude mode if there is no horizontal estimate), then Hold, then Land, with Land asked for again until it takes. A trip in Structure Land goes to stock Land first | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says | No |
-| Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on the setpoint | No |
-| Entry checks | Refuses to engage on the ground, while a trip is latched, (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
-| Parameter clamps | Every `SH_` parameter clamped to its range by the module (`ParamLimits.hpp`); PX4 does not enforce limits | No |
-| Ground station | Every safety action is sent to QGroundControl as STATUSTEXT (section 4) | No |
+| Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point. With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
+| Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid or frozen estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
+| Parameter clamps | The module clamps every `SH_` parameter to its range (`ParamLimits.hpp`); PX4 itself does not enforce limits | No |
+| Ground station | Every safety action is sent to QGroundControl as a text message (section 4) | No |
 | PX4 itself | Stock failsafes (battery, RC loss, geofence) and the pilot's mode switch override the module at any time | No |
 
 ## 4. What the pilot sees, and what to do
@@ -79,50 +101,59 @@ Each layer works without the one above it. Only the first contains learning.
 | Message in QGroundControl | Severity | Meaning | Pilot action |
 | --- | --- | --- | --- |
 | `Structure Hold: watchdog trip: <code> (<reason>), handing back` | critical | The watchdog stopped the policy. The reason names the limit, e.g. `tilt (tilted past SH_WD_TILT)` | Let the handback finish, or take Position mode. Back off and land |
-| `Structure Hold: locked out until disarm` | info | After a trip the mode cannot be re-engaged in this flight | Land and disarm before trying again; write the trip in the log |
-| `Structure Hold: handing back to <mode>` | info | Which stock or guarded mode was asked for. Repeated `(repeated until it takes)` on the last one (Land) | If it is Land and you do not want to land, take Position mode |
+| `Structure Hold: locked out until disarm` | info | After a trip the mode cannot be engaged again in this flight | Land and disarm before trying again; note the trip in the flight log |
+| `Structure Hold: handing back to <mode>` | info | Which stock or guarded mode was asked for. The last one (Land) shows `(repeated until it takes)` | If it is Land and you do not want to land, take Position mode |
 | `Structure Hold: engage refused: <code> (<reason>)` | critical | The switch into the mode was refused, e.g. `landed (on the ground)` | Fix the cause; stay in your stock mode |
-| `Structure Hold: engage refused, EKF reset its position N s ago` | critical | `SH_RST_HOLD` is running after an EKF reset | Wait, then engage again |
-| `Structure Hold: wall guard moved the hold point X m back` | warning | The estimate put the hold point too close to the measured wall; it was moved back | Check the VIO; expect the drone to step back |
-| `Structure Hold: policy produced a non-finite action` | critical | The last-step check replaced the output | Take Position mode and land; send the log |
-| `Structure Hover: position lost, holding X m from the wall on the rangefinder` | critical | `SH_HB_RANGE` 1: the horizontal estimate is gone and Structure Hover holds the distance on the range alone. It slides along the wall with the wind | Take over and land soon; the hold along the wall is not controlled |
+| `Structure Hold: engage refused, EKF reset its position N s ago (SH_RST_HOLD N s)` | critical | `SH_RST_HOLD` is waiting out an EKF reset | Wait, then engage again |
+| `Structure Hold: wall guard moved the hold point X m back, to Y m from the wall` | warning | The estimate put the hold point too close to the measured wall; it was moved back | Check the VIO; expect the drone to step back |
+| `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | warning | The brake-and-hover fallback started or ended (only if `SH_FB_EN` turns it on) | Watch the drift; take over if the fix does not come back |
+| `Structure Hold: policy produced a non-finite action` | critical | The last-step check replaced the output. It should never happen | Take Position mode and land; send the log |
+| `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | warning | Bench-test setting left on | Props off. Set `SH_BENCH` 0 before any flight |
+| `Structure Hover: position lost, holding X m from the wall on the rangefinder` | critical | `SH_HB_RANGE` 1: the horizontal estimate is gone and Structure Hover holds the distance on the range alone. It slides along the wall with the wind | Take over and land soon; nothing controls the position along the wall |
 | `Structure Hover: position back, holding on the estimate` | info | The estimate came back | Continue or land |
 
-`sitl_test.py` checks the trip and wall-guard messages arrive in every SIH run.
+`sitl_test.py` checks that the trip and wall-guard messages arrive in every SIH run, and
+`sim2real/px4/tests/test_safety_manual.py` checks every message above against the module's
+code.
 
 ## 5. Failure table (FMEA)
 
-Severity of the effect if nothing caught it: **4** wall contact or crash, **3** large
-uncommanded move or loss of height, **2** a degraded hold that stays clear, **1** nuisance.
-"Residual" is the severity left with the default parameters and the envelope above.
-Evidence: **U** unit test (`sim2real/px4/tests/`), **S** PX4 SIH check (`sitl_test.py`),
-**G** Gazebo SITL flight, **M** mock simulator, **none** not tested yet. Gazebo field-fault
-results are one seed, one scenario unless stated (`docs/field-faults.md`).
+How to read it. **Sev** is how bad the effect would be if nothing caught the failure:
+**4** wall contact or crash, **3** a large unplanned move or loss of height, **2** a looser
+hold that stays clear of the wall, **1** a nuisance. **Residual** is how bad it still is
+with the default parameters, inside the envelope above. **Evidence** is the test behind the
+row: **U** unit test (`sim2real/px4/tests/`), **S** PX4 SIH check (`sitl_test.py`), **G**
+Gazebo SITL flight, **M** mock simulator, **none** not tested yet.
+
+Gazebo field faults (`docs/field-faults.md`) are one flight on one seed and one scenario (1 m
+from the wall, 4 m/s wind blowing into it) unless a row says otherwise. F1, F2, F6 and F7
+were flown on the earlier vision-height set-up; F4 was flown on barometer height, as the
+envelope requires, over three winds and four seeds.
 
 ### Position estimate
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F1 | Estimate snaps back to the VIO origin in flight | VIO reset | Stock PX4 climbed 2.2 m and slid 0.39 m toward the wall | 3 | Hold error over `SH_WD_POS_ERR` | Trip, Structure Hover: moved 0.09 m, 0.99 m from the wall | 1 | G (`field_reset`) |
+| F1 | Estimate snaps back to the VIO origin in flight | VIO reset | Stock PX4 climbed 2.2 m (EKF2's vision height snapped too) and slid 0.39 m toward the wall | 3 | Hold error over `SH_WD_POS_ERR` | Trip, Structure Hover: moved 0.09 m, 0.99 m from the wall | 1 | G (`field_reset`) |
 | F2 | VIO restarts: a gap, then the same snap | VIO process crash | As F1 | 3 | As F1 | As F1: moved 0.08 m, 0.95 m from the wall | 1 | G (`field_restart`) |
-| F3 | Short dropout, under 3 s | Feature loss, link hiccup | Drift while EKF2 dead-reckons | 3 | Trained on (stale flag in the observation) | Policy holds through it | 2 | M (Gate 1 stress, capped 2 to 3 s cell passes) |
-| F4 | Long silence, over 5 s | Companion computer or link lost | Drift into the wall | 4 | Stale or invalid estimate trip | Default (`SH_HB_RANGE` 1): Structure Hover holds the wall distance on the range, 0 of 12 touched, closest 0.84 m, all airborne. With `SH_HB_RANGE` 0: Altitude mode, and any wind into the wall carries it there (8 of 12 touched, every one at 4 and 8 m/s). Tuned PX4: 6 of 12 touched, all 12 landed by failsafe | **2 by default, 4 with `SH_HB_RANGE` 0** | G (`field_silence`, barometer height, 3 winds x 4 seeds) |
-| F5 | Height estimate freezes during a silence | `EKF2_HGT_REF` 3 (vision height): the baro change goes into its bias | Sank to the ground unseen in 5.5 s | 4 | Nothing in the loop can see it | Prevented by the envelope: barometer height held 2.39 to 2.45 m | 1 with baro height | G (`field_silence`, vision vs baro) |
-| F6 | Fix keeps arriving but stops moving | Stuck camera pipeline | Wandered 0.55 m (stock PX4 0.46 m) | 3 | `SH_WD_FRZ_T` (1 s by default) | Default: trip in 1 s, Structure Hover, moved 0.21 m, 0.97 m from the wall. With 0: nothing | **2 by default, 3 with `SH_WD_FRZ_T` 0** | U, G (`field_freeze`) |
-| F7 | Slow drift toward or away from the wall | VIO scale drift, a source walking off | Stock PX4 followed it to 0.42 m (props at 0.40 m) | 4 | Rangefinder (wall guard) | Stopped at `SH_WALL_MIN` 0.70 m. Drift along the wall or away from it is not caught | 2 | G (`field_drift`) |
-| F8 | Random jumps, noise, bias walk | A working but imperfect VIO | A looser hold | 2 | Trained on | Gate 2: v22 p95 54 to 55 % below tuned PX4 (8 seeds) | 1 | M, G (`docs/baseline.md`) |
-| F9 | Hold point captured on a jumped estimate at engage | Engage right after an EKF reset | Hold point on the wall face, contact | 4 | Wall guard; `SH_RST_HOLD` (off by default) | The guard moves the point back to `SH_WALL_MIN` | 2 | U, G (`docs/baseline.md`, wall guard on seed 3) |
-| F10 | Latency above the trained range | Wrong `EKF2_EV_DELAY`, slow VIO | Oscillation, crash (an early policy crashed 68 % at 150 to 250 ms in the mock) | 4 | Tilt or hold-error trip, late | Handback | 3: keep inside the envelope | M (`docs/gate1.md` stress) |
-| F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies garbage | 4 | Invalid-estimate trip, same tick | Handback | 1 | U |
-| F12 | Heading at engage is wrong | Magnetometer near steel | Wall normal wrong: guard and hold axes off | 3 | Rangefinder gate (35 deg) only | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
+| F3 | Short dropout, under 3 s | Feature loss, link hiccup | Drift while EKF2 dead-reckons | 3 | Trained on (the policy sees how old the fix is) | Policy holds through it | 2 | M (Gate 1 stress: the 2 to 3 s cell passes) |
+| F4 | Long silence, over 5 s | Companion computer or link lost | Drift into the wall | 4 | Invalid or stale estimate trip | Default (`SH_HB_RANGE` 1): Structure Hover holds the wall distance on the range; 0 of 12 flights touched, closest 0.84 m, all still flying. With `SH_HB_RANGE` 0: Altitude mode, and any wind into the wall carries it there (8 of 12 touched, every one at 4 and 8 m/s). Tuned PX4: 6 of 12 touched, all 12 landed by its failsafe | **2 by default, 4 with `SH_HB_RANGE` 0** | G (`field_silence`, barometer height, 3 winds x 4 seeds) |
+| F5 | Height estimate freezes during a silence | `EKF2_HGT_REF` 3 (vision height): EKF2 puts the barometer's change into a bias | Sank to the ground unseen in 5.5 s | 4 | Nothing in the loop can see it | Prevented by the envelope: on barometer height it held 2.39 to 2.45 m | 1 with barometer height | G (`field_silence`, vision vs barometer) |
+| F6 | Fix keeps arriving but stops moving | Stuck camera pipeline | Wandered 0.55 m (stock PX4 0.46 m) | 3 | Frozen-fix trip, `SH_WD_FRZ_T` (1 s) | Default: trip after 1 s, Structure Hover, moved 0.21 m, 0.97 m from the wall. With `SH_WD_FRZ_T` 0: nothing catches it | **2 by default, 3 with `SH_WD_FRZ_T` 0** | U, G (`field_freeze`) |
+| F7 | Slow drift toward or away from the wall | VIO scale drift, a source walking off | Stock PX4 followed it to 0.42 m (props at 0.40 m) | 4 | Rangefinder (wall guard) | Stopped at `SH_WALL_MIN` 0.70 m. Drift along the wall, or away from it, is not caught | 2 | G (`field_drift`) |
+| F8 | Random jumps, noise, slow bias drift | A working but imperfect VIO | A looser hold | 2 | Trained on | Gate 2 on barometer height: v22 p95 43 to 45 % below tuned PX4, 8 seeds, 0 crashes (54 to 55 % on the earlier vision-height set-up) | 1 | M, G (`docs/baseline.md`) |
+| F9 | Hold point taken from a jumped estimate at engage | Engage right after an EKF reset | Hold point on the wall face, contact | 4 | Wall guard; `SH_RST_HOLD` (off by default) | The guard moves the point back to `SH_WALL_MIN` | 2 | U, G (`docs/baseline.md`, wall guard on seed 3) |
+| F10 | Latency above the trained range | Wrong `EKF2_EV_DELAY`, slow VIO | Oscillation, crash (an early policy crashed 68 % of runs at 150 to 250 ms in the mock) | 4 | Tilt or hold-error trip, late | Handback | 3: keep inside the envelope | M (`docs/gate1.md` stress) |
+| F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies on garbage | 4 | Invalid-estimate trip, same step | Handback | 1 | U |
+| F12 | Heading at engage is wrong | Magnetometer near steel | Wall direction wrong: guard and hold axes off | 3 | Only the rangefinder's 35 deg limit | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
 
 ### Rangefinder
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Samples gated: age under 0.2 s, inside the sensor's range, not flagged, angle under 35 deg | The guard does nothing on a bad sample; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
-| F14 | Range lost while Structure Hover holds on it alone | Sensor fault during `SH_HB_RANGE` | Uncontrolled drift | 4 | No usable range for 0.5 s | `range_lost` trip, then Altitude mode, Hold, Land | 3 | U |
-| F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | As the range says | 3: keep inside the envelope | none |
+| F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Each reading is checked: under 0.2 s old, inside the sensor's range, not flagged, angle under 35 deg | The guard does nothing on a bad reading; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
+| F14 | Range lost while Structure Hover holds on it alone | Sensor fault during `SH_HB_RANGE` | Uncontrolled drift | 4 | No usable range for 0.5 s | `range_lost` trip, then Altitude mode (Position mode if the estimate is back), Hold, Land | 3 | U |
+| F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | Follows what the range says | 3: keep inside the envelope | none |
 
 ### Controller and module
 
@@ -134,18 +165,18 @@ results are one seed, one scenario unless stated (`docs/field-faults.md`).
 | F19 | Engage on the ground | Pilot error | Takes off toward a hold point on the ground | 3 | Land detector | Refused (`landed`), idle thrust, not latched | 1 | S (every run) |
 | F20 | Engage while moving | Re-engage in a gust | Overshoot | 2 | Policy | Stops and holds without a trip | 1 | S (`--moving-engage`) |
 | F21 | Disarm or kill switch while engaged | Pilot action | Controller keeps running on the ground | 3 | Arming state | Stops, clears the latch | 1 | U, S |
-| F22 | Commander refuses a handback target | No RC for Position, no position for Hold | Stuck in the mode | 4 | Target not taken after a short wait | Next target; Land asked for again until it takes | 1 | U (`test_handback.cpp`) |
+| F22 | PX4 refuses a handback mode | No RC for Position, no position for Hold | Stuck in the mode | 4 | Mode not taken after a short wait | Next mode in the order; Land asked for again until it takes | 1 | U (`test_handback.cpp`) |
 | F23 | Trip during Structure Land | Estimate fault in the landing | Hovers in Position mode near the ground | 2 | Watchdog | Stock Land first (decided 2026-10-28) | 1 | U, G |
 | F24 | Control step overruns | Slow flight controller | Late commands | 3 | Loop time in `structure_hold_status`; worst step in `structure_hold status` | Nothing automatic | 2 | Bench test (`docs/bench-test.md`) |
-| F25 | Firmware policy differs from the released one | Build error | Untested behaviour | 4 | `test_policy_header.py`, `test_policy.cpp` vectors in CI | Build fails CI | 1 | CI |
+| F25 | Firmware policy differs from the released one | Build error | Untested behaviour | 4 | `test_policy_header.py` and the `test_policy.cpp` test vectors in CI | CI fails the build | 1 | CI |
 
 ### Outside the module
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F26 | Low battery, RC loss, geofence | PX4 failsafes | — | — | PX4 commander | PX4's failsafe overrides the external mode; the module stops when commander leaves it | as stock PX4 | PX4 |
+| F26 | Low battery, RC loss, geofence | PX4 failsafes | — | — | PX4 commander | PX4's failsafe overrides the external mode; the module stops when PX4 leaves it | As stock PX4 | PX4 |
 | F27 | GPS returns and the estimate jumps to it | GPS on, hand-over | A jump of metres | 3 | As F1 | Untested | 3: GPS off (envelope) | none |
-| F28 | Air pushed back off the wall (near-wall flow) | Prop wash on the face | Pulled toward the wall | 3 | Hold-error trip, wall guard | Model exists, off by default; v24 candidate tests it | 3 | M (`docs/near-wall-flow.md`) |
+| F28 | Air pushed back off the wall (near-wall flow) | Prop wash on the face | Pulled toward the wall | 3 | Hold-error trip, wall guard | The model exists but is off by default; the v24 candidate tests it | 3 | M (`docs/near-wall-flow.md`) |
 
 ### Fitting the simulator to a new drone (offline)
 
@@ -155,40 +186,66 @@ match the drone, and a policy trained on it being released for that drone.
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | F29 | Wrong drag coefficient from the wind fit | Wrong mass entered: drag scales with it | Policy trained on the wrong wind response | 3 | Release rule: beat the released policy on `gazebo_check`, then a Gazebo re-fly; partner bench and tethered steps before any scored flight | 2 | `eval/fit_wind.py`, `docs/wind-fit.md` |
-| F30 | Wind heading and crossflow turned | Heading error in the logged attitude (compass near steel) | As F29 | 3 | As F29 | 2 | as F29 |
-| F31 | Turbulence strength and time constant off by 10 to 30 % | A 60 s hold shows only part of the spectrum | Too mild or too harsh training wind | 2 | Fit several holds; as F29 | 2 | as F29 |
-| F32 | Max thrust wrong | Thrust curve fitted over the narrow band an autotune flies, then extrapolated | Policy expects authority the drone lacks in strong gusts | 3 | As F29; tilt and hold-error trips in flight | 2 | `eval/fit_airframe.py`, `docs/airframe-fit.md` |
-| F33 | Axis cross-coupling missing | Measured but not modelled in the env (the x500 shows about 10 % yaw into roll) | Hold looser than the mock predicts | 2 | As F29 | 2 | as F32 |
-| F34 | Wrong rate gains in the env | A parameter file that is not the one flown | Policy tuned to a different rate loop | 3 | As F29 | 2 | as F32 |
-| F35 | Log without the needed topics | `SDLOG_PROFILE` not 147 | No fit | 1 | The fit tool refuses the log | 1 | as F32 |
+| F30 | Wind heading and crossflow turned | Heading error in the logged attitude (compass near steel) | As F29 | 3 | As F29 | 2 | As F29 |
+| F31 | Turbulence strength and time constant off by 10 to 30 % | A 60 s hold shows only part of the gust spectrum | Training wind too mild or too harsh | 2 | Fit several holds; as F29 | 2 | As F29 |
+| F32 | Max thrust wrong | Thrust curve fitted over the narrow band an autotune flies, then extrapolated | Policy expects power the drone lacks in strong gusts | 3 | As F29; tilt and hold-error trips in flight | 2 | `eval/fit_airframe.py`, `docs/airframe-fit.md` |
+| F33 | Axis cross-coupling missing | Measured but not modelled in the env (the x500 shows about 10 % yaw into roll) | Hold looser than the mock predicts | 2 | As F29 | 2 | As F32 |
+| F34 | Wrong rate gains in the env | A parameter file that is not the one flown | Policy tuned to a different rate loop | 3 | As F29 | 2 | As F32 |
+| F35 | Log without the needed topics | `SDLOG_PROFILE` not 147 | No fit | 1 | The fit tool refuses the log | 1 | As F32 |
 
 ## 6. What a reviewer should set or decide
 
 | Setting | Default | Recommendation | Why |
 | --- | --- | --- | --- |
-| `EKF2_HGT_REF` | PX4's | 1 (baro) or a downward rangefinder | F5 |
+| `EKF2_HGT_REF` | PX4's | 1 (barometer) or a downward rangefinder | F5 |
 | `SH_WALL_MIN` | 0.7 m | Prop reach plus at least 0.3 m | F7, F9 |
 | `SH_WALL_REQ` | 0 | 1 | F13 |
 | `SH_HB_RANGE` | 1 | Keep 1 if the rangefinder is reliable on your structure | F4 is 2 with it, 4 without |
 | `SH_WD_FRZ_T` | 1 s | Keep 1 s | F6 |
-| `SH_WD_EST_TO`, `SH_WD_POS_ERR`, `SH_WD_TILT` | 5 s, 2 m, 45 deg | 1 m and 30 deg for first flights | Earlier trips while building trust |
-| `SH_RST_HOLD` | 0 | Operator choice | F9 (stock PX4 has the same settling problem) |
+| `SH_WD_EST_TO` | 5 s | Keep | F4 |
+| `SH_WD_POS_ERR` | 2 m | 1 m for first flights | Earlier trips while building trust |
+| `SH_WD_TILT` | 45 deg | 30 deg for first flights | Earlier trips while building trust |
+| `SH_RST_HOLD` | 0 s | Operator choice | F9 (stock PX4 has the same settling problem) |
+| `SH_BENCH` | 0 | Always 0 in flight | Bench test only (`docs/bench-test.md`) |
 
 `SH_HB_RANGE` and `SH_WD_FRZ_T` are on by default since 2026-11-02 (`docs/decisions.md`);
-setting either to 0 goes back to the earlier behaviour in F4 and F6.
+setting either to 0 goes back to the earlier behaviour in F4 and F6. The defaults in this
+table are checked against the module by `sim2real/px4/tests/test_safety_manual.py`.
 
 ## 7. Open items
 
-- **No real flight.** Gate 3 is a partner's drone (`docs/partner-pack.md`). Every residual
-  above is a simulation number.
-- Field faults are one seed and one scenario each; F4 and F6 need more seeds and winds
-  (queued).
-- No test yet for F12 (wrong heading), F15 (wrong surface), F27 (GPS hand-over).
+- **No real flight.** Gate 3 is on a partner's drone (`docs/partner-pack.md`). Every
+  residual above is a simulation number.
+- F1, F2, F6 and F7 are one flight each on the earlier vision-height set-up; they should be
+  re-flown on barometer height over more seeds and winds. F4 has seeds 1 to 4; seeds 5 to 8
+  and longer silences are next (`docs/field-faults.md`, Next).
+- No test yet for F12 (wrong heading), F15 (wrong surface) or F27 (GPS hand-over).
 - The rest of the assurance pack in gap 4: an ASTM F3201 matrix, the argument for the
-  learned part, an SBOM and a statement of origin.
+  learned part, a software bill of materials and a statement of origin.
+
+## 8. Sign-off
+
+Signing means: I have read this manual, the envelope and the failure table match what was
+built and tested at the commit named at the top, and the open items in section 7 are known
+and accepted for the stated use (simulation results and a partner's supervised test flights
+under `docs/partner-pack.md`). It does not certify the mode for unsupervised or commercial
+operation.
+
+| Role | Name | Signature | Date |
+| --- | --- | --- | --- |
+| Prepared by | | | |
+| Approved by (owner) | Zain | | |
+| Partner reviewer (optional) | | | |
+
+Any change to sections 2 to 6 after signing makes a new version (1.1, 1.2, ...) that is
+signed again. Record each one below.
+
+| Version | Date | Commit | What changed | Signed by |
+| --- | --- | --- | --- | --- |
+| 1.0 | 2026-11-02 | `868aeb4` | First signed version: checked against the module after `SH_HB_RANGE` and `SH_WD_FRZ_T` went on by default | |
 
 ## Change control
 
-Change a row when its evidence changes, in the same PR as the code or result, and keep the
-test reference current. A change to the handback order or a watchdog default is a decision
-row first (`docs/decisions.md`).
+Change a row when its evidence changes, in the same PR as the code or result, keep the test
+reference current, and add a line to the version table in section 8. A change to the
+handback order or a watchdog default is a decision row first (`docs/decisions.md`).
