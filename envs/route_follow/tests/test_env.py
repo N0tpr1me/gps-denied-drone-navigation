@@ -144,3 +144,29 @@ def test_centring_uses_the_walls_when_the_estimate_is_biased():
         offsets[centring] = float(env.step_cross_track.mean())
     assert offsets[0.0] > 0.3
     assert offsets[1.0] < 0.15
+
+
+def test_the_pd_flies_the_other_worlds_on_a_clean_estimate():
+    """Arched drifts, narrowed stretches and side branches: the geometry only, so the PD on a
+    perfect estimate still flies them without touching a wall."""
+    c = cfg(episode_length_s=20.0, estimate=CLEAN_ESTIMATE, disturbance=STILL_AIR,
+            route={"arch_prob": 1.0, "tunnel_prob": 0.3, "pinch_prob": 0.5,
+                   "pinch_frac": [0.8, 0.9], "branches": 2, "corridor_width_m": [2.4, 4.0],
+                   "tunnel_radius_m": [1.2, 2.0]},
+            ranges={"present_prob": 1.0})
+    env = RouteFollowEnv(c, 8, seed=8)
+    assert env.geo.arched.any() and (env.geo.piece_scale < 1).any()
+    assert env.geo.piece_on[:, -2:].all()
+    pd = RoutePd(env)
+    obs, _ = env.get_observations()
+    for _ in range(env.max_episode_length - 1):
+        obs, _, done, _ = env.step(pd(obs))
+        assert not done.any()
+    assert float(env.step_to_end.max()) < 0.3
+
+
+def test_config_checks_the_narrowed_worlds_leave_room():
+    with pytest.raises(ValueError, match="no room"):
+        RouteFollowConfig.from_dict({"contact_radius_m": 0.6, "route": {"pinch_prob": 0.5}})
+    with pytest.raises(ValueError, match="pinch_frac"):
+        RouteFollowConfig.from_dict({"route": {"pinch_frac": [0.0, 0.5]}})

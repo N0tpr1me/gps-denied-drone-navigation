@@ -7,6 +7,12 @@ route turns at fewer joints (``RouteGen.min_segment_m``). The cross-section is a
 (rectangle, ``half_width`` x ``half_height``) or a tunnel (circle, ``radius``), drawn per
 route; ``envs/route_follow/geometry.py`` builds the walls from it.
 
+**Worlds** (``RouteGen``, all off by default): a corridor can have an arched roof (``arched``:
+a mine drift or arched culvert), any segment can be narrowed (``seg_scale``: a doorway, a
+collapsed stretch, a smaller pipe section), and dead-end side passages can leave the route
+at right angles (``branch_*``: crosscuts, side corridors). The extra draws come after all of
+the plain route's draws, so a config with them off draws exactly the routes it always did.
+
 **Speed plan.** The target starts and ends at rest and passes each joint at a corner speed
 that drops with the turn, ``speed * (1 - (1 - corner_speed_min_frac) * min(angle, 90 deg) /
 90 deg)``: a 90 degree corner at a fifth of the cruise speed, a straight joint at full speed,
@@ -43,6 +49,22 @@ class Routes:
     speed: np.ndarray  # (N,) m/s, the target's cruise speed
     accel: np.ndarray  # (N,) m/s^2
     corner_speed: np.ndarray  # (N, S + 1) m/s at each waypoint (0 at both ends)
+    arched: np.ndarray | None = None  # (N,) bool: a corridor with a half-circle roof
+    seg_scale: np.ndarray | None = None  # (N, S) cross-section scale of each segment
+    branch_start: np.ndarray | None = None  # (N, B, 3) m, on the centreline
+    branch_dir: np.ndarray | None = None  # (N, B, 3) unit, horizontal
+    branch_len: np.ndarray | None = None  # (N, B) m, 0 where there is no branch
+    branch_scale: np.ndarray | None = None  # (N, B) cross-section scale (its segment's)
+
+    def __post_init__(self) -> None:
+        n, s = self.waypoints.shape[0], self.waypoints.shape[1] - 1
+        if self.arched is None:
+            self.arched = np.zeros(n, dtype=bool)
+        if self.seg_scale is None:
+            self.seg_scale = np.ones((n, s))
+        if self.branch_len is None:
+            self.branch_start, self.branch_dir = np.zeros((n, 0, 3)), np.zeros((n, 0, 3))
+            self.branch_len, self.branch_scale = np.zeros((n, 0)), np.ones((n, 0))
 
     @property
     def seg_len(self) -> np.ndarray:
@@ -134,12 +156,39 @@ def sample_routes(cfg: RouteGen, n: int, episode_length_s: float,
     half_width = 0.5 * rng.uniform(*cfg.corridor_width_m, size=n)
     half_height = 0.5 * rng.uniform(*cfg.corridor_height_m, size=n)
     radius = rng.uniform(*cfg.tunnel_radius_m, size=n)
+    # The worlds' draws, only when switched on (module docstring).
+    arched = np.zeros(n, dtype=bool)
+    if cfg.arch_prob > 0:
+        arched = ~tunnel & (rng.random(n) < cfg.arch_prob)
+        half_height = np.where(arched, np.maximum(half_height, 0.6 * half_width), half_height)
+    seg_scale = np.ones((n, s))
+    if cfg.pinch_prob > 0:
+        pinched = rng.random((n, s)) < cfg.pinch_prob
+        seg_scale = np.where(pinched, rng.uniform(*cfg.pinch_frac, size=(n, s)), 1.0)
+    b = cfg.branches
+    if b > 0:
+        b_on = rng.random((n, b)) < cfg.branch_prob
+        b_seg = rng.integers(0, s, size=(n, b))
+        b_at = rng.uniform(0.3, 0.7, size=(n, b))
+        b_side = np.where(rng.random((n, b)) < 0.5, -1.0, 1.0)
+        b_len = np.where(b_on, rng.uniform(*cfg.branch_len_m, size=(n, b)), 0.0)
 
     def build(total: np.ndarray) -> Routes:
         step = unit * (total[:, None] * frac)[..., None]
         wp = np.concatenate([start, start + np.cumsum(step, axis=1)], axis=1)
-        return _finish(wp, tunnel, half_width, half_height, radius, speed, accel,
-                       cfg.corner_speed_min_frac)
+        r = _finish(wp, tunnel, half_width, half_height, radius, speed, accel,
+                    cfg.corner_speed_min_frac)
+        r.arched, r.seg_scale = arched, seg_scale
+        if b > 0:
+            rows = np.arange(n)[:, None]
+            d = (wp[:, 1:] - wp[:, :-1])[rows, b_seg]  # (n, b, 3) the branch's segment
+            left = np.stack([-d[..., 1], d[..., 0], np.zeros_like(d[..., 0])], -1)
+            left /= np.maximum(np.linalg.norm(left, axis=-1, keepdims=True), 1e-9)
+            r.branch_start = wp[rows, b_seg] + b_at[..., None] * d
+            r.branch_dir = b_side[..., None] * left
+            r.branch_len = b_len
+            r.branch_scale = seg_scale[rows, b_seg]
+        return r
 
     # The corners slow the target down: shrink the route until the plan fits the flying time
     # (the time is close to linear in the length, so a few rescales converge).
