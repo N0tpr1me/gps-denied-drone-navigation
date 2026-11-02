@@ -50,8 +50,8 @@ interface, and commander can take the vehicle out of it at any time.
 | Forward rangefinder | `distance_sensor` with orientation forward (`ROTATION_NONE`), reading 0.3 m to at least 5 m on your structure | The wall guard, Structure Land and Structure Hover use it to keep off the wall. Optional to the code, required for flights near a structure (`SH_WALL_REQ` 1) |
 | Pilot | An RC mode switch with Position mode on it, and a kill switch | Position mode is the pilot's way out of anything |
 
-Height: fly the barometer or a downward rangefinder as EKF2's height reference, not vision
-(`EKF2_HGT_REF` 3): with vision height, EKF2's height freezes when the VIO goes quiet and
+Height: fly the barometer (`EKF2_HGT_REF` 0) or a downward rangefinder (2) as EKF2's height
+reference, not GPS (1, PX4's default) and not vision (3): with vision height, EKF2's height freezes when the VIO goes quiet and
 the vehicle can sink unseen (`docs/field-faults.md`). The EKF2 settings to check are listed
 in `docs/partner-pack.md`, step 2.
 

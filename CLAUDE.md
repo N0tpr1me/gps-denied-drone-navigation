@@ -189,7 +189,8 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   RTK receiver fused beside the VIO, with the forward rangefinder required (`SH_WALL_REQ` 1):
   on a 1.5 m GPS jump tuned PX4 hit the wall on 3 of 3 seeds, v22's wall guard held 0.70 m;
   no module code was added (safety manual 1.3). PX4 v1.17's `EKF2_HGT_REF` 1 is GPS height,
-  not barometer (0); the benchmark set only flew on the barometer because there was no GPS.
+  not barometer (0); the benchmark set said 1 until 2026-11-02 and flew on the barometer only
+  because there was no GPS; it says 0 now (`eval/log_health.py` warns on 1).
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU

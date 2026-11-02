@@ -33,8 +33,9 @@ run_estimate.py    host runner: scenario + profile -> run folder, verify, score
    estimator type VIO) to PX4's second onboard link on port 14030. PX4 turns it into
    `vehicle_visual_odometry`; EKF2 fuses position, height and velocity from it
    (`EKF2_EV_CTRL 7`, `EKF2_GPS_CTRL 0`, `SYS_HAS_GPS 0`), with the barometer as the height
-   reference (`EKF2_HGT_REF 1` since 2026-11-01; it was 3, vision, before:
-   `docs/field-faults.md` says why). Heading still comes from the magnetometer.
+   reference (`EKF2_HGT_REF 0`; it was 3, vision, before 2026-11-01, and read 1 until
+   2026-11-02, which PX4 v1.17 numbers GPS and flew on the barometer only by fallback:
+   `docs/field-faults.md` and `docs/log-health.md` say why). Heading still comes from the magnetometer.
 3. During a dropout nothing is sent: EKF2 sees a gap and dead-reckons on the IMU, as it
    would with a real camera that lost tracking. Jumps arrive as ordinary samples; the EKF's
    innovation gate decides what to do with them (see the LOG entries for what it did).
