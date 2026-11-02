@@ -326,7 +326,9 @@ python -m eval.partner_session <folder>/session.yaml    # writes <folder>/scored
   the 60 s hold only.
 
 `scored/report.md` has a table per controller and, per case, Structure Hold's mean p95
-against tuned PX4 on your drone. We log every scored run in our experiment log, aborts and
+against tuned PX4 on your drone. `scored/benchmark_report.html` is the same result on one
+printable page (headline, per-case table, every hold as a dot, every handback in plain
+words, set-up and method; `eval/partner_report.py`, `docs/eval-kit.md`). We log every scored run in our experiment log, aborts and
 failures included, and send you the report.
 
 ## Troubleshooting
