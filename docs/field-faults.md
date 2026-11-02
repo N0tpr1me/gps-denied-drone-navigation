@@ -85,7 +85,7 @@ the second set. The stock runner anchors on its height and was not affected.
 
 Not the module's horizontal logic: EKF2's height. The benchmark's EKF2 set-up at the time
 (`ekf2_ev.params`, a Decided row of 2026-10-21) made vision the height reference
-(`EKF2_HGT_REF 3`; barometer since 2026-11-01), with the barometer aiding through a bias
+(`EKF2_HGT_REF 3`; barometer since 2026-11-01, `EKF2_HGT_REF 0`), with the barometer aiding through a bias
 estimate. When the vision stream
 stops, EKF2 puts the barometer's change into that bias and its height stops moving: in this
 flight the baro innovation grew to -2.4 m while EKF2's height stayed at 2.5 m. A 4 % dip in
@@ -93,7 +93,7 @@ the policy's thrust as the fix went stale started a 0.5 m/s descent, and nothing
 could see it. Stock PX4 meets the same frozen height, but nothing pushed it during
 those 4.5 s, and then its failsafe took over.
 
-The same flight with the barometer as the height reference (`EKF2_HGT_REF 1`, a scratch copy
+The same flight with the barometer as the height reference (`EKF2_HGT_REF 1` then, which PX4 v1.17 numbers GPS and with GPS off falls back to the barometer; 0 since 2026-11-02; a scratch copy
 of the tuned parameters, nothing else changed) held its height through the silence (2.39 to
 2.45 m). It then failed the way the first set suggested: the watchdog handed back to
 Altitude mode, which keeps the vehicle level, and the wind blew it into the wall (props
@@ -282,8 +282,8 @@ faults below (`sim2real/estimate_bridge/gps.py`), PX4 takes it as its GPS (`MAV_
 height and velocity beside the vision stream (`gps_on.params`, laid over
 `px4_tuned_v2.params` by the runners whenever the profile has a `gps` block). The height
 reference is set to the barometer explicitly (`EKF2_HGT_REF` 0: in PX4 v1.17 the value 1 the
-benchmark set carries means GPS height, and only flew on the barometer because EKF2 falls back
-to it with no GPS; a separate fix is pending). RTK fixed, 10 Hz, 1 cm noise.
+benchmark set carried until 2026-11-02 means GPS height, and only flew on the barometer because
+EKF2 falls back to it with no GPS; the benchmark set says 0 now too). RTK fixed, 10 Hz, 1 cm noise.
 
 | Profile | What the receiver does | Field report it copies |
 | --- | --- | --- |
