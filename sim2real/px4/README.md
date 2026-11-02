@@ -147,8 +147,11 @@ What it does today:
   landing left the vehicle hovering 0.12 m up in Position mode). Without a usable range it is a plain position-holding landing.
   `structure_hold_status.state` is `landing` (4) while it flies. The guard's push rate,
   low-passed over 0.3 s, goes in as xy velocity feed-forward (position-only setpoints left
-  PX4's loop trailing the pushed point: 0.37 m closest on Gazebo seed 3 at 8 m/s), and the
-  descent slows from `MPC_LAND_SPEED` to 0.3 m/s while the vehicle is 0.15 to 0.4 m closer
+  PX4's loop trailing the pushed point: 0.37 m closest on Gazebo seed 3 at 8 m/s). When
+  the vehicle itself is inside `SH_WALL_MIN` on the measured range anyway (PX4's loop past
+  the guarded point on a noisy velocity estimate), it also gets a back-off of 2 m/s per m
+  of shortfall, at most 0.5 m/s (`WallGuard::backOffSpeed`), measured on the range alone.
+  The descent slows from `MPC_LAND_SPEED` to 0.3 m/s while the vehicle is 0.15 to 0.4 m closer
   to the wall than the point.
 - **Structure Hover: the guarded handback** (`SH_HB_GUARD`, default on; a third mode, ext3).
   The same guarded setpoint without the descent, height held. A trip in Structure Hold hands

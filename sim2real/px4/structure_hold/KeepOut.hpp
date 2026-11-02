@@ -198,9 +198,17 @@ public:
 		float hx = hold_ned[0], hy = hold_ned[1];
 		const float x0 = hx, y0 = hy;
 
+		// When the forward rangefinder gives the wall, the floor only holds back an obstacle's
+		// push: on its own it is the wall guard's job, already done this tick, and acting here
+		// would only move the point by rounding (SIH: "keep-out moved the hold point 0.00 m"
+		// next to a far pole used up the warning). Without the rangefinder, or with a lidar
+		// point in the cone nearer than it, the floor is the only one and acts on its own.
+		bool pushed = !(wall_m > 0.f && wall_m <= wall_cone);
+
 		for (int pass = 0; pass < PASSES; pass++) {
 			float sx = 0.f, sy = 0.f;
 			int count = 0;
+			int obstacles = 0;
 
 			if (plane) {
 				const float clearance = wall - ((hx - pos_ned[0]) * nx + (hy - pos_ned[1]) * ny);
@@ -228,11 +236,14 @@ public:
 						sx += (k - c) * ux;
 						sy += (k - c) * uy;
 						++count;
+						++obstacles;
 					}
 				}
 			}
 
-			if (count == 0) { break; }
+			pushed = pushed || obstacles > 0;
+
+			if (count == 0 || !pushed) { break; }
 
 			hx += sx / static_cast<float>(count);
 			hy += sy / static_cast<float>(count);

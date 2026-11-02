@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.6, ready for sign-off (section 8); 1.0 to 1.5 were not signed |
+| Version | 1.7, ready for sign-off (section 8); 1.0 to 1.6 were not signed |
 | Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`) and the keep-out of 1.6: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`) and the guarded modes' back-off of 1.7: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -101,7 +101,7 @@ Each layer works without the one above it. Only the first contains learning.
 | Handback order | Decided rows, pinned by `test_handback.cpp`. Next to a measured wall: Structure Hover (with `SH_HB_RANGE` 1 also when the position estimate is gone). Otherwise Position mode (Altitude mode if there is no horizontal estimate), then Hold, then Land, with Land asked for again until it takes. A trip in Structure Land goes to stock Land first | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says | No |
 | Keep-out | With collision-prevention sensors, the hold point (in all three modes) never comes closer than the keep-out to an obstacle they see; the structure ahead keeps `SH_WALL_MIN` instead. It only moves the point away, it does not avoid or plan | No |
-| Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point. With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
+| Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point, and a back-off away from the wall when the vehicle itself is inside `SH_WALL_MIN` on the measured range (PX4's loop carried past the point). With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
 | Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid or frozen estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
 | Parameter clamps | The module clamps every `SH_` parameter to its range (`ParamLimits.hpp`); PX4 itself does not enforce limits | No |
 | Ground station | Every safety action is sent to QGroundControl as a text message (section 4), and so is a warning when the vehicle nears a watchdog limit, before the trip; a status line and a live number array show the hold while it flies (`docs/pilot-status.md`) | No |
@@ -299,7 +299,8 @@ signed again. Record each one below.
 | 1.3 | 2026-11-02 | `abc8fe7` | Envelope widened to GPS on with the rangefinder required (decision row 2026-11-02); F27 flown (GPS jump, 3 seeds, with and without the rangefinder) and F38 to F40 added (RTK float, loss and hand-over, glitch); `SH_WALL_REQ` 1 required with GPS on. No module change | |
 | 1.4 | 2026-11-02 | `b20dba6` | Sections 2 and 6: the barometer height reference is `EKF2_HGT_REF` 0, not 1 (PX4 v1.17 numbers 1 GPS; found by the log health check, `docs/log-health.md`); GPS added to the height sources not to use. No module change | |
 | 1.5 | 2026-11-02 | `9e0324e` | Spike gate on the wall guard (F13, F37): short returns off dust no longer move the hold point; `field_degrade` re-flown | |
-| 1.6 | 2026-11-02 | this PR | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
+| 1.6 | 2026-11-02 | `cbb68ba` | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
+| 1.7 | 2026-11-02 | this PR | Section 3, guarded modes: a back-off on the measured range when the vehicle itself is inside `SH_WALL_MIN`; the keep-out no longer moves the hold point by rounding at the wall floor (it used up its warning) | |
 
 ## Change control
 

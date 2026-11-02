@@ -399,6 +399,28 @@ int main()
 		CHECK(o.range_ok && near(o.shift_m, 0.55f));
 	}
 
+	// Back-off on the vehicle's own measured distance (Structure Hover and Land): nothing
+	// outside the standoff, gain x shortfall inside it, capped; nothing without a usable
+	// reading or with the guard off.
+	{
+		WallGuard g = guard(0.7f);
+		WallGuardOutput o{};
+		o.range_ok = true;
+		o.wall_m = 0.9f;
+		CHECK(near(g.backOffSpeed(o), 0.f));
+		o.wall_m = 0.7f;
+		CHECK(near(g.backOffSpeed(o), 0.f));
+		o.wall_m = 0.6f;
+		CHECK(near(g.backOffSpeed(o), 0.2f));
+		o.wall_m = 0.2f;
+		CHECK(near(g.backOffSpeed(o), 0.5f));
+		o.range_ok = false;
+		CHECK(near(g.backOffSpeed(o), 0.f));
+		WallGuard off = guard(0.f);
+		o.range_ok = true;
+		CHECK(near(off.backOffSpeed(o), 0.f));
+	}
+
 	if (failures == 0) {
 		std::printf("wall guard tests: all passed\n");
 		return 0;

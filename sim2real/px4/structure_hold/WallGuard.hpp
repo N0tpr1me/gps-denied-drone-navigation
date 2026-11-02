@@ -53,6 +53,8 @@ struct WallGuardLimits {
 	uint64_t max_age_us{200000};          // older range samples are ignored
 	float max_off_axis_rad{0.6109f};      // 35 deg between body x and the wall normal
 	float spike_gate_m{0.f};              // a reading this far from the last accepted waits for a second
+	float back_off_gain{2.f};             // [1/s] back-off speed per m the vehicle is inside the standoff
+	float max_back_off_mps{0.5f};         // [m/s] cap on that speed
 };
 
 /** One forward rangefinder reading, as PX4's distance_sensor carries it. */
@@ -170,6 +172,33 @@ public:
 		}
 
 		return out;
+	}
+
+	/**
+	 * The guard keeps the hold point off the wall; PX4's own xy loop, which flies Structure
+	 * Hover and Structure Land to it, can still overshoot past the point toward the wall
+	 * on a noisy or biased velocity estimate (in SIH, with the hover starting right at the
+	 * floor and the wall creeping in, 0.43 to 0.52 m from a 0.70 m guarded point, the
+	 * guarded point itself never closer). So the vehicle's own measured
+	 * distance counts too: inside the minimum standoff it gets a velocity feed-forward away
+	 * from the wall, back_off_gain per m of shortfall up to max_back_off_mps, measured on
+	 * the range and so immune to the estimate's errors. Returns that speed (m/s, away from
+	 * the wall, 0 without a usable sample or outside the standoff).
+	 */
+	float backOffSpeed(const WallGuardOutput &out) const
+	{
+		if (!enabled() || !out.range_ok) {
+			return 0.f;
+		}
+
+		const float short_m = _limits.min_standoff_m - out.wall_m;
+
+		if (!(short_m > 0.f)) {
+			return 0.f;
+		}
+
+		const float v = _limits.back_off_gain * short_m;
+		return v < _limits.max_back_off_mps ? v : _limits.max_back_off_mps;
 	}
 
 private:

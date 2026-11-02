@@ -393,6 +393,31 @@ int main()
 		CHECK(k.apply(pos, n_north, -1.f, hold).points == KeepOut::MAX_POINTS);
 	}
 
+	// Rangefinder wall right at the floor (the wall guard put the point there, rounding
+	// leaves it a hair inside) and only a pole beyond the keep-out: nothing moves, so no
+	// "keep-out moved the hold point 0.00 m" warning (SIH, keep-out with --wall).
+	{
+		KeepOut k = keepOut(1.0f, 0.7f);
+		ObstacleScan s = emptyScan(ObstacleScan::FRAME_GLOBAL);
+		s.distances_cm[18] = 160;  // east, 1.6 m
+		k.begin();
+		k.addScan(s, NOW, 0.f);
+		float hold[3] = {0.f, 0.f, -2.5f};
+		const KeepOutOutput o = k.apply(pos, n_north, 0.6999f, hold);
+		CHECK(!(o.shift_m > 0.f));  // exactly no move, not just a small one
+		CHECK(!(std::fabs(hold[0]) > 0.f) && !(std::fabs(hold[1]) > 0.f));
+		CHECK(!o.no_room);
+
+		// A pole inside the keep-out still pushes, and the floor still holds that push back.
+		ObstacleScan near_s = emptyScan(ObstacleScan::FRAME_GLOBAL);
+		near_s.distances_cm[36] = 50;  // south, 0.5 m: pushes north, toward the wall
+		k.begin();
+		k.addScan(near_s, NOW, 0.f);
+		float hold2[3] = {0.f, 0.f, -2.5f};
+		k.apply(pos, n_north, 0.7f, hold2);
+		CHECK(hold2[0] <= 1e-3f);  // not past the floor, 0.7 m from the wall
+	}
+
 	// SH_KO_DIST -1 follows PX4's CP_DIST; 0 is off whatever CP_DIST says; capped at 5 m.
 	CHECK(near(resolveKeepOut(-1.f, -1.f, 5.f), 0.f));  // both PX4 defaults: off
 	CHECK(near(resolveKeepOut(-1.f, 1.2f, 5.f), 1.2f));
