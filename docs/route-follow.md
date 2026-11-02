@@ -217,6 +217,48 @@ What this says:
 
 As before, this is the mock only; Gazebo against tuned PX4 Mission mode decides.
 
+## Stress results (mock, 2026-11-02)
+
+One thing made worse at a time on the corridor and tunnel mix, rangefinders on 70 % of the
+beams, 256 routes per test (run `20261102-134815`, `eval/configs/route_follow_stress.yaml`).
+Each cell: cross-track p95, routes finished, crashes.
+
+| Test | v0 | v1 | PD | PD + centring |
+| --- | --- | --- | --- | --- |
+| nominal (drift walk 0.02, cap 0.5 m) | 0.25 m, 94 %, 2 % | 0.25 m, 94 %, 2 % | 0.37 m, 93 %, 4 % | 0.35 m, 91 %, 5 % |
+| perfect estimate | 0.11 m, 100 %, 0 % | 0.11 m, 100 %, 0 % | 0.17 m, 100 %, 0 % | 0.21 m, 100 %, 0 % |
+| low drift (walk 0.01, cap 0.3 m) | 0.20 m, 95 %, 1 % | 0.21 m, 95 %, 1 % | 0.36 m, 89 %, 5 % | 0.36 m, 89 %, 6 % |
+| high drift (walk 0.04, cap 1 m) | 0.34 m, 89 %, 3 % | 0.35 m, 86 %, 3 % | 0.46 m, 74 %, 6 % | 0.39 m, 86 %, 4 % |
+| estimate lost 1 to 3 s, about every 10 s | 0.26 m, 94 %, 2 % | 0.26 m, 93 %, 4 % | 0.35 m, 90 %, 6 % | 0.34 m, 89 %, 7 % |
+| 0.2 to 1 m jumps, about every 10 s | 0.36 m, 91 %, 2 % | 0.37 m, 91 %, 2 % | 0.49 m, 83 %, 4 % | 0.43 m, 86 %, 6 % |
+| estimate 0.2 to 0.4 s late | 0.29 m, 91 %, 4 % | 0.29 m, 93 %, 3 % | 0.48 m, 82 %, 14 % | 0.44 m, 82 %, 13 % |
+| draft 3 to 6 m/s, gusts to 4 m/s | 0.27 m, 96 %, 2 % | 0.27 m, 93 %, 3 % | 0.39 m, 87 %, 7 % | 0.37 m, 91 %, 5 % |
+| fast, 1.5 to 2.5 m/s (trained to 1.5) | 0.28 m, 96 %, 2 % | 0.30 m, 91 %, 4 % | 0.43 m, 86 %, 9 % | 0.38 m, 91 %, 5 % |
+| 10 % rangefinder outliers | 0.26 m, 93 %, 2 % | 0.26 m, 94 %, 2 % | 0.37 m, 87 %, 6 % | 0.33 m, 95 %, 2 % |
+| narrow pipe, perfect estimate | 0.14 m, 100 %, 0 % | 0.13 m, 100 %, 0 % | 0.17 m, 100 %, 0 % | 0.18 m, 79 %, 21 % |
+| narrow pipe, low drift | 0.18 m, 90 %, 9 % | 0.19 m, 84 %, 13 % | 0.25 m, 68 %, 31 % | 0.26 m, 59 %, 41 % |
+| narrow pipe, nominal | 0.22 m, 87 %, 11 % | 0.22 m, 89 %, 11 % | 0.28 m, 68 %, 32 % | 0.27 m, 58 %, 41 % |
+
+What this says:
+
+- **The policy holds up under every stress.** It beats both PD yardsticks on every test.
+  Its worst cases are estimate jumps and high drift (0.34 to 0.37 m), and even there it
+  crashes on 2 to 3 % of routes.
+- **The estimate sets the limit, not the flying.** With a perfect estimate every controller
+  finishes every route, and the policy's cross-track halves (0.11 m against 0.25 m).
+- **Narrow-pipe crashes come from the estimate.** With a perfect estimate nobody crashes in
+  the pipes except the centring PD. Lower drift alone barely helps (11 % to 9 %), so the
+  remaining crashes come from the estimate's jumps and dropouts. In a 0.8 m pipe, one jump
+  bigger than the 0.4 m gap is a crash. A pipe needs a better estimate, or a policy that
+  trusts the rangefinders more when the estimate jumps. The next training target is
+  estimate jumps in narrow pipes.
+- **A late estimate hurts the classical controllers most** (13 to 14 % crashes against 3 to
+  4 % for the policy), as it did for Structure Hold.
+- **Wall centring is unsafe in round pipes** even with a perfect estimate (21 % crashes).
+  The cause is not traced yet; one guess is that a tilted drone's beams hit the curved wall
+  off their axis, so the centring term misreads its offset.
+- v1 is again level with v0 throughout.
+
 ## Plan, and what needs the GPU server
 
 1. **Now, no GPU:** this design, the tunnel and corridor envs, the classical baselines and a
