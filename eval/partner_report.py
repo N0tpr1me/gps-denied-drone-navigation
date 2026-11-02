@@ -318,10 +318,11 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
 <div class="setup">{setup_html}</div>
 <p class="legend">Each hold is scored on the true position {e(truth_src)}, never on the
 drone's own estimate, with the same code as our simulator and Gazebo benchmark. The hold point
-is the controller's setpoint at the start of the hold{e(carried)}. p95 is the 95th-percentile distance from that
-point over the hold. A contact is any moment closer to the wall than the prop reach; a hold that
-ended before its full length counts as ended early, whatever the reason. The two controllers
-flew alternately on the same drone, the same day.</p>
+is the controller's setpoint at the start of the hold{e(carried)}. p95 is the
+95th-percentile distance from that point over the hold. A contact is any moment closer to
+the wall than the prop reach; a hold that ended before its full length counts as ended
+early, whatever the reason. The two controllers flew alternately on the same drone, the
+same day.</p>
 <footer>Confidential. Generated {e(generated)} by eval/partner_report.py at commit
 {e(commit)} from session_summary.json (eval/partner_session.py).</footer>
 </main></body></html>
