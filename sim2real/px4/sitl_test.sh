@@ -39,9 +39,14 @@ PX4_PID=$!
 trap 'kill ${PX4_PID} 2>/dev/null || true; wait ${PX4_PID} 2>/dev/null || true' EXIT
 
 # SIH's EKF velocity is unusable on v1.17.0 (README), so the placeholder controller
-# differentiates position here. SITL_EXTRA_ARGS adds or overrides sitl_test.py options.
+# differentiates position here. EKF2_IMU_CTRL 5 (gyro bias and gravity fusion, no accel
+# bias): SIH's accelerometer has no bias, yet EKF2 learns one up to its 0.4 m/s^2 limit
+# (EKF2_ABL_LIM) over the flight, which leaves its velocity 0.2-0.3 m/s off and walks PX4's
+# own xy loop (Structure Hover, Structure Land) 0.3 m past its setpoint. SITL_EXTRA_ARGS
+# adds or overrides sitl_test.py options.
 status=0
 python3 "${HERE}/sitl_test.py" --out "${OUT}/summary.json" --param SH_VEL_SRC=1 \
+    --param EKF2_IMU_CTRL=5 \
     ${SITL_EXTRA_ARGS:-} "$@" || status=$?
 
 # Stop PX4 cleanly so the logger closes the file, then keep the flight log.

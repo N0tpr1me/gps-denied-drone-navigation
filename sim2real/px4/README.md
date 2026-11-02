@@ -325,6 +325,15 @@ from the estimated position inside the module, low-pass filtered), which holds w
 0.3 m. The default stays 0 (estimator velocity) for Gazebo and real flights. The Gazebo
 image in `sim2real/docker/` is the simulator the baseline and benchmark use.
 
+Part of that velocity error is EKF2 learning an accelerometer bias SIH does not have (its
+accelerometer is gravity plus zero-mean noise): over a flight the bias estimate climbs to
+its 0.4 m/s^2 limit (`EKF2_ABL_LIM`), the velocity ends up 0.2 to 0.3 m/s off, and PX4's
+own xy loop, which flies Structure Hover and Structure Land, overshoots its setpoint by
+about 0.3 m. In November 2026 that put Structure Hover 0.42 to 0.48 m from the creeping wall
+(limit 0.55 m) on every module version back to PR #101. `sitl_test.sh` therefore also sets
+`EKF2_IMU_CTRL=5` (gyro bias and gravity fusion, no accelerometer bias): 0.71 to 0.81 m
+over three runs. SIH only; Gazebo and real flights keep PX4's default 7.
+
 Position mode needs a manual-control source, so the test streams a centred joystick
 (`MANUAL_CONTROL` at 20 Hz). With `--no-joystick` the stock mode is Hold instead, which
 exercises the handback escalation (Position refused → Hold).
