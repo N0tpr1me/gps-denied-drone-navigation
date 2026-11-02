@@ -102,7 +102,9 @@ What it does today:
   point captured on a jumped estimate that lies on the wall face (Gazebo seed 3,
   `docs/baseline.md` v11 section). The point only ever moves away from the wall during a
   hold. Samples count only when under 0.2 s old, inside the sensor's own range, not flagged
-  bad, and with the body x axis within 35 deg of the wall normal; without one the guard
+  bad, and with the body x axis within 35 deg of the wall normal, and a reading more than
+  0.25 m from the last accepted one waits for the next to agree (the spike gate: a lone
+  short return off dust or spray is not a wall); without one the guard
   does nothing, so the Gazebo x500 (no rangefinder) flies exactly as before. The policy sees
   the move as a step in its position error, like an estimate jump. `SH_WALL_REQ 1` makes
   the mode unavailable while no usable forward range comes in. Stock Position mode
