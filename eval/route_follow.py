@@ -15,8 +15,9 @@ classical yardsticks (``envs/route_follow/baseline.py``: PD on the estimate, and
 range centring) on identically seeded envs.
 
 As a run entrypoint (``python -m training.launch --config eval/configs/route_follow_baseline.yaml``)
-it scores the yardsticks, and a policy when ``params.policy`` names one, on each condition
-in ``params.sets`` (corridors and tunnels, with and without rangefinders).
+it scores the yardsticks, and a policy when ``params.policy`` names one (or several policies
+when ``params.policies`` maps names to ``policy.onnx`` files), on each condition in
+``params.sets`` (corridors, tunnels and the other worlds, with and without rangefinders).
 """
 
 from __future__ import annotations
@@ -113,11 +114,17 @@ YARDSTICKS: dict[str, Callable[[RouteFollowEnv], Any]] = {
 }
 
 
-def compare(cfg: RouteFollowConfig, policy: Callable[[RouteFollowEnv], Any] | None, *,
+def compare(cfg: RouteFollowConfig,
+            policy: Callable[[RouteFollowEnv], Any] | dict[str, Callable] | None, *,
             num_envs: int, episodes: int, seed: int, device: str = "cpu",
             sim: str = "torch") -> dict[str, dict[str, Any]]:
-    """Headline per controller (``policy`` first when given, then the yardsticks)."""
-    makers = ({"policy": policy} if policy is not None else {}) | YARDSTICKS
+    """Headline per controller (``policy`` first when given, or each of a name -> maker
+    mapping of policies, then the yardsticks)."""
+    if policy is None:
+        policy = {}
+    elif not isinstance(policy, dict):
+        policy = {"policy": policy}
+    makers = policy | YARDSTICKS
     out = {}
     for name, make in makers.items():
         env = RouteFollowEnv(cfg, num_envs, seed=seed, device=device, sim=sim)
@@ -145,12 +152,19 @@ def merge(base: dict[str, Any], over: dict[str, Any] | None) -> dict[str, Any]:
 def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     p = cfg["params"]
     seed = int(cfg["seed"])
-    policy = None
+    paths = dict(p.get("policies") or {})
     if p.get("policy"):
+        paths = {"policy": p["policy"]} | paths
+    policy = {}
+    if paths:
+        from functools import partial
+
         from training.policy_io import load_controller
 
-        path = Path(p["policy"])
-        policy = lambda env: load_controller(path, env.num_envs, device)  # noqa: E731
+        def make(path: str, env: RouteFollowEnv) -> Any:
+            return load_controller(Path(path), env.num_envs, device)
+
+        policy = {name: partial(make, path) for name, path in paths.items()}
     headline_out: dict[str, Any] = {}
     lines = []
     for i, s in enumerate(p["sets"]):

@@ -10,6 +10,13 @@ never more than the true distance to the union's boundary (it can be less near t
 of a turn), so contact is never missed and beams can be sphere-traced safely: stepping by
 the clearance never steps through a wall.
 
+The other worlds (``routes.py``) are more pieces of the same kind: an arched corridor's
+cross-section is its box's lower part (vertical walls from the floor up to ``half_height -
+half_width``) under a half circle of radius ``half_width`` whose top is the box's top; a
+narrowed segment scales its piece's cross-section; a side branch is one more piece (box,
+arched box or capsule, as the route's) from a centreline point out at right angles. Every
+piece is a union member, so the clearance stays a lower bound.
+
 **Target.** The point at arc length ``s`` along the centreline, ``s`` following the route's
 speed plan in time (``routes.py``: from rest, through each corner at its corner speed, to
 rest on the last waypoint).
@@ -21,6 +28,8 @@ to the left, z completes it (up, tilted with a climb).
 """
 
 from __future__ import annotations
+
+import math
 
 import torch
 
@@ -49,9 +58,9 @@ def frame_from_x(x: torch.Tensor) -> torch.Tensor:
 
 class RouteGeometry:
     def __init__(self, num_envs: int, segments: int, device: torch.device | str = "cpu",
-                 dtype: torch.dtype = torch.float32):
-        n, s = int(num_envs), int(segments)
-        self.num_envs, self.segments = n, s
+                 dtype: torch.dtype = torch.float32, branches: int = 0):
+        n, s, b = int(num_envs), int(segments), int(branches)
+        self.num_envs, self.segments, self.branches = n, s, b
         z = lambda *shape: torch.zeros(*shape, dtype=dtype, device=device)  # noqa: E731
         self.dtype, self.device = dtype, torch.device(device)
         self.waypoints = z(n, s + 1, 3)
@@ -69,12 +78,22 @@ class RouteGeometry:
         self.seg_z[..., 2] = 1.0
         self.half_width[:] = self.half_height[:] = self.radius[:] = 1.0
         self.speed[:] = self.accel[:] = 1.0
+        # The wall pieces: the S route segments, then the B branch slots.
+        p = s + b
+        self.arched = torch.zeros(n, dtype=torch.bool, device=device)
+        self.piece_start = z(n, p, 3)
+        self.piece_x, self.piece_y, self.piece_z = z(n, p, 3), z(n, p, 3), z(n, p, 3)
+        self.piece_x[..., 0] = self.piece_y[..., 1] = self.piece_z[..., 2] = 1.0
+        self.piece_len = z(n, p)
+        self.piece_scale = torch.ones(n, p, dtype=dtype, device=device)
+        self.piece_on = torch.zeros(n, p, dtype=torch.bool, device=device)
+        self.piece_on[:, :s] = True
 
     @classmethod
     def from_routes(cls, routes: Routes, device: torch.device | str = "cpu",
                     dtype: torch.dtype = torch.float32) -> RouteGeometry:
         n, s = routes.waypoints.shape[0], routes.waypoints.shape[1] - 1
-        geo = cls(n, s, device, dtype)
+        geo = cls(n, s, device, dtype, branches=routes.branch_len.shape[1])
         geo.set(torch.arange(n, device=geo.device), routes)
         return geo
 
@@ -98,6 +117,33 @@ class RouteGeometry:
         self.speed[env_ids] = t(routes.speed)
         self.accel[env_ids] = t(routes.accel)
         self.corner_speed[env_ids] = t(routes.corner_speed)
+        self.arched[env_ids] = torch.as_tensor(routes.arched, device=self.device)
+        s, nb = self.segments, routes.branch_len.shape[1]
+        if nb > self.branches:
+            raise ValueError(f"{nb} branches but room for {self.branches}")
+        k = wp.shape[0]
+        bx = t(routes.branch_dir)
+        start = torch.zeros(k, self.branches, 3, dtype=self.dtype, device=self.device)
+        bdir = torch.zeros_like(start)
+        bdir[..., 0] = 1.0
+        blen = torch.zeros(k, self.branches, dtype=self.dtype, device=self.device)
+        bscale = torch.ones_like(blen)
+        start[:, :nb], blen[:, :nb], bscale[:, :nb] = (t(routes.branch_start),
+                                                       t(routes.branch_len),
+                                                       t(routes.branch_scale))
+        if nb:
+            bdir[:, :nb] = bx
+        by = left_of(bdir)
+        self.piece_start[env_ids] = torch.cat([wp[:, :-1], start], 1)
+        self.piece_x[env_ids] = torch.cat([x, bdir], 1)
+        self.piece_y[env_ids] = torch.cat([y, by], 1)
+        self.piece_z[env_ids] = torch.cat([torch.cross(x, y, dim=-1),
+                                           torch.cross(bdir, by, dim=-1)], 1)
+        self.piece_len[env_ids] = torch.cat([length, blen], 1)
+        self.piece_scale[env_ids] = torch.cat([t(routes.seg_scale), bscale], 1)
+        on = torch.ones(k, s + self.branches, dtype=torch.bool, device=self.device)
+        on[:, s:] = blen > 0
+        self.piece_on[env_ids] = on
 
     @property
     def length(self) -> torch.Tensor:
@@ -183,20 +229,31 @@ class RouteGeometry:
         ``pos`` (N, 3) or (N, K, 3). A lower bound on the true distance (module docstring)."""
         squeeze = pos.dim() == 2
         p = pos[:, None, :] if squeeze else pos  # (N, K, 3)
-        rel = p[:, :, None, :] - self.waypoints[:, None, :-1, :]  # (N, K, S, 3)
-        a = (rel * self.seg_x[:, None]).sum(-1)
-        b = (rel * self.seg_y[:, None]).sum(-1)
-        c = (rel * self.seg_z[:, None]).sum(-1)
-        length = self.seg_len[:, None]
-        hw = self.half_width[:, None, None]
-        hh = self.half_height[:, None, None]
-        box = torch.minimum(torch.minimum(a + hw, length + hw - a),
-                            torch.minimum(hw - b.abs(), hh - c.abs()))
+        rel = p[:, :, None, :] - self.piece_start[:, None]  # (N, K, P, 3)
+        a = (rel * self.piece_x[:, None]).sum(-1)
+        b = (rel * self.piece_y[:, None]).sum(-1)
+        c = (rel * self.piece_z[:, None]).sum(-1)
+        length = self.piece_len[:, None]
+        scale = self.piece_scale[:, None]  # (N, 1, P)
+        hw = self.half_width[:, None, None] * scale
+        hh = self.half_height[:, None, None] * scale
+        ends = torch.minimum(a + hw, length + hw - a)
+        walls = torch.minimum(hw - b.abs(), hh - c.abs())
+        if bool(self.arched.any()):
+            # Vertical walls up to the springline c0, a half circle of radius hw above it.
+            c0 = hh - hw
+            arch = torch.minimum(c + hh, torch.maximum(
+                hw - torch.sqrt(b * b + (c - c0) ** 2),
+                torch.minimum(hw - b.abs(), c0 - c)))
+            walls = torch.where(self.arched[:, None, None], arch, walls)
+        box = torch.minimum(ends, walls)
         along = torch.minimum(a.clamp(min=0.0), length)
-        off = rel - along[..., None] * self.seg_x[:, None]
-        capsule = self.radius[:, None, None] - off.norm(dim=-1)
-        per_seg = torch.where(self.tunnel[:, None, None], capsule, box)
-        out = per_seg.max(dim=-1).values
+        off = rel - along[..., None] * self.piece_x[:, None]
+        capsule = self.radius[:, None, None] * scale - off.norm(dim=-1)
+        per_piece = torch.where(self.tunnel[:, None, None], capsule, box)
+        per_piece = torch.where(self.piece_on[:, None], per_piece,
+                                torch.full_like(per_piece, -math.inf))
+        out = per_piece.max(dim=-1).values
         return out[:, 0] if squeeze else out
 
     def distance_to_route(self, pos: torch.Tensor) -> torch.Tensor:

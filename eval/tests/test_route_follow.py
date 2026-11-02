@@ -50,3 +50,12 @@ def test_entrypoint_scores_the_yardsticks_on_every_set(tmp_path: Path):
     assert "corridor/pd/cross_track_p95_m" in summary["headline"]
     assert "corridor_ranges/pd_centring/crash_rate" in summary["headline"]
     assert "pd_centring" in summary["vs_baseline"]
+
+
+def test_compare_scores_several_policies_before_the_yardsticks():
+    cfg = RouteFollowConfig.from_dict({"episode_length_s": 7.0, "contact_radius_m": 0.4,
+                                       "route": {"branches": 1, "arch_prob": 1.0}})
+    pd = route_follow.YARDSTICKS["pd"]
+    res = route_follow.compare(cfg, {"a": pd, "b": pd}, num_envs=2, episodes=1, seed=3)
+    assert list(res) == ["a", "b", "pd", "pd_centring"]
+    assert res["a"] == res["pd"]  # same controller, identically seeded envs

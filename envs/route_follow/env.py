@@ -120,7 +120,7 @@ class RouteFollowEnv:
         self.range_dirs = torch.tensor(RANGE_DIRS, dtype=dt, device=dev)
         self.range_period_steps = max(1, round(1.0 / (cfg.ranges.rate_hz * cfg.dt)))
 
-        self.geo = RouteGeometry(n, cfg.route.segments, dev, dt)
+        self.geo = RouteGeometry(n, cfg.route.segments, dev, dt, branches=cfg.route.branches)
         z = lambda *shape: torch.zeros(*shape, dtype=dt, device=dev)  # noqa: E731
         self.episode_step = torch.zeros(n, dtype=torch.long, device=dev)
         self.episode_time = z(n)
