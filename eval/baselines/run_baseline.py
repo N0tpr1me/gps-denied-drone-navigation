@@ -115,6 +115,8 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
         # Gazebo's real-time factor over the hover (stock runner's hover test only): the
         # check that parallel flights each still got a whole flight's worth of CPU.
         "rtf_min": (hover.get("real_time_factor") or {}).get("min"),
+        # The scripted GPS was on (profile gps block): the LOG line says so.
+        "gps_on": summary.get("gps_free") is False and bool(summary.get("gps_ok")),
     }
     # Mode changes inside the window are cut at the commanded Land at the end of the hover
     # (stock runner only: the hold runner's window ends at the commanded disengage, and the
@@ -276,9 +278,10 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
     run_args = batch.get("run_args") or []
     extra = " " + " ".join(run_args) if run_args else ""
     profile = profile_of(run_args)
+    gps = "GPS on (scripted)" if r.get("gps_on") else "GPS off"
     return (f"| {when} | {r['run']} | {batch['commit']} | eval/baselines/run_baseline "
             f"{batch['label']} ({what}{extra}): {r['scenario']} seed {r['seed']}, {profile} "
-            f"estimate, `{batch['params']}`, GPS off | {batch.get('host') or MAC_HOST} "
+            f"estimate, `{batch['params']}`, {gps} | {batch.get('host') or MAC_HOST} "
             f"| {status} | {result} | {{vs}} |")
 
 
