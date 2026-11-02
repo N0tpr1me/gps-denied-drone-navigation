@@ -1,0 +1,9 @@
+# vio_at_hover with GPS on: gps_on_at_engage's twin for the stock PX4 runner (keyed to the
+# hover height, which the runner fills in from the scenario).
+name: gps_on_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null
+fault_anchor_s: 25.0
+bias_from_anchor: true
+gps: {rate_hz: 10.0, fix: rtk_fixed}

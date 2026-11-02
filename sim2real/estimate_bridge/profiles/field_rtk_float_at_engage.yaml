@@ -1,0 +1,17 @@
+# Field-failure profile (docs/field-faults.md, "GPS on"): vio_default's delay, noise and bias
+# walk, its random jumps and dropouts off, a scripted RTK receiver beside the vision stream
+# (sim2real/estimate_bridge/gps.py; the runner lays gps_on.params over the PX4 set) and one
+# scripted GPS failure 20 s into the scored window.
+# The RTK fix drops to a float solution for 15 s: reported accuracy 0.5 m, 0.3 m noise and
+# the solution 0.8 m off away from the wall (-x in the wall1m scenarios: the controller
+# follows it toward the wall), then the fix comes back.
+# This copy is for the hold runner (keyed to the engage); the _at_hover twin differs only in its anchor.
+name: field_rtk_float_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+gps: {rate_hz: 10.0, fix: rtk_fixed}
+gps_faults:
+  - {kind: gps_float, at_s: 20.0, duration_s: 15.0, offset_m: 0.8, direction: [-1.0, 0.0, 0.0]}
