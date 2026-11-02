@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.4, ready for sign-off (section 8); 1.0 to 1.3 were not signed |
+| Version | 1.5, ready for sign-off (section 8); 1.0 to 1.4 were not signed |
 | Date | 2026-11-02 |
 | Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged) and the height-reference value of 1.4: module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
@@ -179,9 +179,9 @@ height, F27 over three seeds.
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Each reading is checked: under 0.2 s old, inside the sensor's range, not flagged, angle under 35 deg | The guard does nothing on a bad reading; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
+| F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Each reading is checked: under 0.2 s old, inside the sensor's range, not flagged, angle under 35 deg, and within 0.25 m of the last accepted reading unless the next one agrees (spike gate) | The guard does nothing on a bad reading; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
 | F14 | Range lost while Structure Hover holds on it alone | Sensor fault during `SH_HB_RANGE` | Uncontrolled drift | 4 | No usable range for 0.5 s | `range_lost` trip, then Altitude mode (Position mode if the estimate is back), Hold, Land | 3 | U |
-| F37 | Short returns off dust, fog or spray in front of the sensor | Same air as F36 | The guard reads a close wall and moves the hold point back; the ratchet never brings it forward again, so a long cloud keeps pushing the drone away from the structure | 3 | Nothing: a short return passes every check in F13 | Moved the hold point 0.6 to 0.95 m back over 20 s of dust, on the safe side of the wall; `SH_WALL_MIN` 0 turns the guard off and loses F7, F9 | 3: a spike gate on the guard is the fix (`docs/field-faults.md`, Next) | G (`field_degrade`) |
+| F37 | Short returns off dust, fog or spray in front of the sensor | Same air as F36 | The guard reads a close wall and moves the hold point back; the ratchet never brings it forward again, so a long cloud keeps pushing the drone away from the structure (it did, 0.6 to 0.95 m in 20 s, before the gate) | 3 | Spike gate on the guard (0.25 m, since 2026-11-02): a reading that far from the last accepted one waits for the next to agree, and counts as no range for the range hover | A lone short return moves nothing. Re-flown: the two seeds whose VIO did not walk toward the wall saw 0.00 to 0.02 m of shift (0.5 to 0.6 m before); the seed whose VIO did walk the drone toward the wall was backed off 0.6 m, which is the guard's job (F7). 0 of 6 touched, closest 0.82 m | 2: two consecutive short returns that agree within 0.25 m still pass | U, G (`field_degrade`, with and without the gate) |
 | F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | Follows what the range says | 3: keep inside the envelope | none |
 
 ### Controller and module
@@ -249,9 +249,8 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   re-flown on barometer height over more seeds and winds. F4 has seeds 1 to 4; seeds 5 to 8
   and longer silences are next (`docs/field-faults.md`, Next).
 - No test yet for F12 (wrong heading) or F15 (wrong surface).
-- F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; the wall
-  guard's reaction to short returns (F37) has no fix yet, and a harsher degrade, more seeds
-  and a longer cloud are next.
+- F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; a harsher
+  degrade, more seeds and a longer cloud are next.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
 - The rest of the assurance pack in gap 4: an ASTM F3201 matrix, the argument for the
@@ -281,6 +280,7 @@ signed again. Record each one below.
 | 1.2 | 2026-11-02 | this PR | Dust, fog and low light: visibility added to the envelope and the do-not-use list; F36 (degraded VIO) and F37 (short rangefinder returns) from the `field_degrade` flights | |
 | 1.3 | 2026-11-02 | `abc8fe7` | Envelope widened to GPS on with the rangefinder required (decision row 2026-11-02); F27 flown (GPS jump, 3 seeds, with and without the rangefinder) and F38 to F40 added (RTK float, loss and hand-over, glitch); `SH_WALL_REQ` 1 required with GPS on. No module change | |
 | 1.4 | 2026-11-02 | this PR | Sections 2 and 6: the barometer height reference is `EKF2_HGT_REF` 0, not 1 (PX4 v1.17 numbers 1 GPS; found by the log health check, `docs/log-health.md`); GPS added to the height sources not to use. No module change | |
+| 1.5 | 2026-11-02 | this PR | Spike gate on the wall guard (F13, F37): short returns off dust no longer move the hold point; `field_degrade` re-flown | |
 
 ## Change control
 

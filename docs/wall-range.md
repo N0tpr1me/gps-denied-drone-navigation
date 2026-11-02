@@ -42,7 +42,7 @@ counts while it is at most 0.2 s old, inside the sensor's range and the body x a
 35 deg of the wall normal: the wall guard's own tests. Its own random generators, so turning
 it on leaves every other draw of an episode as it was (v22's rows are the same with it on).
 
-**Spike gate** (`spike_gate_m`, 0.25 m, in the mock and in `RangeReference`): a reading more
+**Spike gate** (`spike_gate_m`, 0.25 m, in the mock, in `RangeReference` and, since 2026-11-02, in the wall guard itself, `WallGuard::acceptWall`): a reading more
 than the gate from the last accepted one is not used, and the input goes unusable until the
 next accepted reading, unless the reading before it (also rejected) agrees with it within
 the gate, so a real step is accepted at its second reading. Without it, single outliers
