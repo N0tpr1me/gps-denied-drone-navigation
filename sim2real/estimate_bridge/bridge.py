@@ -50,6 +50,11 @@ reports (a VIO reset to its origin, a VIO restart, a long link loss, a frozen es
 drift), applied on top of the corruptor's output at a set time after the anchor. A reset that
 is signalled counts up ``BridgeSample.resets``, which ``run_bridge`` sends as ODOMETRY's
 ``reset_counter``.
+
+GPS (``gps``, ``gps_faults``, ``gps.py``): a profile with a ``gps`` block also gets a scripted
+GPS receiver on the truth, with its own faults (RTK float, jumps, glitches, loss and the
+hand-over back), which ``run_bridge`` sends as HIL_GPS; each sample carries the receiver's
+output for that tick, or none (``BridgeSample.gps``).
 """
 
 from __future__ import annotations
@@ -65,15 +70,18 @@ import numpy as np
 from envs.estimate import EstimateCorruptionConfig, EstimateCorruptor
 from envs.frames import enu_to_ned
 from sim2real.estimate_bridge.field_faults import FieldFault, FieldFaultInjector
+from sim2real.estimate_bridge.gps import NO_GPS, GpsFault, GpsInjector, GpsSample, GpsSource
 
 TRACE_COLUMNS = (
     "step", "t", "published", "stale", "jumped", "dropout_started", "age",
     "tx", "ty", "tz", "tvx", "tvy", "tvz",
     "ex", "ey", "ez", "evx", "evy", "evz",
     "engaged", "resets",
+    "gps_fix", "gx", "gy", "gz", "gvx", "gvy", "gvz", "geph", "gepv",
 )
 # Trace columns added after the first flights; read as 0 when an old trace lacks them.
-OPTIONAL_TRACE_COLUMNS = ("engaged", "resets")
+OPTIONAL_TRACE_COLUMNS = ("engaged", "resets", "gps_fix", "gx", "gy", "gz", "gvx", "gvy", "gvz",
+                          "geph", "gepv")
 FAULT_ANCHORS = ("start", "engage", "altitude")
 NEVER_S = 1e9  # fault_start_s that holds every fault back for the whole flight
 
@@ -92,6 +100,7 @@ class BridgeSample:
     age: float
     engaged: bool = False  # the flight script reported Structure Hold engaged at this sample
     resets: int = 0  # signalled frame resets so far (field faults): ODOMETRY reset_counter
+    gps: GpsSample = NO_GPS  # the scripted receiver's output this tick (gps.py); NO_GPS: none
 
     @property
     def publish(self) -> bool:
@@ -105,6 +114,9 @@ class BridgeSample:
             *(repr(float(v)) for v in self.truth_pos), *(repr(float(v)) for v in self.truth_vel),
             *(repr(float(v)) for v in self.est_pos), *(repr(float(v)) for v in self.est_vel),
             int(self.engaged), int(self.resets),
+            int(self.gps.fix_type), *(repr(float(v)) for v in self.gps.pos),
+            *(repr(float(v)) for v in self.gps.vel), repr(float(self.gps.eph_m)),
+            repr(float(self.gps.epv_m)),
         ]
 
 
@@ -127,6 +139,8 @@ class EstimateBridge:
         fault_anchor_alt_m: float | None = None,
         bias_from_anchor: bool = False,
         field_faults: tuple[FieldFault, ...] = (),
+        gps: GpsSource | None = None,
+        gps_faults: tuple[GpsFault, ...] = (),
     ):
         if divisor < 1:
             raise ValueError("divisor must be >= 1")
@@ -153,7 +167,8 @@ class EstimateBridge:
             self.corruptor = EstimateCorruptor(pre, 1, step_dt, self.seed)
         else:
             self.corruptor = EstimateCorruptor(cfg, 1, step_dt, self.seed)
-        self.field_faults = FieldFaultInjector(tuple(field_faults))
+        self.field_faults = FieldFaultInjector(tuple(field_faults), seed=self.seed)
+        self.gps = None if gps is None else GpsInjector(gps, tuple(gps_faults), self.seed)
         self.anchor_step: int | None = None  # bridge step at which the schedule was anchored
         self.anchor_t: float | None = None
         self._last_t: float | None = None
@@ -196,21 +211,26 @@ class EstimateBridge:
         ):
             self._anchor(pos, vel, float(t))
         s = self.corruptor.step(pos[None], vel[None])
-        if self.fault_anchor == "start":
-            t_rel = float(t) - self._first_t
-        else:
-            t_rel = None if self.anchor_t is None else float(t) - self.anchor_t
+        t_rel = self.t_rel(t)
         est_pos, est_vel, stale = self.field_faults.apply(
             np.asarray(s.pos[0]), np.asarray(s.vel[0]), bool(s.stale[0]), t_rel)
+        gps = self.gps.update(t, pos, vel, t_rel) if self.gps is not None else None
         sample = BridgeSample(
             step=self._steps, t=float(t), truth_pos=pos, truth_vel=vel,
             est_pos=est_pos, est_vel=est_vel,
             stale=stale, jumped=bool(s.jumped[0]),
             dropout_started=bool(s.dropout_started[0]), age=float(s.age[0]),
             engaged=bool(engaged), resets=self.field_faults.resets,
+            gps=NO_GPS if gps is None else gps,
         )
         self._steps += 1
         return sample
+
+    def t_rel(self, t: float) -> float | None:
+        """Time since the fault anchor (the field faults' clock), None before it."""
+        if self.fault_anchor == "start":
+            return None if self._first_t is None else float(t) - self._first_t
+        return None if self.anchor_t is None else float(t) - self.anchor_t
 
     def _anchor(self, pos: np.ndarray, vel: np.ndarray, t: float) -> None:
         """Rebuild the corruptor from the seed with the fault clock at ``fault_anchor_s``
@@ -286,8 +306,53 @@ class Rangefinder:
         return cls(**d)
 
 
-def odometry_ned(sample: BridgeSample) -> tuple[np.ndarray, np.ndarray]:
-    """Position and velocity of the estimate in NED, for the ODOMETRY message."""
+@dataclass(frozen=True)
+class FrameMistake:
+    """An integration mistake made on purpose at the MAVLink boundary, so the log health
+    check (``eval/log_health.py``) can be tested on real PX4 logs: ``enu_as_ned`` sends the
+    ENU numbers in the NED fields (the classic one); ``yaw_offset`` sends a VIO frame whose
+    x axis is ``yaw_deg`` from north (clockwise seen from above, a NED yaw) while still
+    declaring NED. Only what goes to PX4 changes; the trace keeps the true estimate."""
+
+    kind: str
+    yaw_deg: float = 0.0
+
+    KINDS = ("enu_as_ned", "yaw_offset")
+
+    def __post_init__(self) -> None:
+        if self.kind not in self.KINDS:
+            raise ValueError(f"frame mistake kind must be one of {self.KINDS}")
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FrameMistake:
+        unknown = set(d) - {"kind", "yaw_deg"}
+        if unknown:
+            raise ValueError(f"unknown frame mistake keys: {sorted(unknown)}")
+        return cls(kind=str(d["kind"]), yaw_deg=float(d.get("yaw_deg", 0.0)))
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "yaw_deg": self.yaw_deg}
+
+    def apply(self, enu: np.ndarray) -> np.ndarray:
+        """What is sent in the NED fields for an ENU vector."""
+        if self.kind == "enu_as_ned":
+            return np.asarray(enu, dtype=np.float64).copy()
+        ned = enu_to_ned(enu)
+        # coordinates in a frame whose x axis has NED yaw yaw_deg: rotate by -yaw_deg
+        y = np.radians(self.yaw_deg)
+        c, s = np.cos(y), np.sin(y)
+        out = ned.copy()
+        out[0] = c * ned[0] + s * ned[1]
+        out[1] = -s * ned[0] + c * ned[1]
+        return out
+
+
+def odometry_ned(sample: BridgeSample, mistake: FrameMistake | None = None
+                 ) -> tuple[np.ndarray, np.ndarray]:
+    """Position and velocity of the estimate in NED, for the ODOMETRY message (or, with a
+    ``mistake``, what a wrongly wired VIO would send instead)."""
+    if mistake is not None:
+        return mistake.apply(sample.est_pos), mistake.apply(sample.est_vel)
     return enu_to_ned(sample.est_pos), enu_to_ned(sample.est_vel)
 
 

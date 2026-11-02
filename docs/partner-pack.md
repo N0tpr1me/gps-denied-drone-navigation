@@ -78,7 +78,8 @@ airspeed modules (as PX4's own `fmu-v6x/multicopter.px4board` does), PX4's built
 simulator, the MSP OSD driver, precision landing on a beacon and the Septentrio GPS driver,
 and turns the module on. We built it on 2026-11-02, with the module as of that day (keep-out
 and pilot status included), for the Pixhawk 6C (95.6 % of flash used) and the Pixhawk 6X (99.0 %, about
-19 KB spare). On another board, tell us and we check it fits.
+19 KB spare). If your drone flies GPS or RTK from a Septentrio receiver, tell us: the
+driver goes back in (about 14 KB, which still fits the 6X). On another board, tell us and we check it fits.
 
 ```bash
 git clone --depth 1 --branch v1.17.0 --recurse-submodules https://github.com/PX4/PX4-Autopilot.git
@@ -112,7 +113,7 @@ depends on them (`sim2real/estimate_bridge/ekf2_ev.params` is what our benchmark
 
 | Parameter | Why it matters |
 | --- | --- |
-| `EKF2_GPS_CTRL` 0, `SYS_HAS_GPS` 0 | No GPS anywhere in the loop: the claim is GPS-denied flight |
+| `EKF2_GPS_CTRL` 0, `SYS_HAS_GPS` 0 | No GPS anywhere in the loop: the claim is GPS-denied flight. GPS or RTK may stay on (fused beside the VIO) only with the forward rangefinder and `SH_WALL_REQ` 1: when a GPS solution moves, EKF2's estimate walks with it and the rangefinder is what keeps the drone off the wall (`docs/field-faults.md`, "GPS on"; safety manual F27) |
 | `EKF2_EV_CTRL` fuses VIO position (and velocity if your VIO gives a good one) | The hold is only as good as this |
 | `EKF2_EV_DELAY` set to your VIO's measured latency | A wrong delay makes the estimate lag or lead in gusts (`docs/real-flight-gap.md`, row 7) |
 | `EKF2_EV_POS_X/Y/Z` set to the camera's offset from the IMU | Otherwise rotations look like movement |
@@ -121,6 +122,13 @@ depends on them (`sim2real/estimate_bridge/ekf2_ev.params` is what our benchmark
 
 The VIO must reach PX4 as `ODOMETRY` with `estimator_type` VISION or VIO (it is logged as
 `vehicle_visual_odometry`, which the module also uses to tell a fresh fix from a stale one).
+
+Before any Structure Hold flight we run the log health check on your logging flight
+(`python -m eval.log_health flight.ulg`, `docs/log-health.md`). It reads the one log and says
+whether EKF2 fuses the VIO, whether the VIO's frame matches the IMU and compass (ENU sent as
+NED, a mirrored axis or a frame turned from north all show up), where the heading comes from,
+and how late the VIO really is against `EKF2_EV_DELAY`, with the value to set. A climb of a
+metre or two and a few metres side to side give it enough motion.
 
 ### Forward rangefinder (required)
 

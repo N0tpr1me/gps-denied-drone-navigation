@@ -1,0 +1,18 @@
+# Field-failure profile (docs/field-faults.md, "GPS on"): vio_default's delay, noise and bias
+# walk, its random jumps and dropouts off, a scripted RTK receiver beside the vision stream
+# (sim2real/estimate_bridge/gps.py; the runner lays gps_on.params over the PX4 set) and one
+# scripted GPS failure 20 s into the scored window.
+# The GPS solution steps 1.5 m away from the wall and stays there (multipath under a deck, or
+# a base-station change): inside EKF2's innovation gate, so it is fused, and the controller
+# follows it toward the wall.
+# This copy is for the stock PX4 runner (keyed to the hover height); the _at_engage twin differs only in its anchor.
+name: field_gps_jump_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null   # the stock runner fills it from the scenario
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+gps: {rate_hz: 10.0, fix: rtk_fixed}
+gps_faults:
+  - {kind: gps_jump, at_s: 20.0, offset_m: 1.5, direction: [-1.0, 0.0, 0.0]}

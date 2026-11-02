@@ -289,7 +289,9 @@ EKF2's airspeed and sideslip fusion (PX4's own multicopter variant drops sidesli
 that day the fmu-v6x build of `main` was at 99.97 % of flash (556 bytes spare), and the
 pilot's live status (`docs/pilot-status.md`, about 3.2 KB) overflowed it by 2.7 KB.
 The keep-out (about 3.7 KB) came on top of that, so the variant also drops the Septentrio
-GNSS driver (about 14 KB).
+GNSS driver (about 14 KB). u-blox and the other GPS drivers stay, so GPS-on flights
+(`docs/field-faults.md` "GPS on") are unaffected unless the receiver is a Septentrio; then
+put `CONFIG_DRIVERS_GNSS_SEPTENTRIO=y` back (the 6X then has about 5 KB spare).
 
 ```bash
 cp sim2real/px4/boards/structurehold.px4board /path/to/PX4-Autopilot/boards/px4/fmu-v6c/
@@ -358,6 +360,15 @@ therefore runs the placeholder controller with `SH_VEL_SRC=1` (velocity differen
 from the estimated position inside the module, low-pass filtered), which holds within
 0.3 m. The default stays 0 (estimator velocity) for Gazebo and real flights. The Gazebo
 image in `sim2real/docker/` is the simulator the baseline and benchmark use.
+
+Part of that velocity error is EKF2 learning an accelerometer bias SIH does not have (its
+accelerometer is gravity plus zero-mean noise): over a flight the bias estimate climbs to
+its 0.4 m/s^2 limit (`EKF2_ABL_LIM`), the velocity ends up 0.2 to 0.3 m/s off, and PX4's
+own xy loop, which flies Structure Hover and Structure Land, overshoots its setpoint by
+about 0.3 m. In November 2026 that put Structure Hover 0.42 to 0.48 m from the creeping wall
+(limit 0.55 m) on every module version back to PR #101. `sitl_test.sh` therefore also sets
+`EKF2_IMU_CTRL=5` (gyro bias and gravity fusion, no accelerometer bias): 0.71 to 0.81 m
+over three runs. SIH only; Gazebo and real flights keep PX4's default 7.
 
 Position mode needs a manual-control source, so the test streams a centred joystick
 (`MANUAL_CONTROL` at 20 Hz). With `--no-joystick` the stock mode is Hold instead, which

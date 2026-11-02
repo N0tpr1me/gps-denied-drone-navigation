@@ -36,8 +36,9 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
     truth = np.stack([tr["tx"], tr["ty"], tr["tz"]], 1)
     est = np.stack([tr["ex"], tr["ey"], tr["ez"]], 1)
     est_v = np.stack([tr["evx"], tr["evy"], tr["evz"]], 1)
-    max_pos = max_vel = 0.0
-    stale_mismatch = 0
+    gps = np.stack([tr["gx"], tr["gy"], tr["gz"]], 1)
+    max_pos = max_vel = max_gps = 0.0
+    stale_mismatch = gps_mismatch = 0
     # The trace holds the corruptor's steps only; with a divisor > 1 the skipped truth
     # samples are not logged, so the replay feeds each logged row as one step.
     replay = profile.bridge(dt=profile.dt * profile.divisor, divisor=1)
@@ -46,6 +47,10 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
         max_pos = max(max_pos, float(np.abs(s.est_pos - est[i]).max()))
         max_vel = max(max_vel, float(np.abs(s.est_vel - est_v[i]).max()))
         stale_mismatch += int(s.stale != bool(tr["stale"][i]))
+        # The scripted GPS (gps.py): same ticks, same fix, same noise.
+        gps_mismatch += int(s.gps.fix_type != int(tr["gps_fix"][i]))
+        if s.gps.sent and int(tr["gps_fix"][i]) > 0:
+            max_gps = max(max_gps, float(np.abs(s.gps.pos - gps[i]).max()))
 
     published_while_stale = int(np.sum((tr["published"] > 0) & (tr["stale"] > 0)))
     unpublished_fresh = int(np.sum((tr["published"] == 0) & (tr["stale"] == 0)))
@@ -54,6 +59,9 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
         "max_pos_error_m": max_pos,
         "max_vel_error_mps": max_vel,
         "stale_flag_mismatches": stale_mismatch,
+        "gps_mismatches": gps_mismatch,
+        "max_gps_error_m": max_gps,
+        "gps_samples": int(np.sum(tr["gps_fix"] > 0)),
         "published_while_stale": published_while_stale,
         "unpublished_fresh": unpublished_fresh,
         "published": int(tr["published"].sum()),
@@ -73,6 +81,7 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
     report["ok"] = bool(
         max_pos <= tolerance and max_vel <= tolerance and stale_mismatch == 0
         and published_while_stale == 0 and unpublished_fresh == 0
+        and gps_mismatch == 0 and max_gps <= tolerance
     )
     return report
 

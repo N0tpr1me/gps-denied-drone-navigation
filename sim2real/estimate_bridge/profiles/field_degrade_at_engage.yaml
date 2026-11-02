@@ -1,0 +1,18 @@
+# Field-failure profile (docs/field-faults.md): vio_default's delay, noise and bias walk, its
+# random jumps and dropouts off, and one scripted failure 20 s into the scored window
+# (sim2real/estimate_bridge/field_faults.py).
+# Dust, fog or low light for 20 s: the VIO gets noisier (5 cm, 0.2 m/s), walks off faster
+# (0.1 m/sqrt(s), kept), and loses tracking about once every 4 s for 0.5 s; the rangefinder
+# in the same dust gets 5 cm of noise, loses a fifth of its returns and a tenth come back
+# short. All of it ramps up over the first 5 s.
+# This copy is for the hold runner (keyed to the engage); the _at_hover twin differs only in its anchor.
+name: field_degrade_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+field_faults:
+  - {kind: degrade, at_s: 20.0, duration_s: 20.0, ramp_s: 5.0, noise_m: 0.05,
+     vel_noise_mps: 0.2, walk_mps: 0.1, loss_hz: 0.25, loss_s: 0.5,
+     range_noise_m: 0.05, range_loss_frac: 0.2, range_short_frac: 0.1}

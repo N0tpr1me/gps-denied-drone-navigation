@@ -14,9 +14,16 @@
                             #   scenario's hover altitude)
     field_faults: []        # scripted field failures (field_faults.py), timed from the
                             #   anchor: [{kind: reset_origin, at_s: 20}, ...]
+    frame_mistake: null     # or {kind: enu_as_ned} / {kind: yaw_offset, yaw_deg: 90}: a
+                            #   wiring mistake made on purpose at the MAVLink boundary, to
+                            #   test eval/log_health.py on real PX4 logs (bridge.FrameMistake)
     rangefinder: null       # or bridge.Rangefinder keys: the bridge also sends a forward
                             #   DISTANCE_SENSOR against the wall (``run_gazebo --rangefinder``
                             #   fills it from the scenario); not part of the corruption
+    gps: null               # or gps.GpsSource keys ({rate_hz: 10, fix: rtk_fixed}): the
+                            #   bridge also sends a GPS (HIL_GPS) and the runners lay
+                            #   gps_on.params over the PX4 set, so EKF2 fuses it too
+    gps_faults: []          # scripted GPS failures (gps.py), timed from the anchor
 
 Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference), ``vio_default``
 (the ``envs.estimate`` defaults, i.e. what training uses), ``vio_after_takeoff``
@@ -36,8 +43,14 @@ from typing import Any
 import yaml
 
 from envs.estimate import EstimateCorruptionConfig
-from sim2real.estimate_bridge.bridge import FAULT_ANCHORS, EstimateBridge, Rangefinder
+from sim2real.estimate_bridge.bridge import (
+    FAULT_ANCHORS,
+    EstimateBridge,
+    FrameMistake,
+    Rangefinder,
+)
 from sim2real.estimate_bridge.field_faults import FieldFault, parse_field_faults
+from sim2real.estimate_bridge.gps import GpsFault, GpsSource, parse_gps_faults
 
 PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SOURCE_RATE_HZ = 50.0  # Gazebo's /world/<w>/pose/info rate in the PX4 worlds
@@ -56,6 +69,9 @@ class EstimateProfile:
     bias_from_anchor: bool = False  # bias walk starts at the anchor (bridge.py docstring)
     rangefinder: Rangefinder | None = None  # forward range against the wall (run_bridge)
     field_faults: tuple[FieldFault, ...] = ()  # scripted field failures (field_faults.py)
+    frame_mistake: FrameMistake | None = None  # wiring mistake on purpose (log health tests)
+    gps: GpsSource | None = None  # a scripted GPS beside the vision stream (gps.py)
+    gps_faults: tuple[GpsFault, ...] = ()
 
     def __post_init__(self) -> None:
         if self.fault_anchor not in FAULT_ANCHORS:
@@ -64,6 +80,8 @@ class EstimateProfile:
             raise ValueError("fault_anchor_s must be >= 0")
         if self.fault_anchor_alt_m is not None and not self.fault_anchor_alt_m > 0:
             raise ValueError("fault_anchor_alt_m must be > 0")
+        if self.gps_faults and self.gps is None:
+            raise ValueError("gps_faults need a gps block")
 
     @property
     def dt(self) -> float:
@@ -79,7 +97,8 @@ class EstimateProfile:
         d = dict(d)
         unknown = set(d) - {"name", "seed", "divisor", "estimate", "fault_anchor",
                             "fault_anchor_s", "fault_anchor_alt_m", "bias_from_anchor",
-                            "rangefinder", "field_faults"}
+                            "rangefinder", "field_faults", "frame_mistake", "gps",
+                            "gps_faults"}
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         if "name" not in d:
@@ -96,13 +115,18 @@ class EstimateProfile:
             raise ValueError("divisor must be >= 1")
         alt = d.get("fault_anchor_alt_m")
         rng = d.get("rangefinder")
+        mistake = d.get("frame_mistake")
+        gps = d.get("gps")
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
                    fault_anchor_s=float(d.get("fault_anchor_s", 25.0)),
                    fault_anchor_alt_m=None if alt is None else float(alt),
                    bias_from_anchor=bool(d.get("bias_from_anchor", False)),
                    rangefinder=None if rng is None else Rangefinder.from_dict(rng),
-                   field_faults=parse_field_faults(d.get("field_faults")))
+                   field_faults=parse_field_faults(d.get("field_faults")),
+                   frame_mistake=None if mistake is None else FrameMistake.from_dict(mistake),
+                   gps=None if gps is None else GpsSource.from_dict(gps),
+                   gps_faults=parse_gps_faults(d.get("gps_faults")))
 
     def with_seed(self, seed: int) -> EstimateProfile:
         """The same profile with another seed (fault anchor and everything else kept)."""
@@ -124,14 +148,19 @@ class EstimateProfile:
                 "fault_anchor_alt_m": self.fault_anchor_alt_m,
                 "bias_from_anchor": self.bias_from_anchor,
                 "rangefinder": None if self.rangefinder is None else self.rangefinder.to_dict(),
-                "field_faults": [f.to_dict() for f in self.field_faults]}
+                "field_faults": [f.to_dict() for f in self.field_faults],
+                "frame_mistake": (None if self.frame_mistake is None
+                                  else self.frame_mistake.to_dict()),
+                "gps": None if self.gps is None else self.gps.to_dict(),
+                "gps_faults": [f.to_dict() for f in self.gps_faults]}
 
     def bridge(self, dt: float | None = None, divisor: int | None = None) -> EstimateBridge:
         """The bridge this profile describes (``dt`` / ``divisor`` overrides for replays)."""
         return EstimateBridge(self.estimate, self.dt if dt is None else dt, self.seed,
                               self.divisor if divisor is None else divisor,
                               self.fault_anchor, self.fault_anchor_s, self.fault_anchor_alt_m,
-                              self.bias_from_anchor, self.field_faults)
+                              self.bias_from_anchor, self.field_faults, self.gps,
+                              self.gps_faults)
 
 
 def load_profile(path: str | Path) -> EstimateProfile:

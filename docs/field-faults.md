@@ -7,9 +7,9 @@ buyer's first question is what the drone does in each one. This page scripts tho
 failures, flies them in Gazebo SITL with Structure Hold and with tuned stock PX4, and says
 plainly what happened, good and bad.
 
-## The five faults
+## The six faults
 
-All five live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
+All six live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
 bridge on top of the normal corruption, at a set time after the fault anchor, so every
 runner meets the same failure at the same moment of its scored window.
 
@@ -20,6 +20,7 @@ runner meets the same failure at the same moment of its scored window.
 | `silence` | Nothing is sent for `duration_s` (longer than the 3 s dropouts we train on) | Companion computer or link lost |
 | `freeze` | The same position and zero velocity keep arriving on time, never marked stale | A stuck camera pipeline; no staleness check can see it |
 | `drift` | A slow ramp of `rate_mps` along `direction`, then held | Scale drift, or a spoofed source walking off |
+| `degrade` | The VIO keeps running but sees less: extra noise (`noise_m`, `vel_noise_mps`), a faster random walk (`walk_mps`, kept afterwards), tracking losses of `loss_s` about `loss_hz` times a second; the forward rangefinder gets noise (`range_noise_m`), missing returns (`range_loss_frac`) and short returns off the particles (`range_short_frac`). All of it ramps up over `ramp_s` | Dust thrown up by the rotors, fog or steam, a dark underside: the cases buyers ask about (added 2026-11-02) |
 
 Each ships as a pair of profiles that differ only in their anchor:
 `field_<fault>_at_engage` for the hold runner and `field_<fault>_at_hover` for the stock
@@ -184,6 +185,67 @@ Structure Hover on the frozen estimate held about as well as the range hover her
 the wind moved the vehicle 0.2 m, and the wall guard kept it off the wall. A longer freeze
 is where the range hover should matter, as on the link loss. One flight per cell, one seed.
 
+### Dust, fog and low light: the `degrade` fault (2026-11-02)
+
+Buyers ask what happens in rotor-blown dust, fog or steam, and on a dark underside. None
+of these stops a VIO outright: it runs on fewer and worse features, gets noisier, walks off
+faster and loses tracking for fractions of a second, and a laser rangefinder in the same
+air gets noisy, misses returns and sees short ones off the particles. `degrade` scripts
+that (`field_degrade_at_engage` / `_at_hover`): over 20 s, ramping up over the first 5 s,
+the VIO gains 5 cm of position noise, 0.2 m/s of velocity noise, a random walk of
+0.1 m/sqrt(s) that is kept afterwards, and 0.5 s tracking losses about once every 4 s; the
+rangefinder gains 5 cm of noise, loses a fifth of its returns and a tenth come back short.
+The walk and the losses come from the profile's seed, so both runners meet the same ones
+(seed 1 walks about 0.55 m away from the wall and 0.6 m along it; seed 2 about 0.45 m,
+toward it); the rangefinder's draws are their own stream, so `verify_trace` still holds.
+
+v22 with the rangefinder (`--rangefinder`) against tuned PX4, barometer height
+(`px4_tuned_v2.params`), calm, 4 and 8 m/s into the wall, seeds 1 and 2, cloud image
+(`eval/field_faults.py` over the 25 s after the fault, `field_faults.json` in the batch
+folders `*_degrade_v22_e185a80_e185a80` and `*_degrade_tuned_def668f_def668f`):
+
+| | calm | 4 m/s | 8 m/s | all 6 |
+| --- | --- | --- | --- | --- |
+| v22: wall contacts | 0/2 | 0/2 | 0/2 | **0/6**, no trip, all airborne, closest 0.85 m |
+| v22: closest to the wall, m | 1.02 / 0.91 | 1.01 / 1.01 | 0.99 / 0.85 | |
+| v22: largest move, m | 1.01 / 0.44 | 0.57 / 0.68 | 1.03 / 0.53 | up to 1.0 m, seed 1 away from the wall |
+| v22: height, m | within 0.26 | within 0.46 | within 0.31 | |
+| Tuned PX4: wall contacts | 1/2 | 1/2 | 1/2 | **3/6** (seed 1 every time, 0.37 to 0.39 m) |
+| Tuned PX4: closest to the wall, m | 0.39 / 0.55 | 0.37 / 0.84 | 0.37 / 0.66 | |
+| Tuned PX4: largest move, m | 0.85 / 0.49 | 0.74 / 0.29 | 0.75 / 0.37 | |
+| Tuned PX4: height, m | within 0.40 | within 0.46 | within 0.24 | |
+
+Seed 1 / seed 2 in each cell. What happened:
+
+- **Nothing trips, on purpose.** 5 cm of noise is well under the 2 m hold-error trip and
+  0.5 s losses are under the 5 s stale trip; EKF2 rode through both. v22 held through the
+  whole 20 s on the degraded fix, as it was trained to (Gate 1 stress covers noise and
+  dropouts to 3 s).
+- **Both follow the walk.** Neither controller can tell a VIO walking off from the vehicle
+  moving, so both move with it: seed 1's 0.55 m walk away from the wall took stock PX4
+  0.55 m toward it, to 0.37 to 0.39 m, prop contact, in all three winds. The policy would
+  have done the same; the rangefinder is what kept v22 off the wall (as on the slow
+  drift, F7 in the safety manual).
+- **Short returns off the dust push the hold point back, and it stays back.** The wall
+  guard treats a short reading as the wall being close and moves the hold point away; it
+  only ever moves away (the ratchet that stops a lost sensor walking the vehicle in). In
+  the dust the readings went as short as 0.10 to 0.13 m and the guard moved the hold
+  point 0.6 to 0.95 m back over the 20 s (`hold.json` `wall_guard.shift_m`, less the
+  engage-time shift), on top of the walk: seed 1 ended 1.9 to 2.1 m from the wall. That is
+  the safe side, but it is an unplanned move of up to a metre away from the structure, into
+  whatever is behind, and in a longer cloud it would keep going. The wall-range policy input
+  (`RangeReference`, v23 on) has a spike gate; the guard has none. A one-step spike gate on
+  the guard (accept a shorter reading only when the next one agrees), or a floor on how far
+  the guard may move the point in one hold, is the fix; it is a module change on a safety
+  path, so it goes in its own PR (Next).
+- **Height moved 0.2 to 0.5 m on both**, from the velocity noise (0.2 m/s) that EKF2
+  fuses: the barometer height reference bounds it. Stock PX4 dipped 0.46 m, v22 0.26 m.
+
+One flight per cell, two seeds: it shows the mechanisms, not a rate. The numbers are what
+this one `degrade` setting does; a real dust cloud or fog bank may be milder or far worse,
+which is why the safety manual's envelope now names visibility (F36, F37), and tells the
+pilot to stop the hold when the VIO degrades rather than fly it out.
+
 What this says, in plain words:
 
 - **A VIO reset or restart is where the module earns its keep.** Stock PX4 climbed 2.2 m
@@ -196,6 +258,11 @@ What this says, in plain words:
   both wandered about half a metre and stayed 0.94 m from the wall. The frozen-fix trip
   (`SH_WD_FRZ_T`, above) caught it in 1 s and the guarded hover then moved 0.2 m; it is on
   by default since 2026-11-02 (Zain).
+- **Dust, fog and low light: the module holds, but walks with the VIO.** Neither v22 nor
+  stock PX4 can see a degraded VIO walking off; stock PX4 touched the wall on 3 of 6
+  flights, v22 on none, because the rangefinder guard caught the walk toward the wall. The
+  guard also read the dust as a close wall and backed the hold point off by up to a metre,
+  which a spike gate on the guard should stop (Next).
 - **A long link loss is not survived by either, for two reasons.** With vision as EKF2's
   height reference the height estimate freezes and the vehicle can sink unseen: partners
   should fly the barometer (or a downward rangefinder) as the height reference, and the
@@ -204,11 +271,84 @@ What this says, in plain words:
   into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead, and 0 of
   12 touched over three winds. It is on by default since 2026-11-02 (Zain).
 
+## GPS on: RTK float, a jump, a glitch, a loss and the hand-over (2026-11-02, cloud)
+
+Gap 3 of the "Features that sell" research: the item with the most buyers behind it was what
+the mode does with a GPS or RTK receiver on as well (Zain, 2026-11-02: do it; the envelope
+said GPS off). The benchmark stays GPS-free. These flights put a scripted receiver beside
+the vision stream: the bridge sends Gazebo's truth as HIL_GPS with seeded noise and the
+faults below (`sim2real/estimate_bridge/gps.py`), PX4 takes it as its GPS (`MAV_USEHILGPS`
+1), Gazebo's own receiver reports no fix (`SIM_GPS_USED` 0) and EKF2 fuses GPS position,
+height and velocity beside the vision stream (`gps_on.params`, laid over
+`px4_tuned_v2.params` by the runners whenever the profile has a `gps` block). The height
+reference is set to the barometer explicitly (`EKF2_HGT_REF` 0: in PX4 v1.17 the value 1 the
+benchmark set carries means GPS height, and only flew on the barometer because EKF2 falls back
+to it with no GPS; a separate fix is pending). RTK fixed, 10 Hz, 1 cm noise.
+
+| Profile | What the receiver does | Field report it copies |
+| --- | --- | --- |
+| `gps_on` | Healthy for the whole flight (the `vio_at_*` corruption underneath) | Does a good GPS beside the VIO change the hold? |
+| `field_rtk_float` | Drops to RTK float for 15 s: accuracy 0.5 m, 0.3 m noise, solution 0.8 m off | Fix lost under a structure |
+| `field_gps_jump` | Solution steps 1.5 m and stays there, inside EKF2's innovation gate | Multipath under a deck, base-station change |
+| `field_gps_glitch` | 4 m off for five samples, then back | A glitch |
+| `field_gps_loss` | Quiet for 10 s, back 1 m off | Receiver lost under the structure, hand-over on return |
+
+Every offset points away from the wall (`direction` -x), so EKF2's estimate says the
+vehicle is further from the wall than it is and the controller moves it toward the wall:
+the dangerous way. (A first round with the offsets pointing the other way moved both
+controllers 0.05 to 0.8 m away from the wall and touched nothing.) Scenario
+`wall1m_wind_4ms`, released policy v22 with the forward rangefinder (`--rangefinder`) against
+tuned PX4, seed 1 unless a row says otherwise, cloud image at `e185a80`
+(`eval/field_faults.py` tables in `runs/gps_faults_round{2,3}.json`).
+
+| Fault | Runner | Closest to wall | Largest move | Lowest height | What happened |
+| --- | --- | --- | --- | --- | --- |
+| RTK float, 0.8 m off, 15 s | Structure Hold | 0.72 m | 0.31 m | 2.43 m | EKF2 followed about 0.3 m of the float solution; the wall guard stopped the hold point at `SH_WALL_MIN` 0.70 m; no trip |
+| RTK float | tuned PX4 | 0.66 m | 0.35 m | 2.47 m | followed the same 0.3 m, nothing stopped it |
+| GPS jump, 1.5 m, held | Structure Hold | 0.71 m | 0.33 m | 2.42 m | EKF2 followed the jump fully (estimate 1.1 m off at p95); the wall guard held 0.70 m; no trip |
+| GPS jump | Structure Hold, seeds 2 and 3 | 0.70 / 0.71 m | 0.32 / 0.35 m | 2.36 / 2.42 m | the same |
+| GPS jump | Structure Hold **without the rangefinder** | **0.30 m (contact)** | 0.73 m | 2.42 m | followed the estimate into the wall; `position_error` trip at the wall |
+| GPS jump | tuned PX4 | **0.26 m (contact)** | 2.46 m | 0.00 m (ground) | followed the estimate into the wall and fell to the ground |
+| GPS jump | tuned PX4, seeds 2 and 3 | **0.29 / 0.27 m (contact)** | 2.12 / 4.94 m | 0.03 / 0.08 m | the same, 3 of 3 seeds |
+| GPS glitch, 4 m for 0.5 s | Structure Hold | 1.00 m | 0.05 m | 2.44 m | EKF2 rejected it (outside the gate); nothing happened |
+| GPS glitch | tuned PX4 | 0.96 m | 0.06 m | 2.47 m | the same |
+| GPS loss 10 s, back 1 m off | Structure Hold | 0.73 m | 0.31 m | 2.43 m | EKF2 reset once to vision during the loss (7 cm) and, once the receiver was back, walked 0.3 m toward its new solution over 15 s; the wall guard held 0.70 m; no trip |
+| GPS loss | tuned PX4 | 0.69 m | 0.33 m | 2.47 m | the same walk, nothing stopped it |
+| GPS healthy (`gps_on`) | Structure Hold | 0.97 m | hold p95 0.15 m | | against 0.19 m GPS-off on the same seed (`vio_at_engage`, flown the same day): a good RTK beside the VIO tightens the hold a little |
+| GPS healthy | tuned PX4 | 0.95 m | hold p95 0.18 m | | against 0.89 m GPS-off: stock PX4 gains far more, since the vision jumps no longer move its estimate |
+
+What this says, in plain words:
+
+- **With GPS on, the rangefinder is what keeps the drone off the wall, for Structure Hold and
+  for nothing else.** EKF2 believes a GPS solution that moves within its gate (the RTK float,
+  the 1.5 m jump, the solution the receiver comes back with): the estimate walks, and every
+  controller flying it walks with it. Tuned PX4 went into the wall and down on the 1.5 m jump
+  on all three seeds; Structure Hold without a rangefinder did the same; with the rangefinder
+  the wall guard stopped the hold point at 0.70 m every time. So the envelope with GPS on is:
+  a forward rangefinder and `SH_WALL_REQ` 1, and the safety manual says so (1.2).
+- **A short glitch is harmless**: EKF2's innovation gate throws it out. A healthy RTK beside
+  the VIO makes the hold slightly tighter (v22 0.15 m against 0.19 m on the same seed; tuned
+  PX4 0.18 against 0.89 m, since its estimate no longer follows the vision jumps).
+- **Nothing catches a walk along the wall.** The guard measures the wall axis only; a GPS
+  solution that walks the estimate sideways moves the drone sideways, with either controller.
+  The module could spot the estimate leaving the VIO's own track while GPS is fused and tell
+  the pilot (parked in `docs/decisions.md`); it would not hold the position any better than
+  the guarded hover already does, and the flight-controller flash is nearly full, so no module
+  code was added for this.
+- The hand-over does not arrive as an EKF2 reset. With the vision stream still fusing, EKF2
+  never resets to the returning GPS; its position bias estimator on the vision stream re-aligns
+  to the GPS over about 15 s instead. A hold point that follows EKF2 resets (as PX4's modes do)
+  would not have helped here.
+
 ## Next
 
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
 - The range hover (`SH_HB_RANGE`, now on by default) over seeds 5 to 8 and longer silences.
-- The GPS-on hand-over fault (GPS returning and the estimate jumping to it) waits for Zain:
-  should partners ever fly with GPS on?
+- A spike gate (or a per-hold limit) on the wall guard so short returns off dust or fog do
+  not march the hold point back; then re-fly `field_degrade` with it, more seeds, and a
+  harsher setting (longer losses, a faster walk) to find where the module's own trips take
+  over.
+- The GPS faults over the other winds and more seeds, and the same faults with a jump along
+  the wall (`direction` [0, 1, 0]), which no guard catches.

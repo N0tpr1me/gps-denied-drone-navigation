@@ -9,6 +9,8 @@ bridge.py          EstimateBridge: truth sample in, corrupted sample out; trace 
 run_bridge.py      the in-container process: gz pose/info -> bridge -> MAVLink ODOMETRY
 config.py          estimate profiles (profiles/clean.yaml, profiles/vio_default.yaml)
 field_faults.py    scripted field failures on top of the corruptor (docs/field-faults.md)
+gps.py             a scripted GPS/RTK receiver beside the vision stream, with its own faults
+                   (HIL_GPS; profiles with a `gps` block fly with GPS on, gps_on.params)
 params.py          QGC .params reader -> PX4_PARAM_* environment for the container
 ekf2_ev.params     EKF2 on vision, GPS off (loaded at PX4 start, before EKF2 runs)
 heartbeat.py       PX4 HEARTBEAT custom_mode -> is Structure Hold flying (for the fault anchor)
@@ -68,8 +70,12 @@ and `ekf.json`.
 Profile keys: `name`, `seed`, `divisor` (corruptor every N-th 50 Hz sample), `estimate`
 (any `EstimateCorruptionConfig` key, or `clean`), `fault_anchor` (`start`, the default,
 `engage` or `altitude`), `fault_anchor_s` (25.0) and `fault_anchor_alt_m` (the `altitude`
-anchor's height; `null` lets the runner fill it from the scenario) and `bias_from_anchor`
-(false; true holds the bias walk at zero until the anchor).
+anchor's height; `null` lets the runner fill it from the scenario), `bias_from_anchor`
+(false; true holds the bias walk at zero until the anchor), `field_faults` (scripted
+estimate failures, `field_faults.py`), `gps` (a scripted GPS receiver the bridge sends as
+HIL_GPS, `gps.py`; the runners then lay `gps_on.params` over the PX4 set so EKF2 fuses it
+beside the vision stream, and the pass line expects GPS used instead of never used) and
+`gps_faults` (its RTK float, jump, glitch and loss faults, timed from the anchor).
 
 Fault anchor. With `start` the fault clock runs from the bridge's first sample, so where a
 jump or dropout lands relative to the hold depends on how long PX4 took to arm and take
@@ -116,9 +122,12 @@ A profile can carry `field_faults` too (`field_faults.py`, `docs/field-faults.md
 failures copied from field reports, timed from the anchor and applied on top of the
 corruptor's output: `reset_origin` (the VIO frame snaps back to where it started, signalled
 through ODOMETRY `reset_counter` unless `signal: false`), `restart` (a gap, then that snap),
-`silence` (nothing sent), `freeze` (the same position, zero velocity, still on time) and
-`drift` (a slow ramp). The trace gains a `resets` column, and `verify_trace` replays the
-faults from the profile. Each fault ships as a pair, `field_<fault>_at_engage` for the hold
+`silence` (nothing sent), `freeze` (the same position, zero velocity, still on time),
+`drift` (a slow ramp) and `degrade` (dust, fog or low light: the VIO gets noisier, walks off
+and loses tracking in bursts, and the forward rangefinder gets noisy, missing and short
+returns, all ramping up with a severity). The trace gains a `resets` column, and
+`verify_trace` replays the faults from the profile (the rangefinder's draws are a separate
+stream, so the estimate replay still matches). Each fault ships as a pair, `field_<fault>_at_engage` for the hold
 runner and `field_<fault>_at_hover` for the stock runner.
 
 ## Notes

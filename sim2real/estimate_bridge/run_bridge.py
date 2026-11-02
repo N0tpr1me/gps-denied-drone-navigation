@@ -34,6 +34,12 @@ such sample (``bridge.py``). The mode only counts once the vehicle is airborne
 (``heartbeat.airborne_engage``): the flight sequence first tries an engage on the ground,
 which the module refuses, and the mode shows for a moment then.
 
+GPS: a profile with a ``gps`` block (``gps.py``) also gets a HIL_GPS message per receiver
+tick on the same link: the truth in the world's latitude and longitude with the profile's
+noise and scripted faults, which PX4 takes as a ``sensor_gps`` instance (``MAV_USEHILGPS``
+1, ``gps_on.params``) and EKF2 fuses beside the vision stream. Nothing is sent while the
+receiver is scripted quiet.
+
 Rangefinder: a profile with a ``rangefinder`` entry (``run_gazebo --rangefinder``) also
 gets a forward DISTANCE_SENSOR (MAV_SENSOR_ROTATION_NONE, i.e. forward facing) on the same
 link, computed from the same truth pose against the scenario's wall (``bridge.Rangefinder``),
@@ -44,6 +50,7 @@ the beam misses the wall or the reading is out of range, as a real sensor report
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -56,8 +63,10 @@ from gz.transport13 import Node
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common as mavlink
 
+from envs.frames import enu_to_ned
 from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
+from sim2real.estimate_bridge.gps import SATELLITES, enu_to_lat_lon_alt
 from sim2real.estimate_bridge.heartbeat import airborne_engage, structure_hold_engaged
 
 NAN = float("nan")
@@ -78,6 +87,8 @@ class Bridge:
         self.sent = self.dropped = self.received = 0
         self.rangefinder = self.profile.rangefinder
         self.ranges_sent = 0
+        self.gps_sent = 0
+        self.origin = (args.origin_lat, args.origin_lon, args.origin_alt)
         self.last_range_t = -1e9
         self.last_log = time.monotonic()
         self.mav = mavutil.mavlink_connection(args.mavlink, source_system=args.sysid,
@@ -89,6 +100,9 @@ class Bridge:
             print(f"bridge: forward rangefinder at {self.rangefinder.rate_hz:.0f} Hz against "
                   f"the wall at {self.rangefinder.wall_point}, normal "
                   f"{self.rangefinder.normal_toward}", flush=True)
+        if self.profile.gps is not None:
+            print(f"bridge: GPS at {self.profile.gps.rate_hz:.0f} Hz, {self.profile.gps.fix}, "
+                  f"{len(self.profile.gps_faults)} scripted faults", flush=True)
         self.mav.wait_heartbeat(timeout=args.heartbeat_timeout_s)
         print(f"bridge: PX4 heartbeat from system {self.mav.target_system}", flush=True)
         # Heartbeats at 20 Hz on this link, so the engage is seen within about 50 ms.
@@ -143,11 +157,15 @@ class Bridge:
                 self.sent += 1
             else:
                 self.dropped += 1
+            if sample.gps.sent:
+                self.send_gps(sample)
+                self.gps_sent += 1
             now = time.monotonic()
             if now - self.last_log > 10:
                 self.last_log = now
                 print(f"bridge: t={sample.t:.1f} s received {self.received} sent {self.sent} "
-                      f"withheld {self.dropped} ranges {self.ranges_sent}", flush=True)
+                      f"withheld {self.dropped} ranges {self.ranges_sent} gps {self.gps_sent}",
+                      flush=True)
 
     def on_mavlink(self, msg) -> None:
         """PX4's traffic on the bridge link; only the autopilot heartbeat matters."""
@@ -163,7 +181,7 @@ class Bridge:
             self.engaged = engaged
 
     def send(self, sample) -> None:
-        p, v = odometry_ned(sample)
+        p, v = odometry_ned(sample, self.profile.frame_mistake)
         self.mav.mav.odometry_send(
             int(round(sample.t * 1e6)),
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
@@ -171,6 +189,21 @@ class Bridge:
             float(v[0]), float(v[1]), float(v[2]), NAN, NAN, NAN,
             NAN21, NAN21, sample.resets % 256, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )
+
+    def send_gps(self, sample) -> None:
+        """The scripted receiver's tick as HIL_GPS (lat/lon 1e-7 deg, alt mm, accuracies cm,
+        velocities cm/s, course centideg); PX4 stamps it on arrival."""
+        g = sample.gps
+        lat, lon, alt = enu_to_lat_lon_alt(g.pos, *self.origin)
+        v = enu_to_ned(g.vel)
+        cog = int(round(math.degrees(math.atan2(v[1], v[0])) % 360.0 * 100))
+        self.mav.mav.hil_gps_send(
+            int(round(sample.t * 1e6)), int(g.fix_type), int(round(lat * 1e7)),
+            int(round(lon * 1e7)), int(round(alt * 1e3)),
+            min(int(round(g.eph_m * 100)), 65535), min(int(round(g.epv_m * 100)), 65535),
+            min(int(round(math.hypot(v[0], v[1]) * 100)), 65535),
+            int(round(v[0] * 100)), int(round(v[1] * 100)), int(round(v[2] * 100)),
+            cog, SATELLITES)
 
     def send_range(self, t: float, pose) -> None:
         """Forward range from the truth pose, at the rangefinder's rate in sim time."""
@@ -180,6 +213,9 @@ class Bridge:
         q = pose.orientation
         r = self.rangefinder.range_m((pose.position.x, pose.position.y, pose.position.z),
                                      (q.w, q.x, q.y, q.z))
+        # A degrade fault (dust, fog) spoils the range too; before the anchor nothing applies.
+        r = self.bridge.field_faults.range_reading(r, self.rangefinder.min_m,
+                                                  self.bridge.t_rel(t))
         if r is None:
             return
         self.mav.mav.distance_sensor_send(
@@ -192,7 +228,7 @@ class Bridge:
         with self.lock:
             self.trace.close()
         print(f"bridge: done, received {self.received} sent {self.sent} withheld "
-              f"{self.dropped} ranges {self.ranges_sent}", flush=True)
+              f"{self.dropped} ranges {self.ranges_sent} gps {self.gps_sent}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

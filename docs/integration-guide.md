@@ -44,7 +44,7 @@ interface, and commander can take the vehicle out of it at any time.
 | Need | Requirement | Why |
 | --- | --- | --- |
 | Firmware | PX4 v1.17.0, or a fork of exactly that release | The external-mode handshake and the topics below are v1.17's; another release is a re-check on our side |
-| Airframe | A multicopter that flies well in stock Position mode on its own VIO with GPS off | Structure Hold flies on top of your rate loop and your estimate; it does not fix either |
+| Airframe | A multicopter that flies well in stock Position mode on its own VIO with GPS off | Structure Hold flies on top of your rate loop and your estimate; it does not fix either. GPS or RTK may be fused as well, with the forward rangefinder and `SH_WALL_REQ` 1 (`docs/field-faults.md`, "GPS on") |
 | Flight controller | About 125 KB of free flash and a single-precision FPU | The policy's weights are compiled in. A 2 MB board needs the multicopter-only build (`sim2real/px4/boards/structurehold.px4board`) |
 | Position estimate | VIO into EKF2 as external vision (`ODOMETRY`, `estimator_type` VISION or VIO), logged as `vehicle_visual_odometry` | The hold point and the policy's position error come from EKF2's `vehicle_local_position`; the VIO samples tell a fresh fix from a stale one |
 | Heading | A heading that points the same way relative to the wall for the whole hold | The heading at engage is taken as the wall's normal (VIO yaw is safer than a compass near steel) |
@@ -291,7 +291,10 @@ must do, is the safety manual, `docs/safety-manual.md`.
 1. Send us the airframe sheet, parameter dump and one logging flight (`docs/partner-pack.md`,
    step 0). We check your drone against the training range, with the airframe fit.
 2. Build the module into your firmware (step 1); `structure_hold status` says `standby`.
-3. Check EKF2, the forward rangefinder and the `SH_` parameters (step 2).
+3. Check EKF2, the forward rangefinder and the `SH_` parameters (step 2). Run
+   `python -m eval.log_health <flight.ulg>` on one flight log: it says in plain English whether
+   EKF2 really fuses your VIO, in the right frame, with the right heading source and
+   `EKF2_EV_DELAY` (`docs/log-health.md`).
 4. Bench test, props off (step 3, `docs/bench-test.md`).
 5. Tethered checks with tight watchdog limits (step 4).
 6. Scored sessions against your own tuned stock PX4 (steps 5 and 6).
