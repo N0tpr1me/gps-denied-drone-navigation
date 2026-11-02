@@ -254,9 +254,9 @@ What this says:
   estimate jumps in narrow pipes.
 - **A late estimate hurts the classical controllers most** (13 to 14 % crashes against 3 to
   4 % for the policy), as it did for Structure Hold.
-- **Wall centring is unsafe in round pipes** even with a perfect estimate (21 % crashes): a
-  tilted drone's side beams hit the curved wall unevenly, so the centring term pushes it
-  the wrong way.
+- **Wall centring is unsafe in round pipes** even with a perfect estimate (21 % crashes).
+  The cause is not traced yet; one guess is that a tilted drone's beams hit the curved wall
+  off their axis, so the centring term misreads its offset.
 - v1 is again level with v0 throughout.
 
 ## Plan, and what needs the GPU server
