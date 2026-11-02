@@ -64,7 +64,7 @@ DEFAULT_IMAGE = "structure-hold/px4-sitl:v1.17.0"
 MARGIN_M = 0.05  # differences under 5 cm are "about the same"
 # Wall-clock minutes one flight takes, measured on the cloud container (4 cores, one at a
 # time); only used for the --dry-run estimate.
-MINUTES_PER_FLIGHT = {"hold": 4.0, "estimate": 3.0}
+MINUTES_PER_FLIGHT = {"hold": 2.2, "estimate": 1.8}
 CONTROLLERS = {"hold": "Structure Hold", "estimate": "tuned PX4"}
 TRIP_TEXT = {
     "none": "no trip",

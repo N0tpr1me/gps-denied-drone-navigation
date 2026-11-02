@@ -288,6 +288,10 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
                          for k, v in setup)
     truth = ("real flights, scored on motion-capture truth" if s.get("truth", "mocap") == "mocap"
              else f"scored on {s.get('truth')} truth")
+    mocap = s.get("truth", "mocap") == "mocap"
+    truth_src = "from motion capture" if mocap else f"from {s.get('truth')}"
+    carried = (", carried into the mocap frame by fitting the drone's estimate to mocap over "
+               "the take-off" if mocap else "")
     title = f"Structure Hold vs tuned PX4 on {s.get('drone', 'a partner drone')}"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -312,10 +316,9 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
 <ul>{events}</ul>
 <h2>Set-up and method</h2>
 <div class="setup">{setup_html}</div>
-<p class="legend">Each hold is scored on the true position from motion capture, never on the
+<p class="legend">Each hold is scored on the true position {e(truth_src)}, never on the
 drone's own estimate, with the same code as our simulator and Gazebo benchmark. The hold point
-is the controller's setpoint at the start of the hold, carried into the mocap frame by fitting
-the drone's estimate to mocap over the take-off. p95 is the 95th-percentile distance from that
+is the controller's setpoint at the start of the hold{e(carried)}. p95 is the 95th-percentile distance from that
 point over the hold. A contact is any moment closer to the wall than the prop reach; a hold that
 ended before its full length counts as ended early, whatever the reason. The two controllers
 flew alternately on the same drone, the same day.</p>

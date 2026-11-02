@@ -10,7 +10,7 @@
 #   ./evaluate.sh --dry-run                # the plan and the time it should take
 #
 # Needs Docker and Python 3.10 or newer. No GPU: Gazebo runs headless on CPU cores, 4 per
-# flight; with 40 free cores all 10 flights fly at once (about ten minutes).
+# flight; with 40 free cores all 10 flights fly at once (a few minutes), on 4 cores about 20.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,16 +19,19 @@ IMAGE="${SITL_IMAGE:-structure-hold/px4-sitl:v1.17.0}"
 VENV="${KIT_VENV:-${ROOT}/.venv-kit}"
 
 load=""
+dry=0
 args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --load) load="$2"; shift 2 ;;
+        --dry-run|--rescore) dry=1; args+=("$1"); shift ;;
         *) args+=("$1"); shift ;;
     esac
 done
 
 say() { printf '\n== %s\n' "$*"; }
 
+if [[ "${dry}" == 0 ]]; then
 say "1/4 Docker"
 command -v docker >/dev/null || { echo "Docker is not installed: https://docs.docker.com/engine/install/" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "Docker is installed but not running (or needs sudo / the docker group)." >&2; exit 2; }
@@ -44,6 +47,7 @@ else
     echo "not found: building it once (PX4 v1.17.0 + Gazebo Harmonic, 20 to 40 min)"
     SITL_IMAGE="${IMAGE}" sim2real/docker/run.sh build
 fi
+fi  # --dry-run and --rescore fly nothing: no Docker or image needed
 
 say "3/4 Python"
 PY="python3"

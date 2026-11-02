@@ -58,16 +58,55 @@ flights at once as the machine has free blocks of 4 cores, each pinned to its ow
 
 | Machine | Flights at once | Time for all 10 |
 | --- | --- | --- |
-| 40 or more free cores (the GPU server's Threadripper, a build box) | 10 | about 10 minutes |
-| 16 cores | 4 | about 15 minutes |
-| 4 cores (laptop, the cloud container) | 1 | see the first run below |
+| 40 or more free cores (the GPU server's Threadripper, a build box) | 10 | about 3 minutes |
+| 16 cores | 4 | about 7 minutes |
+| 4 cores (laptop, the cloud container) | 1 | about 20 minutes (measured, below) |
+
+A flight takes about 2 minutes of wall clock (Structure Hold 2.2, tuned PX4 1.8, measured on
+the cloud container); `--dry-run` prints the estimate for the machine it runs on.
 
 The first build of the image takes 20 to 40 minutes; ship a saved image
 (`docker save structure-hold/px4-sitl:v1.17.0 -o kit-image.tar`, about 3 GB) to skip it.
 
 ### First run (2026-11-02, cloud container)
 
-FIRST_RUN_PLACEHOLDER
+`./evaluate.sh` from a clean checkout with the image already built (`cloud_build.sh`): all
+four steps ran, 10 flights one at a time took 20 minutes (16:34 to 16:54 UTC), exit 0. Kit
+folder `runs/20261102-163357_eval_kit_e185a80` (flight folders after the first three carry
+the next local commit in their names; same image). The printed table:
+
+| Fault | Controller | Closest to wall, m | Largest move, m | Lowest height, m | What happened | Better |
+|---|---|---|---|---|---|---|
+| VIO resets to its origin in the air | Structure Hold | 1.02 | 0.07 | 2.43 | no trip, still flying at the end | **Structure Hold**: stayed 0.05 m further from the wall |
+|  | tuned PX4 | 0.96 | 0.09 | 2.47 | still flying at the end |  |
+| VIO process restarts (3 s gap, then reset) | Structure Hold | 1.00 | 0.08 | 2.40 | no trip, still flying at the end | **Structure Hold**: stayed 0.10 m further from the wall |
+|  | tuned PX4 | 0.90 | 0.11 | 2.44 | still flying at the end |  |
+| position link lost for 8 s | Structure Hold | 0.95 | 0.43 | 2.41 | tripped (estimate lost) and handed back, still flying at the end | **Structure Hold**: tuned PX4 touched the wall |
+|  | tuned PX4 | 0.23 (contact) | 0.81 | -0.00 | touched the wall, dropped 2.5 m, on the ground at the end |  |
+| estimate freezes for 5 s | Structure Hold | 0.97 | 0.19 | 2.39 | tripped (estimate frozen) and handed back, still flying at the end | **Structure Hold**: stayed 0.05 m further from the wall |
+|  | tuned PX4 | 0.92 | 0.74 | 2.29 | still flying at the end |  |
+| estimate drifts 0.6 m away from the wall | Structure Hold | 0.70 | 0.33 | 2.43 | no trip, still flying at the end | **Structure Hold**: stayed 0.28 m further from the wall |
+|  | tuned PX4 | 0.42 | 0.59 | 2.47 | still flying at the end |  |
+
+
+Structure Hold better on 5 of 5 faults, tuned PX4 on 0, about the same on 0. Wall contacts: Structure Hold 0, tuned PX4 1.
+
+What it says, in plain words:
+
+- **Link loss is the clear case.** Tuned PX4 held for about 4.5 s, then its failsafe
+  descended and it touched the wall on the way down. Structure Hold tripped, handed back to
+  its range hover and stayed 0.95 m off the wall, still flying.
+- **Drift:** the wall guard stopped Structure Hold at 0.70 m; tuned PX4 followed the drift to
+  0.42 m, 2 cm from prop contact. The same result as the first flights in
+  `docs/field-faults.md`.
+- **Freeze:** the frozen-fix trip fired and the guarded hover moved 0.19 m; tuned PX4
+  wandered 0.74 m. The verdict names wall clearance first, which differed by only 5 cm.
+- **Reset and restart are mild on barometer height.** The VIO snaps back to the takeoff
+  point, which here is straight below the hold point, so only its height jumps, and with
+  the barometer as EKF2's height reference (`px4_tuned_v2.params`) neither controller
+  moved more than 11 cm. The 2.2 m climb in `docs/field-faults.md` was on vision height
+  (`px4_tuned_v1`). A takeoff away from the hold point would make the reset a horizontal
+  jump too; that is a different scenario, not flown here.
 
 ### Before it goes to a buyer
 
@@ -112,4 +151,29 @@ It is one self-contained HTML file (no scripts or web fonts) that prints on one 
 No real session exists yet; the tests (`eval/tests/test_partner_report.py`) build one from
 synthetic logs, and the sample below came from Gazebo logs scored through the same path.
 
-SAMPLE_PLACEHOLDER
+### Sample (2026-11-02, Gazebo, not a partner flight)
+
+To check the whole path on real PX4 logs, four clean 60 s holds were flown in the cloud on
+`wall1m_wind_4ms`, seeds 1 and 2 (`run_baseline`, v22 with the rangefinder on
+`vio_at_engage`, tuned PX4 on `vio_at_hover`, `px4_tuned_v2.params`), written up as a
+`session.yaml` with `truth: Gazebo` (the logs' ground-truth topic stands in for mocap) and
+scored by `eval.partner_session`. The page said Structure Hold held 41 % tighter (p95 0.238
+against 0.407 m, worst run 0.323 against 0.649 m), 0 contacts and 0 early ends on either
+side. Two holds per side on one wind: a check that the report works, not a result; the
+benchmark is `docs/baseline.md`.
+
+Two things it found, both fixed in `eval/partner_session.py`:
+
+- The module refuses to engage on the ground and hands straight back, which leaves a blip
+  of Structure Hold in `vehicle_status`; the scorer took that blip as the hold ("stretch is
+  0.0 s"). It now takes the first stretch that lasts longer than the settle time plus 1 s.
+- PX4's SITL sits in Hold mode on the ground before arming, which the scorer took as tuned
+  PX4's hold. It now looks only at stretches that start after arming.
+
+The Gazebo stock runner switches to Hold straight after its climb, so its first seconds in
+Hold are still the climb settling; the sample gives those runs the runner's own hover
+window (`window:` in the sheet). A partner pilot reaches the hold point before switching,
+as the pack says, so real sessions need no override. The scorer also holds against the
+setpoint at the start of the hold, not PX4's moving setpoint as `run_estimate` does, so
+the sample's tuned-PX4 p95 on seed 1 (0.649 m) is lower than that runner's own (0.895 m),
+where PX4 moved its setpoint after the estimate jump.

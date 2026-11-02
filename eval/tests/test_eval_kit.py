@@ -40,8 +40,8 @@ def test_plan_flies_each_fault_with_both_controllers_on_matching_profiles():
 
 def test_time_estimate_shrinks_with_parallel_slots():
     flights = plan(list(FAULTS))
-    assert estimate_minutes(flights, 10) == pytest.approx(4.0)
-    assert estimate_minutes(flights, 1) > 30
+    assert estimate_minutes(flights, 10) == pytest.approx(2.2)
+    assert estimate_minutes(flights, 1) == pytest.approx(20.0)
 
 
 def test_verdict_rule_contact_then_clearance_then_movement():
