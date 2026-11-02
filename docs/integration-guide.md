@@ -82,7 +82,8 @@ reckons.
 | `vehicle_command` | On a trip or refusal | `DO_SET_MODE` for each handback target in turn |
 | `register_ext_component_request`, `arming_check_reply`, `config_control_setpoints` | At start and on every commander poll | Mode registration, availability, and which PX4 controllers commander must enable |
 | `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
-| STATUSTEXT (via `mavlink_log`) | Whenever a safety function acts | Below |
+| STATUSTEXT (via `mavlink_log`) | Whenever a safety function acts, at each engage, near a watchdog limit, and every `SH_GCS_PER` s while a mode flies | Below |
+| `debug_array` (MAVLink `DEBUG_FLOAT_ARRAY` "SH_STATUS") | 5 Hz; PX4 streams it at 1 Hz on a ground-station link, 10 Hz onboard | The live numbers: state, hold error, wall distance, clearance, guard shift, fix age, time left before the no-fix trip, closest watchdog limit and how much of it is used, trip, tilt (`docs/pilot-status.md`) |
 
 In Structure Hold the attitude and position controllers are idle: commander enables only
 the rate loop and allocation for it. In Structure Land and Structure Hover commander runs
@@ -165,6 +166,7 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WD_TILT` | 45.0 | 10 to 80 | deg | Watchdog: this much tilt trips |
 | `SH_WD_FRZ_T` | 1.0 | 0 to 10 | s | A VIO fix that has not moved for this long trips. 0 off |
 | `SH_RST_HOLD` | 0.0 | 0 to 60 | s | Refuse an engage this long after an EKF2 xy reset. 0 off |
+| `SH_GCS_PER` | 10.0 | 0 to 60 | s | Period of the one-line status sent to the ground station while a mode flies (`docs/pilot-status.md`). 0 off; the engage line and near-limit warnings are sent regardless |
 | `SH_FIX_SRC` | 0 | 0 to 2 | | What counts as a fix: 0 auto (VIO odometry if present, else local position), 1 VIO odometry, 2 local position |
 | `SH_FIX_GAP` | 0.1 | 0.01 to 1 | s | A gap this long between fixes tells the policy its fix is stale; about twice your VIO's sample period |
 | `SH_CTRL` | 1 | 0 or 1 | | 1 the policy; 0 the placeholder cascade (test only) |
@@ -191,7 +193,10 @@ lost estimate and to no frozen-fix trip (`docs/field-faults.md`).
 
 ## What the pilot sees
 
-QGroundControl shows these as STATUSTEXT messages, and they are in the log:
+QGroundControl shows these as STATUSTEXT messages, and they are in the log. The first
+table is what happens when a safety function acts; the second is the live status before
+that (`docs/pilot-status.md`, which also lists the live number array for the MAVLink
+Inspector).
 
 | Severity | Message | When |
 | --- | --- | --- |
@@ -207,6 +212,20 @@ QGroundControl shows these as STATUSTEXT messages, and they are in the log:
 | Info | `Structure Hold: handing back to <mode>` | Each handback target in turn |
 | Info | `Structure Hover: position back, holding on the estimate` | `SH_HB_RANGE` 1 only |
 
+| Severity | Message | When |
+| --- | --- | --- |
+| Warning | `<mode>: no position fix for <t> s, watchdog hands back at <limit> s` | Half of `SH_WD_EST_TO` without a fix |
+| Warning | `<mode>: position fix has not moved for <t> s, watchdog trips at <limit> s` | Half of `SH_WD_FRZ_T` (Structure Hold only) |
+| Warning | `<mode>: tilted <a> deg, watchdog trips at <limit> deg` | Three quarters of `SH_WD_TILT` |
+| Warning | `<mode>: <e> m off the hold point, watchdog trips at <limit> m` | Half of `SH_WD_POS_ERR` |
+| Info | `<mode>: back inside the watchdog limits` | Every limit under 40 % again after a warning |
+| Info | `<mode>: engaged, <d> m from the wall` (or `no wall range`, `wall guard off`) | Each mode as it starts |
+| Info | `<mode>: <e> m off the hold point, <d> m from the wall, fix <t> s old` | Every `SH_GCS_PER` s while a mode flies |
+| Info | `Structure Hover: on the rangefinder, <d> m from the wall, holding <r> m` | The same, on the rangefinder alone |
+
+`<mode>` is Structure Hold, Structure Hover or Structure Land. Each limit warns once per
+crossing and at most every 10 s, so a gusty tilt does not flood the link.
+
 `structure_hold status` on the PX4 shell prints the state, the policy and its defaults,
 what is flying, the worst control step since boot and the tick interval.
 
@@ -220,6 +239,7 @@ what is flying, the worst control step since boot and the tick interval.
 | CPU | One policy step per 10 ms tick, estimated 150 to 300 us on an STM32H7 (1.5 to 3 % of a core), measured on your board by the bench test | `docs/bench-test.md` |
 | Wake-ups | At most one per 2 ms whatever the gyro rate | Same |
 | Log | `structure_hold_status` at the tick rate while engaged | `install.sh` adds it to the logger |
+| Link | One `DEBUG_FLOAT_ARRAY` (about 250 bytes) per second on a ground-station link, plus a status line every `SH_GCS_PER` s | `docs/pilot-status.md` |
 
 The bench test (`sim2real/px4/bench_test.py`) times the policy on your flight controller
 and flags anything over 1 ms.

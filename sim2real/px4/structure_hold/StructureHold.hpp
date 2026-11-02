@@ -43,6 +43,7 @@
 #include <uORB/SubscriptionMultiArray.hpp>
 #include <uORB/topics/arming_check_reply.h>
 #include <uORB/topics/arming_check_request.h>
+#include <uORB/topics/debug_array.h>
 #include <uORB/topics/distance_sensor.h>
 #include <uORB/topics/hover_thrust_estimate.h>
 #include <uORB/topics/parameter_update.h>
@@ -64,6 +65,7 @@
 #include "Handback.hpp"
 #include "HoldController.hpp"
 #include "ParamLimits.hpp"
+#include "PilotStatus.hpp"
 #include "PolicyController.hpp"
 #include "RangeHover.hpp"
 #include "WallGuard.hpp"
@@ -93,6 +95,8 @@ public:
 	static constexpr float LAND_SLOW_MPS = 0.3f;      // Structure Land's descent while it lags the guard
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
+	static constexpr hrt_abstime LIVE_INTERVAL = 200_ms;    // the live array; MAVLink streams it at its own rate
+	static constexpr uint16_t LIVE_ARRAY_ID = 0x5348;       // "SH": tells our array from another module's
 	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Position, Hold, Land
 	// Structure Hover on the range alone (SH_HB_RANGE): no usable reading for this long
 	// trips it, and the estimate must be back and fresh for this long to leave it.
@@ -143,6 +147,13 @@ private:
 	void publishRates(const matrix::Vector3f &rates, float thrust);
 	bool useOdometryFix() const;
 	void publishStatus(const hrt_abstime now);
+	// The pilot's live view (PilotStatus.hpp, docs/pilot-status.md)
+	float watchdogStaleS(const hrt_abstime now, bool range_only) const;
+	void wallText(char *buf, size_t len, float wall_m) const;
+	void sayEngaged(const hrt_abstime now, const char *mode);
+	void pilotStep(const hrt_abstime now, const char *mode, const matrix::Dcmf &r, float position_error_m,
+		       bool range_only);
+	void publishLive(const hrt_abstime now);
 	void updateParams() override;
 
 	// Subscriptions
@@ -167,6 +178,8 @@ private:
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
 	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
 	uORB::Publication<structure_hold_status_s> _status_pub{ORB_ID(structure_hold_status)};
+	// The live numbers for the ground station (MAVLink DEBUG_FLOAT_ARRAY "SH_STATUS").
+	uORB::Publication<debug_array_s> _live_pub{ORB_ID(debug_array)};
 	// Ground-station text (MAVLink STATUSTEXT): the pilot is told when a safety function
 	// acts and why (docs/market-research.md, gap 2). Each call also prints to the console.
 	orb_advert_t _mavlink_log_pub{nullptr};
@@ -253,6 +266,13 @@ private:
 	hrt_abstime _engaged_us{0};  // the policy's engage-time input counts from here
 	hrt_abstime _last_status_us{0};
 
+	// The pilot's live view: warnings near a watchdog limit, the status line, the live array
+	structure_hold::PilotStatus _pilot{};
+	structure_hold::Margin _margin{};    // closest watchdog limit at the last flying tick
+	float _hold_error_m{-1.f};           // the watchdog's hold error then; -1 on the range alone
+	float _wd_stale_s{0.f};              // the watchdog's no-fix time then
+	hrt_abstime _last_live_us{0};
+
 	perf_counter_t _loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": control step")};
 	perf_counter_t _tick_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": control tick")};
 	uint32_t _max_loop_time_us{0};  // worst control step since boot (print_status, bench test)
@@ -286,6 +306,7 @@ private:
 		(ParamInt<px4::params::SH_LAND_EN>) _param_land_en,
 		(ParamInt<px4::params::SH_HB_GUARD>) _param_hb_guard,
 		(ParamInt<px4::params::SH_HB_RANGE>) _param_hb_range,
+		(ParamFloat<px4::params::SH_GCS_PER>) _param_gcs_per,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

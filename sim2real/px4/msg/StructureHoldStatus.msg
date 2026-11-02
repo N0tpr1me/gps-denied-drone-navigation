@@ -43,6 +43,8 @@ bool odometry_fix             # fixes counted from vehicle_visual_odometry (else
 float32 wall_distance_m       # [m] forward rangefinder, perpendicular to the wall (WallGuard.hpp); -1 without a usable sample
 float32 hold_clearance_m      # [m] hold point to the measured wall along the structure x axis; -1 without a sample
 float32 standoff_shift_m      # [m] how far the wall guard has moved the hold point back since engage
+float32 watchdog_used         # fraction of the closest watchdog limit used (1 trips; PilotStatus.hpp); -1 when no mode flies
+uint8 watchdog_closest        # TRIP_* code of that limit (3, 4, 5 or 9), 0 when no mode flies
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])
 
 float32[3] rates_setpoint     # [rad/s] FRD body rates commanded this tick
