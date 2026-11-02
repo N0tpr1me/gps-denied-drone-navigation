@@ -168,7 +168,9 @@ What it does today:
   on the PX4 shell prints the policy's defaults and what is actually flying.
 - **Tells the ground station** (MAVLink STATUSTEXT through PX4's `mavlink_log`, shown by
   QGroundControl) whenever a safety function acts: a watchdog trip or refusal with its
-  reason and an engage refusal (critical), a wall-guard push and the fallback braking
+  reason code, the same reason in plain words with the parameter that sets the limit
+  (`Watchdog::reason`, e.g. "watchdog trip: tilt (tilted past SH_WD_TILT), handing back")
+  and an engage refusal (critical), that Structure Hold stays locked out until disarm (info), a wall-guard push and the fallback braking
   (warning), and each handback target (info). Regulators ask for exactly this: a failure of
   a system the flight relies on must be shown to the pilot (`docs/market-research.md`,
   gap 2). `sitl_test.py` checks the trip and wall-guard messages arrive.

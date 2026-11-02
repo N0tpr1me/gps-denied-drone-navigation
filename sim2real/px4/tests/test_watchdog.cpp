@@ -223,6 +223,37 @@ int main()
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateFrozen)) == "estimate_frozen");
 	CHECK(static_cast<int>(Trip::EstimateFrozen) == 9);  // structure_hold_status TRIP_ESTIMATE_FROZEN
 
+	// Every trip has its own plain-words reason for the pilot, and the longest ground-station
+	// message built from it ("Structure Hold: engage refused: " or the longer "watchdog trip"
+	// form, code, reason) fits PX4's mavlink_log text, char[127] with its terminator.
+	{
+		const std::string_view trip_prefix = "Structure Hold: watchdog trip: ";
+		const std::string_view trip_suffix = ", handing back";
+		const std::string_view unknown = Watchdog::reason(static_cast<Trip>(200));
+		CHECK(unknown == "unknown");
+
+		for (int t = 0; t <= static_cast<int>(Trip::EstimateFrozen); t++) {
+			const Trip trip = static_cast<Trip>(t);
+			const std::string_view reason = Watchdog::reason(trip);
+			const std::string_view code = Watchdog::name(trip);
+			CHECK(!reason.empty() && reason != unknown && reason != code);
+			const size_t length = trip_prefix.size() + code.size() + 3 + reason.size() + trip_suffix.size();
+
+			if (length > 126) {
+				std::printf("trip %d message is %zu characters\n", t, length);
+			}
+
+			CHECK(length <= 126);
+
+			for (int u = 0; u < t; u++) {
+				CHECK(reason != std::string_view(Watchdog::reason(static_cast<Trip>(u))));
+			}
+		}
+
+		CHECK(std::string_view(Watchdog::reason(Trip::EstimateFrozen)).find("SH_WD_FRZ_T")
+		      != std::string_view::npos);
+	}
+
 	if (failures == 0) {
 		std::printf("watchdog tests: all passed\n");
 		return 0;
