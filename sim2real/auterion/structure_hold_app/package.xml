@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>structure_hold_app</name>
+  <version>0.1.0</version>
+  <description>Structure Hold as a PX4 external flight mode (AuterionOS app variant)</description>
+  <maintainer email="147713459+N0tpr1me@users.noreply.github.com">N0tpr1me</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>eigen3_cmake_module</buildtool_depend>
+
+  <depend>eigen</depend>
+  <depend>rclcpp</depend>
+  <depend>px4_msgs</depend>
+  <depend>px4_ros2_cpp</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

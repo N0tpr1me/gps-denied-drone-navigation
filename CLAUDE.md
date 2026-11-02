@@ -55,6 +55,9 @@ station, vision in the policy. The module consumes the drone's existing position
 - Onboard module: plain C++ PX4 module, policy compiled in as an MLP header (no ONNX
   runtime, no heap). Software only (decided 2026-10-30): no drone of our own; the PX4
   Gazebo x500 is the benchmark drone, and real flights go on a design partner's drone.
+- Auterion variant (decided 2026-11-02, `docs/auterion-app.md`): the same flight code as an
+  AuterionOS app; ROS 2 Humble + `px4_ros2` inside that app only. Nothing signed up or paid
+  for at Auterion (Skynode Developer program, Suite) without asking Zain.
 - Lint/test: ruff (line length 100, rules E F W I B UP), pytest. CI installs CPU-only torch.
 
 ## Layout
@@ -73,6 +76,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `sim2real/gazebo/` | `wall_slab` world, C++ wind plugin (parity-tested against the Python model), scenarios |
 | `sim2real/estimate_bridge/` | Gazebo truth -> `envs/estimate` -> MAVLink ODOMETRY into EKF2; profiles (`vio_at_engage`, `vio_at_hover`, ...), scripted field faults (`field_faults.py`: VIO reset, restart, silence, freeze, drift; `field_*` profiles, `docs/field-faults.md`) |
 | `sim2real/px4/` | The Structure Hold module (`structure_hold/`), watchdog, header exporter, SIH and Gazebo flight scripts, `boards/structurehold.px4board` (multicopter-only variant that fits a 2 MB flight controller) |
+| `sim2real/auterion/` | Structure Hold as an AuterionOS app (`docs/auterion-app.md`): a PX4 external mode in a ROS 2 node via `px4_ros2`, flying the module's own headers (`HoldCore.hpp`); AuterionOS package pinned to AuterionOS 4.6.2, SITL image and SIH flight against stock PX4 (`sitl_app_test.sh`) |
 | `sim2real/partner/` | What a design partner loads and fills in: flight parameters and the session run sheet (`docs/partner-pack.md`) |
 | `viz/` | Three.js log replay (built after Gate 3) |
 | `experiments/LOG.md` | One line per real run |
@@ -119,6 +123,8 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_wall_guard.cpp -o test_wall_guard && ./test_wall_guard
 # also test_params.cpp and test_handback.cpp, same flags (sim2real/px4/README.md "Unit tests")
+# Auterion app core (sim2real/auterion/README.md): test_hold_core.cpp, -std=c++17, same warnings,
+#   -I../include -I../../../px4/structure_hold; SIH flight: sim2real/auterion/sitl_app_test.sh <PX4_DIR>
 
 # GPU server, once (docs/gpu-server.md): env, tests, smoke runs, SITL image, parallel check
 bash training/server_setup.sh
