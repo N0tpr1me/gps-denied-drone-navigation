@@ -94,7 +94,28 @@ DEFAULT_RULES = {
     "ring_slack": 0.05,  # median 1.2-2.2 Hz roll rms at most 5 % above the reference's
     "fast_ring_slack": 0.25,  # median 2.2-6 Hz roll/pitch rate rms at most 25 % above
     "toward_wall_slack_m": 0.05,  # replay cells: mean worst toward the wall
+    # Lift is a soft rule (decided 2026-11-03): no higher than the reference's, or under this
+    # above the hold point. The rule was written against v5's 0.3 to 0.45 m Gazebo lift; a
+    # candidate a centimetre above its hold point where the reference sits a centimetre
+    # below is inside the hold's own noise (v24, docs/wall-range.md).
+    "lift_max_m": 0.05,
 }
+
+
+def pooled_checks(cmp: dict[str, Any], pa: dict[str, Any], pr: dict[str, Any],
+                  rules: dict[str, Any]) -> dict[str, bool]:
+    """The rules on the rough cells pooled: candidate ``pa`` against reference ``pr``
+    (``describe`` rows) with ``cmp`` their paired p95 ratio."""
+    return {
+        "p95_lower": cmp["ci"][1] < 1.0,
+        "lift_ok": pa["lift_m_mean"] <= max(pr["lift_m_mean"], rules["lift_max_m"]),
+        "wobble_not_higher": pa["wobble_rate"] <= pr["wobble_rate"],
+        "ring_not_higher": (pa["wobble_rms_median"]
+                            <= pr["wobble_rms_median"] * (1.0 + rules["ring_slack"])),
+        "fast_ring_not_higher": (pa["fast_ring_median"]
+                                 <= pr["fast_ring_median"] * (1.0 + rules["fast_ring_slack"])),
+        "crash_ok": pa["crash_rate"] <= pr["crash_rate"] + rules["max_crash_increase"],
+    }
 
 
 FAST_RING_HZ = (2.2, 6.0)  # band of ``fast_ring_rms``, above the wobble's 1.2 to 2.2 Hz
@@ -504,16 +525,7 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
         b = [r for c in rough for r in flat[c][ref]]
         cmp = paired_p95_ratio(a, b, rng, n_boot)
         pa, pr = pooled[name], pooled[ref]
-        checks = {
-            "p95_lower": cmp["ci"][1] < 1.0,
-            "lift_not_higher": pa["lift_m_mean"] <= pr["lift_m_mean"],
-            "wobble_not_higher": pa["wobble_rate"] <= pr["wobble_rate"],
-            "ring_not_higher": (pa["wobble_rms_median"]
-                                <= pr["wobble_rms_median"] * (1.0 + rules["ring_slack"])),
-            "fast_ring_not_higher": (pa["fast_ring_median"]
-                                     <= pr["fast_ring_median"] * (1.0 + rules["fast_ring_slack"])),
-            "crash_ok": pa["crash_rate"] <= pr["crash_rate"] + rules["max_crash_increase"],
-        }
+        checks = pooled_checks(cmp, pa, pr, rules)
         for c in [c for c in report["reengage"] if c["scored"]]:
             d = c["controllers"]
             checks[f"{c['name']}_no_reengage_fail"] = d[name]["reengage_fail"] == 0
