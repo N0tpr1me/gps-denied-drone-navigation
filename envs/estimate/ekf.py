@@ -39,10 +39,21 @@ A reset moves the delayed state to the fix and shifts the output predictor by th
 amount, so the module sees the whole step at once. Horizontal fixes are fused or rejected as
 a pair, as in EKF2.
 
-Not modelled: attitude and bias states, baro (which would keep aiding the height), EKF2's
-limit of five horizontal resets per fusion start (after it, EKF2 stops and restarts the
-fusion, which resets anyway). Off by default; the ``gz_x500_sitl`` airframe turns it on
-(docs/decisions.md 2026-10-23).
+Height reference (``height_source``): ``"vision"`` is the above, the set-up every policy up
+to v22 trained on (``EKF2_HGT_REF`` 3). ``"baro"`` is the benchmark since 2026-11-01
+(``EKF2_HGT_REF`` 0, ``docs/decisions.md``): the barometer is the height reference and the
+vision height only aids it through EKF2's bias estimator, so the fused height follows the
+barometer's own error (a random walk of ``baro_walk_m_per_sqrt_s``, capped at
+``baro_walk_max_m``, plus white noise ``baro_noise_m`` per sample at ``baro_rate_hz``, fused
+behind EKF2's own loose barometer gate), keeps being aided while the vision fix is stale
+(no frozen height, no height resets, no IMU-bias drift in z), and restarts after a dropout
+with the horizontal position and the velocity reset to the fix but the height left alone.
+The vision height is then not fused at all: the bias estimator absorbs it. ``step`` needs
+the true position for the barometer in this mode.
+
+Not modelled: attitude and bias states, EKF2's limit of five horizontal resets per fusion
+start (after it, EKF2 stops and restarts the fusion, which resets anyway). Off by default;
+the ``gz_x500_sitl`` airframe turns it on (docs/decisions.md 2026-10-23).
 """
 
 from __future__ import annotations
@@ -69,15 +80,35 @@ class FusionConfig:
     stop_after_s: float = 0.4  # 2 x EV_MAX_INTERVAL
     hpos_reset_after_s: float = 1.0  # no_aid_timeout_max
     hgt_reset_after_s: float = 5.0  # hgt_fusion_timeout_max
+    # Height reference: "vision" (EKF2_HGT_REF 3, every policy up to v22) or "baro" (0, the
+    # benchmark since 2026-11-01; module docstring).
+    height_source: str = "vision"
+    # The barometer as EKF2's height comes out (its raw noise is smoothed away by the vision
+    # height aiding it): measured on Gazebo x500 hovers on px4_tuned_v2.params, 2026-11-03,
+    # EKF2 height minus truth over a 60 s hold: std 0.006 m calm, 0.019 m in 4 m/s wind,
+    # a walk of 0.002 to 0.007 m/sqrt(s), 0.001 m left after a 1 s mean, no reaction to a
+    # 0.1 m vision height jump or to a 17 s vision dropout.
+    baro_rate_hz: float = 50.0
+    baro_noise_m: float = 0.02  # white noise per fused sample
+    baro_walk_m_per_sqrt_s: float = 0.005  # the barometer's slow error (pressure, wind)
+    baro_walk_max_m: float = 0.3
 
     def __post_init__(self) -> None:
         for name in ("vision_rate_hz", "pos_noise_m", "vel_noise_mps", "gate_sd",
-                     "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s"):
+                     "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s",
+                     "baro_rate_hz", "baro_noise_m"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"fusion {name} must be positive")
-        for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2", "imu_bias_mps2"):
+        for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2", "imu_bias_mps2",
+                     "baro_walk_m_per_sqrt_s", "baro_walk_max_m"):
             if getattr(self, name) < 0:
                 raise ValueError(f"fusion {name} must be >= 0")
+        if self.height_source not in ("vision", "baro"):
+            raise ValueError('fusion height_source must be "vision" or "baro"')
+
+    @property
+    def baro(self) -> bool:
+        return self.height_source == "baro"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> FusionConfig:
@@ -117,6 +148,11 @@ class TorchFusion:
         self.xy_reset_count = torch.zeros(n, dtype=torch.long, device=self.device)
         self.xy_reset_step = z(n, 3)
         self.imu_bias = z(n, 3)
+        # Barometer height reference: the barometer's slow error, its own tick, and the true
+        # height at the delayed horizon it is fused at (buffered like the IMU).
+        self.baro_err = z(n)
+        self.baro_clock = 0.0
+        self.true_z = z(k, n)
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
     def reset(self, env_ids: Any, pos: torch.Tensor, vel: torch.Tensor) -> None:
@@ -131,15 +167,20 @@ class TorchFusion:
         self.no_fix_s[ids] = 0.0
         self.since_fuse[ids] = 0.0
         self.stopped[ids] = False
+        self.baro_err[ids] = 0.0  # EKF2's height origin is the barometer's level at the start
+        self.true_z[:, ids] = pos[:, 2]
         if self.cfg.imu_bias_mps2 > 0:  # no draw when off, so other draws stay as they were
             self.imu_bias[ids] = self.cfg.imu_bias_mps2 * torch.randn(
                 pos.shape[0], 3, generator=self.gen, device=self.device, dtype=self.dtype)
 
-    def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor) -> torch.Tensor:
+    def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor,
+              gate_var: float | None = None) -> torch.Tensor:
         """One scalar-per-axis measurement of position (``h_pos``) or velocity; returns which
-        axes were fused. With ``resets`` the horizontal pair passes or fails the gate together."""
-        S = (self.P11 if h_pos else self.P22) + var
-        ok = ok & (y * y < self.cfg.gate_sd ** 2 * S)
+        axes were fused. With ``resets`` the horizontal pair passes or fails the gate together.
+        ``gate_var`` is the measurement variance the gate assumes when it is not ``var``."""
+        P = self.P11 if h_pos else self.P22
+        S = P + var
+        ok = ok & (y * y < self.cfg.gate_sd ** 2 * (P + (var if gate_var is None else gate_var)))
         if self.cfg.resets:
             both = ok[:, 0] & ok[:, 1]
             ok = torch.stack([both, both, ok[:, 2]], dim=1)
@@ -180,13 +221,21 @@ class TorchFusion:
         self.resets += int(mask.any(dim=1).sum())
 
     def step(self, accel: torch.Tensor, fix_pos: torch.Tensor, fix_vel: torch.Tensor,
-             fresh: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+             fresh: torch.Tensor, true_pos: torch.Tensor | None = None,
+             ) -> tuple[torch.Tensor, torch.Tensor]:
         """Advance one step with the true acceleration ``accel`` (N, 3) and the latest fix;
-        ``fresh`` (N,) is False while the fix is stale. Returns (position, velocity) now."""
+        ``fresh`` (N,) is False while the fix is stale. ``true_pos`` (N, 3) is what the
+        barometer measures the height of, needed with ``height_source`` "baro". Returns
+        (position, velocity) now."""
         cfg, dt = self.cfg, self.dt
+        if cfg.baro and true_pos is None:
+            raise ValueError('fusion height_source "baro" needs true_pos')
         accel = torch.nan_to_num(accel) + cfg.imu_noise_mps2 * torch.randn(
             self.n, 3, generator=self.gen, device=self.device, dtype=self.dtype)
-        accel = accel + self.imu_bias * (~fresh)[:, None]  # EKF2 absorbs it while aided
+        bias = self.imu_bias * (~fresh)[:, None]  # EKF2 absorbs it while aided
+        if cfg.baro:
+            bias = bias * torch.tensor([1.0, 1.0, 0.0], device=self.device, dtype=self.dtype)
+        accel = accel + bias
         self.acc = torch.cat([self.acc[1:], accel[None]], 0)
         a_d = self.acc[0]  # the IMU sample at the delayed horizon
         self.p_d = self.p_d + self.v_d * dt + 0.5 * a_d * dt * dt
@@ -200,13 +249,33 @@ class TorchFusion:
             self.no_fix_s = torch.where(fresh, torch.zeros_like(self.no_fix_s), self.no_fix_s + dt)
             self.stopped = self.stopped | (self.no_fix_s > cfg.stop_after_s)
             self.since_fuse = self.since_fuse + dt
+        if cfg.baro:
+            self.true_z = torch.cat([self.true_z[1:], torch.nan_to_num(true_pos)[None, :, 2]], 0)
+            self.baro_err = (self.baro_err + cfg.baro_walk_m_per_sqrt_s * dt ** 0.5 * torch.randn(
+                self.n, generator=self.gen, device=self.device, dtype=self.dtype)
+            ).clamp(-cfg.baro_walk_max_m, cfg.baro_walk_max_m)
+            self.baro_clock += dt
+            if self.baro_clock >= 1.0 / cfg.baro_rate_hz - 1e-9:
+                self.baro_clock -= 1.0 / cfg.baro_rate_hz
+                z_meas = self.true_z[0] + self.baro_err + cfg.baro_noise_m * torch.randn(
+                    self.n, generator=self.gen, device=self.device, dtype=self.dtype)
+                y = torch.zeros_like(self.p_d)
+                y[:, 2] = z_meas - self.p_d[:, 2]
+                only_z = torch.tensor([False, False, True], device=self.device).expand(self.n, 3)
+                # Gated as EKF2 gates the barometer (EKF2_BARO_NOISE 3.5 m): its slow error
+                # is never rejected, whatever the filter's own height variance has shrunk to.
+                self._fuse(y, cfg.baro_noise_m ** 2, True, only_z, gate_var=3.5 ** 2)
         if self.clock >= self.period - 1e-9:
             self.clock -= self.period
             ok = fresh[:, None].expand(self.n, 3)
+            if cfg.baro:  # the vision height only aids the barometer: nothing to fuse
+                ok = ok & torch.tensor([True, True, False], device=self.device)
             if cfg.resets:
-                # The first fix after fusion stopped restarts it with a full reset.
+                # The first fix after fusion stopped restarts it with a full reset (the
+                # height stays on the barometer when that is the reference).
                 start = (self.stopped & fresh)[:, None].expand(self.n, 3)
-                self._reset_to(start, fix_pos, fix_vel)
+                self._reset_to(start & ok, fix_pos, None)
+                self._reset_to(start, None, fix_vel)
                 self.since_fuse = torch.where(start[:, :1].expand(self.n, 3),
                                               torch.zeros_like(self.since_fuse), self.since_fuse)
                 self.stopped = self.stopped & ~fresh
@@ -221,6 +290,8 @@ class TorchFusion:
                 live = fresh & ~self.stopped
                 hpos = live & (self.since_fuse[:, 0] > cfg.hpos_reset_after_s)
                 hgt = live & (self.since_fuse[:, 1] > cfg.hgt_reset_after_s)
+                if cfg.baro:  # the height is the barometer's: no vision height resets
+                    hgt = torch.zeros_like(hgt)
                 hvel = live & (self.since_fuse[:, 2] > cfg.hpos_reset_after_s)
                 xy = torch.tensor([True, True, False], device=self.device)
                 self._reset_to(hpos[:, None] & xy | hgt[:, None] & ~xy, fix_pos, None)

@@ -340,7 +340,7 @@ class RouteFollowEnv:
             accel = torch.where(finite[:, None], (state.vel - vel_before) / cfg.dt,
                                 torch.zeros_like(vel_before))
             self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
-                                                                    ~est.stale)
+                                                                    ~est.stale, true_pos=state.pos)
         self.estimate_stale, self.estimate_age = est.stale, est.age
 
         # Termination and reward on the TRUE state.
