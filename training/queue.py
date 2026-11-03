@@ -33,9 +33,10 @@ How jobs are placed:
 - ``enabled: false`` lists a job without running it (it waits on a result, such as a fine-
   tune that is only worth training if a check fails).
 
-``--smoke`` runs each launch job once with ``--smoke`` (no chain, never logged) and each cmd
-job's ``smoke_cmd`` if it has one; ``--device cpu`` does the same without GPUs (the cloud
-container's check; GPU-only cmd jobs are skipped). State lives in
+``--smoke`` runs each launch job once with ``--smoke`` (no chain, never logged; ``set`` values
+that name another job's run are left out, since the config's smoke block stands on its own)
+and each cmd job's ``smoke_cmd`` if it has one; ``--device cpu`` does the same without GPUs
+(the cloud container's check; GPU-only cmd jobs are skipped). State lives in
 ``runs/queue_<name>[-smoke]/state.json``; re-running the same queue skips what finished ok
 and continues a chain from its last good part, so a stopped queue resumes where it was.
 
@@ -306,6 +307,9 @@ def launch_command(job: Job, *, part: int, smoke: bool, device: str, gpu: int | 
     if part > 1:
         values.update(job.chain_set)
         values["params.resume"] = str(resume)
+    if smoke:  # the smoke block replaces what points at files; a 3-iteration policy is no test
+        values = {k: v for k, v in values.items()
+                  if not (isinstance(v, str) and RUN_REF.search(v))}
     values = {k: expand_runs(v, run_dirs or {}) if isinstance(v, str) else v
               for k, v in values.items()}
     return cmd + set_args(values)
@@ -317,17 +321,6 @@ def shell_command(job: Job, *, smoke: bool, gpu: int | None,
     assert text is not None
     text = text.replace("{gpu}", "" if gpu is None else str(gpu))
     return ["bash", "-c", expand_runs(text, run_dirs or {})]
-
-
-def _placeholders(job: Job) -> dict[str, str]:
-    """For a smoke run: every ``{run:ID}`` the job names, pointed at a folder that does not
-    exist, so the smoke checks the config and the command line, not the other job's result.
-    Smoke blocks replace the keys that point at files (``policies: {}``)."""
-    refs = set()
-    for v in list(job.set.values()) + list(job.chain_set.values()):
-        if isinstance(v, str):
-            refs.update(RUN_REF.findall(v))
-    return {r: f"runs/<{r}>" for r in refs}
 
 
 @dataclass
@@ -431,16 +424,10 @@ class Runner:
                                      gpu=gpu, approved=self.approved, resume=resume,
                                      run_dirs=self.run_dirs(), passthrough=self.passthrough)
             except KeyError as e:
-                if self.smoke:  # a smoke has no earlier run to point at: drop the reference
-                    cmd = launch_command(job, part=part, smoke=True, device=self.device,
-                                         gpu=gpu, approved=self.approved, resume=resume,
-                                         run_dirs=_placeholders(job),
-                                         passthrough=self.passthrough)
-                else:
-                    s["status"], s["why"] = "failed", str(e)
-                    self.say(f"{job.id}: {e}")
-                    self.save_state()
-                    return
+                s["status"], s["why"] = "failed", str(e)
+                self.say(f"{job.id}: {e}")
+                self.save_state()
+                return
         else:
             try:
                 cmd = shell_command(job, smoke=self.smoke, gpu=gpu, run_dirs=self.run_dirs())
