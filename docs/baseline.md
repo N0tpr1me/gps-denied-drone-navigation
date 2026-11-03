@@ -1610,3 +1610,33 @@ needed for the benchmark itself, which compares both controllers on one set-up.
 Follow-ups: align the mock's fusion with barometer height and train the next candidate on
 it; re-check the range hover (`SH_HB_RANGE`) and the frozen-fix trip on this set-up over more
 seeds and winds.
+
+### The mock fusion on barometer height (2026-11-03)
+
+`envs/estimate/ekf.py` gained `fusion.height_source` (`vision`, the default every policy up
+to v22 trained on; `baro`, the benchmark's set-up): with `baro` the fused height follows the
+barometer's own slow error and the vision height is not fused (EKF2's bias estimator
+absorbs it), so a vision dropout freezes nothing and resets nothing in z. Its numbers come
+from EKF2 itself: two tuned-PX4 hovers in Gazebo on `px4_tuned_v2.params` (calm and 4 m/s,
+seed 1, `vio_at_hover`, cloud image) gave EKF2 height minus truth over the 60 s hold of
+std 0.006 m (calm) and 0.019 m (wind), a walk of 0.002 to 0.007 m/sqrt(s), 0.001 m left
+after a 1 s mean, and no visible reaction to the profile's 0.1 m vision height jump at 65 s
+or to the 17 s dropout from 70 s (defaults: walk 0.005 m/sqrt(s), cap 0.3 m, 0.02 m noise
+per sample). The raw barometer itself is 0.14 m white; EKF2's output is that smooth because
+the vision height aids it.
+
+v22 scored on it (`experiments/LOG.md` 2026-11-03 02:32 and 02:51):
+
+| Set | Vision height (the set every policy was gated on) | Barometer height |
+| --- | --- | --- |
+| Gate 1, x500 fused, 6 cells (`gate1_x500_ekf_baro_v22.yaml`) | v22 0.190 m vs PD 0.359 m, 6/6 pass, headline −47 % | v22 0.187 m vs PD 0.342 m, 6/6 pass, headline −45 % |
+| Gazebo-like check, rough cells (`gazebo_check_baro_v22.yaml`) | v22 0.196 m, v19 0.244 m | v22 0.176 m, v19 0.210 m |
+
+Both policies hold *tighter* on barometer height in the mock (no height resets and no
+frozen height from the vision stream), by 0.02 to 0.03 m. So the mock does not reproduce
+v22's 0.195 → 0.243 m in Gazebo above, and the small height error EKF2 actually showed on
+the barometer says the height source is not what moved it. That leaves the other thing that
+changed at once, the image (Mac arm64 and the OSRF Gazebo base before, cloud x86_64 and
+PX4's Gazebo base now): one v22 batch on the cloud image with vision height would settle
+it, when the Gazebo flights move to the GPU server. The next candidate still trains with
+`height_source: baro` so that it sees the benchmark's height behaviour (Proposed row).

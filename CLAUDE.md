@@ -168,7 +168,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): on barometer height (`px4_tuned_v2.params`,
   Decided 2026-11-01) v22 mean p95 -43 to -45 %, 0 crashes; on the earlier vision-height
   set-up v22 -54 to -55 %, v19 -47 to -48 % (`docs/baseline.md`). Crash is judged on the 60 s
-  hold only; seed 6 is the hard seed.
+  hold only; seed 6 is the hard seed. The mock fusion has a barometer-height option
+  (`fusion.height_source: baro`, numbers from EKF2 on Gazebo hovers; `docs/baseline.md`
+  "The mock fusion on barometer height"); `gz_x500_sitl`, the check and training stay on
+  vision height until Zain decides the Proposed row of 2026-11-03.
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second
