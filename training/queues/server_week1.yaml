@@ -1,0 +1,196 @@
+# The GPU server's first week: every job in priority order, GPU jobs filling the free cards,
+# SITL batches on the other cores (docs/gpu-server-plan.md explains each job, its go/no-go
+# check and what comes after it; training/queue.py runs this file).
+#
+#   python -m training.queue training/queues/server_week1.yaml --dry-run --gpus 4
+#   python -m training.queue training/queues/server_week1.yaml --smoke          # all smokes
+#   python -m training.queue training/queues/server_week1.yaml                 # under 1 h jobs
+#   python -m training.queue training/queues/server_week1.yaml --approved      # with Zain's yes
+#
+# `hours` is the expected length of the whole job (a chain's parts added up; each part stays
+# under 1 h). Jobs with Zain's yes needed are listed in docs/gpu-server-plan.md for one batch
+# approval. Jobs with `enabled: false` wait on a result named in `why`.
+name: server_week1
+reserve_cpus: 4      # left for the shell, Claude and Docker itself
+gpu_job_cpus: 4      # host cores pinned to each GPU job (the mock's env steps are on the GPU)
+
+jobs:
+  # ---------------------------------------------------------------- day 1: is the machine right
+  - id: report
+    cmd: bash training/server_report.sh > runs/server_report.txt && nvidia-smi
+    smoke_cmd: bash training/server_report.sh > /dev/null
+    hours: 0.05
+    why: "machine report + nvidia-smi: driver 580+, every GPU listed and free, Docker without sudo"
+
+  - id: setup
+    cmd: bash training/server_setup.sh
+    smoke_cmd: "true"
+    after: [report]
+    hours: 1.2
+    needs_approval: true
+    why: "env, tests, smoke on CPU and 1 GPU, SITL image, hover test, parallel check, Isaac pull (~1 h)"
+
+  # ---------------------------------------------------------------- GPU lane 0: Isaac Lab (M3)
+  - id: isaac_parity
+    gpu: true
+    cmd: bash training/isaac_parity.sh --gpu {gpu}
+    smoke_cmd: bash training/isaac_parity.sh --help > /dev/null
+    after: [setup]
+    hours: 0.75
+    why: "docs/isaac-lab.md first hour, steps 3 to 9: parity PASS, smoke on both backends, v22 scored on Isaac"
+
+  - id: isaac_train_v22
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v22.yaml
+    set: {params.sim: isaac}
+    after: [isaac_parity]
+    hours: 0.8
+    why: "M3: v22's recipe on Isaac Lab, 1 GPU; then gazebo_check + Gazebo like any candidate"
+
+  # ---------------------------------------------------------------- GPU lane 1: Route Follow pipes
+  - id: route_pipes
+    gpu: true
+    launch: training/configs/route_follow_ppo_pipes.yaml
+    chain: 3
+    hours: 2.4
+    why: "narrow pipes with 5x estimate jumps, 4096 drones, 3 parts of 1500 iterations; beat the PD in pipe_nominal"
+
+  # PPO is seed-sensitive (v23 to v25 moved by more between seeds than between recipes), so
+  # the same recipe runs on two more seeds on the other cards; the stress table picks the best.
+  - id: route_pipes_s4
+    gpu: true
+    launch: training/configs/route_follow_ppo_pipes.yaml
+    set: {seed: 4}
+    chain: 3
+    hours: 2.4
+    why: "route_pipes, seed 4"
+
+  - id: route_pipes_s5
+    gpu: true
+    launch: training/configs/route_follow_ppo_pipes.yaml
+    set: {seed: 5}
+    chain: 3
+    hours: 2.4
+    why: "route_pipes, seed 5"
+
+  - id: route_pipes_stress
+    gpu: true
+    launch: eval/configs/route_follow_stress_server.yaml
+    set:
+      params.policies.pipes_s3: "{run:route_pipes}/policy.onnx"
+      params.policies.pipes_s4: "{run:route_pipes_s4}/policy.onnx"
+      params.policies.pipes_s5: "{run:route_pipes_s5}/policy.onnx"
+    after: [route_pipes, route_pipes_s4, route_pipes_s5]
+    hours: 0.4
+    why: "the 13-cell stress table with the three pipes policies; go/no-go: the best has fewer pipe crashes than v0's 11 % and beats the PD everywhere"
+
+  # ---------------------------------------------------------------- GPU lane 2: Structure Hold in high wind
+  - id: hold_wind_check
+    gpu: true
+    launch: eval/configs/gazebo_check_wind12.yaml
+    hours: 0.5
+    why: "mock check of v22 and v24 at 8, 10, 12 m/s into the wall before the Gazebo cells"
+
+  - id: hold_wind_finetune
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v26_wind.yaml
+    after: [hold_wind_check]
+    hours: 0.9
+    enabled: false
+    why: "only if v22 loses to tuned PX4 at 10 or 12 m/s in Gazebo (gz_wind12_*): v22 continued on 6 to 12 m/s winds"
+
+  # ---------------------------------------------------------------- GPU lane 3: the v24 pre-checks, re-run on the server
+  - id: v24_check_range
+    gpu: true
+    launch: eval/configs/gazebo_check_v24_range.yaml
+    hours: 0.75
+    why: "the pre-re-fly gate for v24, on the server's own numbers; must pass against v22 as it did on the cloud CPUs"
+
+  - id: v22_eval_mock_gpu
+    gpu: true
+    launch: training/configs/structure_hold_eval_v22.yaml
+    after: [v24_check_range]
+    hours: 0.2
+    why: "the mock reference for Isaac (p95 0.211 / 0.206 / 0.202 m) reproduced on the GPU: same numbers or the GPU build is suspect"
+
+  # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL, many flights at once
+  - id: gz_tuned_baseline
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_v2_server --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      -- --profile vio_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [setup]
+    hours: 0.4
+    why: "tuned PX4, 24 flights; compare with the Mac's table in docs/baseline.md before the server's numbers count"
+
+  - id: gz_v22_baseline
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_server --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      -- --profile vio_at_engage
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_tuned_baseline]
+    hours: 0.4
+    why: "v22, 24 flights; mean p95 must stay 40 % or more below tuned, 0 crashes, as on the Mac"
+
+  - id: gz_v24_image
+    cmd: >
+      python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v24.onnx
+      --out sim2real/px4/structure_hold/PolicyWeights.hpp
+      && SITL_IMAGE=structure-hold/px4-sitl:v24 sim2real/docker/run.sh build
+      && git checkout -- sim2real/px4/structure_hold/PolicyWeights.hpp
+    smoke_cmd: python -m sim2real.px4.tools.export_policy_header --help > /dev/null
+    after: [gz_v22_baseline]
+    hours: 0.6
+    why: "a SITL image with v24 compiled in (the committed header stays v22's)"
+
+  - id: gz_v24_refly
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v24_range_server --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      -- --profile vio_at_engage --rangefinder --image structure-hold/px4-sitl:v24
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_v24_image, v24_check_range]
+    hours: 0.4
+    why: "the v24 Gazebo re-fly with a rangefinder, 24 flights, vs gz_v22_baseline; release decision for Zain"
+
+  - id: gz_v22_range
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_range_server --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      -- --profile vio_at_engage --rangefinder
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_v24_refly]
+    hours: 0.4
+    why: "v22 with the same rangefinder (wall guard on), so v24's gain is the policy's, not the guard's"
+
+  - id: gz_wind12_tuned
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_v2_wind12 --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_10ms wall1m_wind_12ms -- --profile vio_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_tuned_baseline]
+    hours: 0.3
+    why: "tuned PX4 at 10 and 12 m/s into the wall, 16 flights (crashes allowed: that is the result)"
+
+  - id: gz_wind12_v22
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_wind12 --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_10ms wall1m_wind_12ms -- --profile vio_at_engage --rangefinder
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_wind12_tuned, hold_wind_check]
+    hours: 0.3
+    why: "v22 at 10 and 12 m/s, 16 flights; the datasheet-wind evidence for docs/market-research.md row 15"
+
+  - id: gz_isaac_policy
+    cmd: >
+      echo "fly the Isaac-trained policy: export its header, build an image, run_baseline --runner hold
+      as gz_v24_refly (docs/gpu-server-plan.md, day 3)"
+    smoke_cmd: "true"
+    after: [isaac_train_v22, gz_v22_baseline]
+    hours: 1.0
+    enabled: false
+    why: "only if isaac_train_v22 passes its gazebo_check against v22; the exact commands are gz_v24_image/gz_v24_refly with its run folder"
