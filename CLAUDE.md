@@ -11,6 +11,8 @@ Every result is measured against a properly tuned stock PX4.
 operator-given route (PX4 mission waypoints) through tunnels and corridors on the same
 estimate, tracking a target moving along the route, with optional 1D rangefinders to keep
 off the walls. Mock and CPU only until the GPU server is up; Structure Hold is unchanged.
+The one tracked Route Follow policy is v2 (`training/policies/route_follow_v2.*`, mock only,
+not released); the worlds and stress configs score it against the PD yardsticks.
 
 Out of scope (docs/decisions.md): VIO/SLAM, mapping, planning, obstacle avoidance, ground
 station, vision in the policy. The module consumes the drone's existing position estimate.

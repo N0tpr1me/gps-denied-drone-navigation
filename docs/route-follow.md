@@ -120,6 +120,7 @@ scores every world on its own and a mix of all of them, and
 | PD yardsticks (estimate only; with range centring) | `envs/route_follow/baseline.py` |
 | Scoring and the yardstick run | `eval/route_follow.py`, `eval/configs/route_follow_baseline.yaml` |
 | PPO training (smoke mode, exports `policy.onnx`) | `training/train_route_ppo.py`, `training/configs/route_follow_ppo.yaml` |
+| The tracked policy, v2 (mock only, not released); its scoring configs | `training/policies/route_follow_v2.onnx` + `.json`; `eval/configs/route_follow_v2.yaml`, `route_follow_worlds.yaml`, `route_follow_stress.yaml` |
 
 Defaults worth knowing: 4 segments with turns up to 90 degrees and slopes up to 10 degrees
 (a short route turns less, one piece per 3 m at most); corridors 2 to 4 m wide and 2.4 to 4 m
@@ -258,6 +259,43 @@ What this says:
   The cause is not traced yet; one guess is that a tilted drone's beams hit the curved wall
   off their axis, so the centring term misreads its offset.
 - v1 is again level with v0 throughout.
+
+## v2, the first tracked policy (mock, 2026-11-03)
+
+v0 and v1 lived only in their run folders, which are gone, so none of the tables above could
+be re-run. v2 is v0's recipe trained again (`training/configs/route_follow_ppo.yaml`, 1000
+iterations, 29 min on the cloud CPUs, run `20261103-033000`) after the 2026-11-03 fix to the
+training env: rsl_rl starts each drone at a random point of its episode, and the route env
+used to leave those drones far from the target on their first step. v2 is committed as
+`training/policies/route_follow_v2.onnx` + `.json` so the worlds and stress configs run
+again; it is a mock result only, not released and not flown. Scored on the same 256 routes a
+set as before (four sets run `20261103-040846`, worlds `20261103-041605`, stress
+`20261103-044203`):
+
+| Set | v2 cross-track p95 | PD | PD + centring | v2 / PD / PD + centring done | crashes |
+| --- | --- | --- | --- | --- | --- |
+| corridor, no rangefinders | 0.26 m | 0.36 m | 0.36 m | 97 / 88 / 88 % | 0 / 4 / 4 % |
+| corridor, rangefinders | 0.22 m | 0.39 m | 0.33 m | 96 / 90 / 95 % | 0 / 4 / 2 % |
+| tunnel, no rangefinders | 0.28 m | 0.36 m | 0.36 m | 93 / 86 / 86 % | 3 / 7 / 7 % |
+| tunnel, rangefinders | 0.21 m | 0.37 m | 0.34 m | 98 / 86 / 95 % | 0 / 7 / 4 % |
+
+Against v0's tables above, v2 is level or a little better nearly everywhere: on the four sets
+0 to 3 % crashes against v0's 1 to 3 %, and more routes finished; on the stress tests it is
+tighter in the nominal case (0.22 m against 0.25 m), under jumps (0.31 m, 0 % crashes,
+against 0.36 m, 2 %) and under high drift (0.31 m, 1 %, against 0.34 m, 3 %), and level on
+the rest; in the narrow pipe with rangefinders it crashes on 6 % against v0's 9 % (the PD
+31 %, centring 53 %). The one place it is worse is the ramps: on ramps to 25 degrees without
+rangefinders v2 crashes on 12 % of routes against v0's 2 % and the PD's 3 % (0.32 m, 85 %
+finished), and with rangefinders 5 % against 2 and 4 %. Training slopes stop at 10 degrees,
+so how a policy copes with steeper ramps is luck of the run; v0 happened to cope. The narrow
+pipe without rangefinders stays the hard world (16 % crashes, PD 29 %), for the reason the
+stress tests gave: estimate jumps in a 0.4 m gap.
+
+What this says: the recipe is repeatable (a fresh seed lands where v0 did), the training fix
+cost nothing, and steeper ramps belong in training before anything is claimed about slopes.
+Both go on the GPU server with the rest (`training/configs/route_follow_ppo_pipes.yaml`,
+`docs/gpu-server-plan.md`); the server's pipes stress run flies v2 beside the new policy as
+the comparison.
 
 ## Plan, and what needs the GPU server
 
