@@ -142,6 +142,26 @@ def test_trace_round_trips_and_verifies(tmp_path):
     assert report["spacing_irregular"] == 0
 
 
+def test_trace_verifies_with_a_divisor(tmp_path):
+    # With a divisor the trace only holds every divisor-th truth sample, but the bridge
+    # differenced its velocity over one source sample; the replay must take the logged
+    # velocity, or dead reckoning through a dropout replays differently.
+    prof = EstimateProfile.from_dict({"name": "t", "seed": 7, "divisor": 3, "estimate": {
+        "dropout_rate_hz": 2.0, "dropout_min_s": 0.2, "dropout_max_s": 0.4,
+        "dropout_mode": "dead_reckon"}})
+    b = EstimateBridge(prof.estimate, prof.dt, prof.seed, prof.divisor)
+    w = TraceWriter(tmp_path / "trace.csv")
+    t, pos = circle(300, dt=prof.dt)
+    for ti, p in zip(t, pos, strict=True):
+        s = b.update(ti, p)
+        if s is not None:
+            w.write(s)
+    w.close()
+    report = verify(prof, tmp_path / "trace.csv")
+    assert report["ok"], report
+    assert report["samples"] == 100 and report["dropouts"] >= 1
+
+
 def test_verify_catches_a_wrong_seed_and_a_published_dropout(tmp_path):
     prof = EstimateProfile.from_dict({"name": "t", "seed": 5, "estimate": {
         "dropout_rate_hz": 2.0, "dropout_min_s": 0.1, "dropout_max_s": 0.2}})

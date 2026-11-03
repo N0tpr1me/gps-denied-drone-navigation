@@ -36,7 +36,6 @@ Outputs: ``metrics.jsonl`` (one row per scored episode), ``report.json`` (every 
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 import sys
@@ -54,6 +53,7 @@ from envs.structure_hold.config import StructureHoldConfig
 from envs.structure_hold.env import OBS, TERM_REASONS, StructureHoldEnv
 from envs.structure_hold.fallback import FallbackRule, StaleFallback, YawGuard
 from eval.metrics import Surface, Trace, compute_metrics
+from training.runlib import merge
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -75,13 +75,6 @@ def check_not_held_out(*seeds: int) -> None:
     if bad:
         raise ValueError(f"seeds {bad} are in the Gate 1 held-out block "
                          f"{RESERVED_SEEDS.start}-{RESERVED_SEEDS.stop - 1}; pick another")
-
-
-def merge(base: dict[str, Any], over: dict[str, Any] | None) -> dict[str, Any]:
-    out = copy.deepcopy(base)
-    for k, v in (over or {}).items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
 
 
 # ---------------------------------------------------------------- flying
@@ -113,9 +106,11 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
         heading = obs[:, OBS["heading"]]
         yaw_err_sum += torch.where(still, torch.atan2(heading[:, 1], heading[:, 0]).abs(),
                                    torch.zeros_like(heading[:, 0])).double()
-        p = env.state.pos.cpu().numpy()
-        s = still.cpu().numpy()
-        pos[k + 1] = np.where(s[:, None], p, pos[k])  # an ended episode keeps its last point
+        # step_pos is the true position after this step, the crash step included (state.pos
+        # is already the next episode's for the envs that ended); an ended episode then
+        # keeps its last point.
+        p = env.step_pos.cpu().numpy()
+        pos[k + 1] = np.where(alive.cpu().numpy()[:, None], p, pos[k])
         newly = (alive & done).cpu().numpy()
         if newly.any():
             end[newly] = k + 1
@@ -362,6 +357,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
 
     def pooled(name: str, key: str) -> float:
         tot = sum(c["controllers"][name]["episodes"] for c in env_cells)
+        if tot == 0:  # no envelope cell, or none finished an episode
+            return math.nan
         return sum(c["controllers"][name][key] * c["controllers"][name]["episodes"]
                    for c in env_cells) / tot
 

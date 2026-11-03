@@ -225,6 +225,31 @@ class RouteFollowEnv:
         self.range_sampled[env_ids] = False
         self._update_target()
 
+    def place_on_target(self) -> None:
+        """Put every drone on its target as it stands for ``episode_time``: level, headed
+        along the route, moving at the target's speed, estimate and rangefinders restarted
+        there. Used when the episode phase is randomised at the start of training."""
+        self._update_target()
+        ids = torch.arange(self.num_envs, device=self.device)
+        along = self.geo.segment_x_at(self.target_s)
+        yaw = torch.atan2(along[:, 1], along[:, 0])
+        zeros = torch.zeros(self.num_envs, 3, dtype=self.dtype, device=self.device)
+        self.sim.reset(ids, QuadState(pos=self.target_pos.clone(), quat=quat_from_yaw(yaw),
+                                      vel=self.target_vel.clone(), ang_vel=zeros))
+        self.rate_pid.reset(ids)
+        self.estimator.reset(self.sim.state.pos, self.sim.state.vel, ids)
+        if self.fusion is not None:
+            self.fusion.reset(ids, self.sim.state.pos, self.sim.state.vel)
+        self.estimate_pos[:] = self.sim.state.pos
+        self.estimate_vel[:] = self.sim.state.vel
+        self.estimate_stale[:] = False
+        self.estimate_age[:] = 0.0
+        self.last_action[:] = 0.0
+        self.rate_sp[:] = 0.0
+        self.range_meas[:] = math.inf
+        self.range_sampled[:] = False
+        self._observe()
+
     # ------------------------------------------------------------ sensors and air
 
     def _sample_ranges(self) -> None:

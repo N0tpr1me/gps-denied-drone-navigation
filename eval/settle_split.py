@@ -43,7 +43,7 @@ def split(env: StructureHoldEnv, controller) -> dict[str, float]:
             est_err[k] = (env.estimate_pos - env.state.pos).numpy()
     a = alive.numpy()  # crashed episodes are left out: this is about the hold, not crashes
     true_err, est_err = true_err[:, a], est_err[:, a]
-    t = np.arange(steps) * env.dt
+    t = (np.arange(steps) + 1) * env.dt  # true_err[k] is the state after step k
     e = np.linalg.norm(true_err, axis=-1)
     late = t >= STEADY_S
     out = {"p95_all": np.percentile(e, 95, axis=0).mean(),
@@ -51,7 +51,8 @@ def split(env: StructureHoldEnv, controller) -> dict[str, float]:
            "est_err_p95_steady": np.percentile(np.linalg.norm(est_err[late], axis=-1), 95,
                                                axis=0).mean(),
            "alive": a.mean()}
-    out.update({f"e_{x:g}s": e[int(round(x / env.dt))].mean() for x in TIMES_S if x < t[-1]})
+    out.update({f"e_{x:g}s": e[max(0, int(round(x / env.dt)) - 1)].mean()
+                for x in TIMES_S if x < t[-1]})
     out.update({f"offset_{ax}": true_err[late, :, i].mean() for i, ax in enumerate("xyz")})
     return {k: float(v) for k, v in out.items()}
 

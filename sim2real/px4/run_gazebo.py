@@ -307,8 +307,8 @@ def judge_hold_on_truth(summary: dict[str, Any], hold: dict[str, Any], drift_tol
     The estimate's own verdicts stay in the summary under ``estimate_checks``."""
     drift = hold.get("truth_drift")
     checks = summary.get("checks")
-    if drift is None or checks is None:
-        return
+    if drift is None or checks is None or "error" in summary:
+        return  # a sequence that raised (sitl_test.py "error") failed, whatever the truth says
     keys = ("position_held", "altitude_held")
     summary["estimate_checks"] = {k: checks[k] for k in keys if k in checks}
     checks["position_held"] = drift["xy_max_m"] <= drift_tol

@@ -20,6 +20,8 @@ rates with their binomial standard error) and the wording for ``experiments/LOG.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import math
 import sys
 import traceback
@@ -33,7 +35,7 @@ from envs.structure_hold.config import StructureHoldConfig
 from envs.structure_hold.fallback import FallbackRule, StaleFallback, YawGuard
 from training import evaluate
 from training.policy_io import load_controller, read_metadata
-from training.runlib import RunWriter, entry_args, load_yaml
+from training.runlib import RunWriter, entry_args, load_yaml, merge
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -75,7 +77,10 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
     if not policy_path.is_absolute():
         policy_path = REPO_ROOT / policy_path
     meta = read_metadata(policy_path)
-    env_cfg = StructureHoldConfig.from_dict(p["env"] if p.get("env") else meta["env_cfg"])
+    # ``env`` is laid over the policy's own training env (policy.json env_cfg), as
+    # train_ppo's eval.env is, so a config that restates only the estimate rates keeps the
+    # airframe, tick and history it trained on.
+    env_cfg = StructureHoldConfig.from_dict(merge(meta["env_cfg"], p.get("env")))
     num_envs, episodes = int(p.get("num_envs", 256)), int(p.get("episodes", 1))
     seeds = [int(s) for s in (p.get("seeds") or [cfg["seed"]])]
     print(f"eval: {policy_path.name} ({meta['input']['history']}-step history), {num_envs} envs "
@@ -130,7 +135,9 @@ def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:
         **{f"policy_{k}": pol[k] for k in keys},
         **{f"pd_{k}": base[k] for k in keys},
     }
-    return {"headline": headline, "vs_baseline": wording}
+    # The env the policy was scored in, overrides laid in, so a run folder says what it flew.
+    env_dict = json.loads(json.dumps(dataclasses.asdict(env_cfg), default=str))
+    return {"headline": headline, "vs_baseline": wording, "env_cfg": env_dict}
 
 
 def main(argv: list[str] | None = None) -> int:

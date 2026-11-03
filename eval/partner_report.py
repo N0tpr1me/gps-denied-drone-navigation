@@ -75,8 +75,6 @@ def summarise(result: dict[str, Any]) -> dict[str, Any]:
                   "closest": min(clear) if clear else math.nan,
                   "contacts": sum(int(r.get("contacts", 0)) > 0 for r in rows),
                   "early": sum(bool(r.get("ended_early")) for r in rows)}
-    a, s = per["tuned_px4"]["p95_mean"], per["structure_hold"]["p95_mean"]
-    change = 100.0 * (s - a) / a if a and not math.isnan(a) and not math.isnan(s) else math.nan
     cases = []
     for name in dict.fromkeys(r["scenario"] for bt in b.values() for r in bt["rows"]):
         row = {"case": name}
@@ -95,6 +93,11 @@ def summarise(result: dict[str, Any]) -> dict[str, Any]:
                          if x and y and x["p95_mean"] and not math.isnan(x["p95_mean"])
                          else math.nan)
         cases.append(row)
+    # The headline is the mean of the per-case changes (each case compares the two
+    # controllers on the same conditions), not the change of the pooled means, which an
+    # unbalanced session (one controller flown more often in the hard case) would tilt.
+    changes = [c["change"] for c in cases if not math.isnan(c["change"])]
+    change = statistics.fmean(changes) if changes else math.nan
     events = []
     for c in NAMES:
         for r in b.get(c, {}).get("rows", []):
@@ -117,7 +120,8 @@ def summarise(result: dict[str, Any]) -> dict[str, Any]:
                       f"{ab.get('run')}): {ab.get('reason') or 'no reason given'}.")
     for e in result.get("errors", []):
         events.append(f"Not scored: {e.get('file')}: {e.get('error')}.")
-    return {"per": per, "change": change, "cases": cases, "events": events}
+    return {"per": per, "change": change, "cases": cases, "events": events,
+            "cases_compared": len(changes)}
 
 
 def headline(sm: dict[str, Any]) -> str:
@@ -126,9 +130,10 @@ def headline(sm: dict[str, Any]) -> str:
         return "Not enough scored runs of both controllers to compare."
     word = "tighter" if ch < 0 else "looser"
     n = per["structure_hold"]["n"], per["tuned_px4"]["n"]
+    k = sm.get("cases_compared", 0)
     return (f"Structure Hold held {abs(ch):.0f} % {word} than tuned PX4 on the same drone "
-            f"(95th-percentile distance from the hold point, mean over {n[0]} and {n[1]} "
-            "scored holds).")
+            f"(95th-percentile distance from the hold point, the mean change over {k} "
+            f"case{'s' if k != 1 else ''}, {n[0]} and {n[1]} scored holds).")
 
 
 def strip_chart(cases: list[dict[str, Any]]) -> str:
@@ -139,7 +144,10 @@ def strip_chart(cases: list[dict[str, Any]]) -> str:
     if not vals:
         return ""
     top = max(vals) * 1.1
-    step = next(s for s in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0) if top / s <= 6)
+    step = next((s for s in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0) if top / s <= 6),
+                None)
+    if step is None:  # a hold point metres off (a bad mocap fit): a coarse decade axis
+        step = 10.0 ** math.ceil(math.log10(top / 6))
     top = math.ceil(top / step) * step
     left, right, row_h, pad = 88, 16, 30, 26
     width = 640

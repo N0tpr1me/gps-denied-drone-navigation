@@ -45,8 +45,9 @@ def score_controller(env: StructureHoldEnv, controller: Callable[[torch.Tensor],
         obs, reward, dones, extras = env.step(actions)
         heading = obs[:, OBS["heading"]]
         heading_err_sum += float(torch.atan2(heading[:, 1], heading[:, 0]).abs().mean())
-        if bool(dones.any()) and hasattr(controller, "reset_history"):
-            controller.reset_history(obs, dones)  # the window restarts with the new episode
+        restart = dones | env.reengaged  # a new episode or a re-engage: a flat window, as
+        if bool(restart.any()) and hasattr(controller, "reset_history"):  # training and the module
+            controller.reset_history(obs, restart)
         for row in recorder.after_step(dones, reward, counts0):
             rows.append(row)
             if on_episode is not None:

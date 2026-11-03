@@ -60,7 +60,6 @@ def acceleration_to_action(env: StructureHoldEnv, obs: torch.Tensor, acc: torch.
                            tilt: float, yaw: float) -> torch.Tensor:
     """Turn a world-frame acceleration setpoint into the env's action: thrust vector, a P
     attitude loop that outputs body rates, heading held on the wall (+x)."""
-    gravity_body = obs[:, OBS["gravity_body"]]
     heading = obs[:, OBS["heading"]]
     n = obs.shape[0]
     mass, max_thrust, max_rate = env.cfg.quad.mass, env.cfg.quad.max_thrust, env.cfg.max_rate_rad_s
@@ -80,9 +79,10 @@ def acceleration_to_action(env: StructureHoldEnv, obs: torch.Tensor, acc: torch.
     # Heading: face the wall (+x of the structure frame).
     yaw_err = torch.atan2(heading[:, 1], heading[:, 0])
     rates[:, 2] = -yaw * yaw_err
-    # Thrust: the component of the demanded force along the current body z.
-    up_body = -gravity_body  # world up in the body frame
-    thrust = (f_norm.squeeze(-1) * (z_des_body * up_body).sum(-1)).clamp(min=0.0)
+    # Thrust: the component of the demanded force along the current body z (FLU z is
+    # z_des_body[:, 2]). Not its vertical component: that is |f| cos(desired tilt), which
+    # under-thrusts a tilted vehicle by the cosine of its tilt and sags it in a wind.
+    thrust = (f_norm.squeeze(-1) * z_des_body[:, 2]).clamp(min=0.0)
 
     action = torch.empty(n, 4, dtype=obs.dtype, device=obs.device)
     action[:, :3] = rates / max_rate

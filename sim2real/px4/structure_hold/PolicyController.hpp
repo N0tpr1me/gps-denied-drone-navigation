@@ -88,13 +88,15 @@ struct SetpointLimits {
 /** Structure frame: origin at the hold point, x along the heading at engage, z up. */
 struct StructureFrame {
 	float hold_ned[3] {0.f, 0.f, 0.f};
-	float cos_yaw{1.f};  // of the NED heading at engage
+	float yaw{0.f};      // the NED heading at engage: structure x
+	float cos_yaw{1.f};
 	float sin_yaw{0.f};
 
-	void set(const float hold[3], float yaw)
+	void set(const float hold[3], float yaw_ned)
 	{
 		for (int i = 0; i < 3; i++) { hold_ned[i] = hold[i]; }
 
+		yaw = yaw_ned;
 		cos_yaw = cosf(yaw);
 		sin_yaw = sinf(yaw);
 	}
@@ -228,9 +230,9 @@ inline void fallbackAction(const FallbackRule &r, const StructureFrame &f, const
 	rates_flu[1] = r.tilt * z_des_flu[0];
 	rates_flu[2] = -r.yaw * atan2f(obs[OBS_HEADING + 1], obs[OBS_HEADING + 0]);
 
-	// Thrust: component of the demanded force along the current body z (up in FLU).
-	const float up_flu[3] = {-obs[OBS_GRAVITY_BODY + 0], -obs[OBS_GRAVITY_BODY + 1], -obs[OBS_GRAVITY_BODY + 2]};
-	float thrust = f_norm * (z_des_flu[0] * up_flu[0] + z_des_flu[1] * up_flu[1] + z_des_flu[2] * up_flu[2]);
+	// Thrust: component of the demanded force along the current body z (up in FLU), as
+	// envs/structure_hold/baseline.py: |f| times the body-z part of the desired axis.
+	float thrust = f_norm * z_des_flu[2];
 
 	if (thrust < 0.f) { thrust = 0.f; }
 
@@ -319,6 +321,27 @@ public:
 	void moveHold(const float hold_ned[3])
 	{
 		for (int i = 0; i < 3; i++) { _frame.hold_ned[i] = hold_ned[i]; }
+	}
+
+	/**
+	 * EKF2 reset its heading by ``delta_yaw`` (vehicle_local_position.delta_heading): the
+	 * vehicle has not turned, the estimate's yaw of the same physical heading has. The wall
+	 * normal is a physical direction, so it follows, as PX4's own flight tasks move their yaw
+	 * setpoint by the reset. The hold point and the history stay: the position frame did not
+	 * move (an xy reset is reported separately, and the policy is trained on those). Returns
+	 * the new structure yaw.
+	 */
+	float rotateFrame(float delta_yaw)
+	{
+		constexpr float pi = 3.14159265358979f;
+		float yaw = _frame.yaw + delta_yaw;
+
+		while (yaw > pi) { yaw -= 2.f * pi; }
+
+		while (yaw < -pi) { yaw += 2.f * pi; }
+
+		_frame.set(_frame.hold_ned, yaw);
+		return yaw;
 	}
 
 	/** One control tick. ``stale_s`` is the time since the last fresh position fix. */

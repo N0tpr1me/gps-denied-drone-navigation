@@ -88,7 +88,9 @@ def export_onnx(actor: Any, path: Path) -> None:
     try:
         torch.onnx.export(module, dummy, str(path), dynamo=True, opset_version=18,
                           dynamic_shapes=({0: "batch"},), external_data=False, **names)
-    except TypeError:  # older torch without the torch.export-based exporter
+    except TypeError as e:  # older torch without the torch.export-based exporter
+        if "unexpected keyword" not in str(e):
+            raise
         torch.onnx.export(module, dummy, str(path), opset_version=17,
                           dynamic_axes={"obs": {0: "batch"}, "actions": {0: "batch"}}, **names)
 

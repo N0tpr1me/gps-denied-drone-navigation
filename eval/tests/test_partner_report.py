@@ -1,10 +1,13 @@
 """The one-page partner benchmark report, from a synthetic scored session."""
 
 import json
+import math
+import statistics
 
+import pytest
 import yaml
 
-from eval.partner_report import headline, main, render, summarise
+from eval.partner_report import headline, main, render, strip_chart, summarise
 from eval.partner_session import score_session
 from eval.tests.test_partner_session import SESSION, START_US, flight
 
@@ -62,3 +65,28 @@ def test_cli_writes_next_to_the_summary(tmp_path):
 
 def test_one_controller_only_says_it_cannot_compare():
     assert "Not enough" in headline(summarise({"batches": {}, "aborted": [], "errors": []}))
+
+
+def test_headline_is_the_mean_of_the_per_case_changes(tmp_path):
+    # An unbalanced session: tuned PX4 flown twice more in the loose wind case would tilt a
+    # change of the pooled means; the headline averages the per-case changes instead.
+    result = scored(tmp_path)
+    tuned = result["batches"]["tuned_px4"]
+    extra = [dict(r, seed=int(r["seed"]) + 10, p95_m=r["p95_m"] * 3.0)
+             for r in tuned["rows"] if r["scenario"] == "wind_4ms"]
+    tuned["rows"].extend(extra)
+    agg = tuned["aggregate"]["wind_4ms"]
+    rows = [r for r in tuned["rows"] if r["scenario"] == "wind_4ms"]
+    agg["n"] = len(rows)
+    agg["p95_m_mean"] = statistics.fmean(r["p95_m"] for r in rows)
+    sm = summarise(result)
+    expected = statistics.fmean(c["change"] for c in sm["cases"] if not math.isnan(c["change"]))
+    assert sm["change"] == pytest.approx(expected) and sm["cases_compared"] == 2
+    assert "the mean change over 2 cases" in headline(sm)
+
+
+def test_strip_chart_survives_a_hold_point_metres_off():
+    cases = [{"case": "calm", "tuned_px4": {"p95_runs": [(1, 42.0)]},
+              "structure_hold": {"p95_runs": [(1, 0.2)]}}]
+    svg = strip_chart(cases)
+    assert svg.startswith("<svg") and "<circle" in svg and "<rect" in svg

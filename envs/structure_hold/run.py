@@ -61,15 +61,17 @@ class EpisodeRecorder:
         self.k = min(k, env.num_envs)
         self.pos: list[list[np.ndarray]] = [[] for _ in range(self.k)]
         self.actions: list[list[np.ndarray]] = [[] for _ in range(self.k)]
-        self.hold = [env.hold_point[i].cpu().numpy().copy() for i in range(self.k)]
+        self.hold: list[list[np.ndarray]] = [[] for _ in range(self.k)]
         self.gusts = [env.gust_windows(i) for i in range(self.k)]
         self.surface = Surface(point=np.zeros(3), normal=np.array([1.0, 0.0, 0.0]))
 
     def before_step(self, actions: torch.Tensor) -> None:
         pos = self.env.state.pos[: self.k].cpu().numpy()
+        hold = self.env.hold_point[: self.k].cpu().numpy()
         act = actions[: self.k].cpu().numpy()
         for i in range(self.k):
             self.pos[i].append(pos[i].copy())
+            self.hold[i].append(hold[i].copy())  # a re-engage moves it mid-episode
             self.actions[i].append(act[i].copy())
 
     def after_step(self, dones: torch.Tensor, reward: torch.Tensor, counts_before: dict,
@@ -79,15 +81,15 @@ class EpisodeRecorder:
         for i in range(self.k):
             if not bool(dones[i]):
                 continue
-            pos = np.array(self.pos[i] + [self.env.state.pos[i].cpu().numpy()])
-            # The env already reset env i; its last true position is the new episode's, so
-            # use the recorded trajectory plus a final sample held at the previous point.
-            pos[-1] = pos[-2]
+            # The env already reset env i, so its last true position (the step that ended
+            # the episode, a contact included) is env.step_pos, not state.pos.
+            pos = np.array(self.pos[i] + [self.env.step_pos[i].cpu().numpy()])
+            hold = np.array(self.hold[i] + [self.hold[i][-1]])
             t = np.arange(len(pos)) * dt
             act = np.array(self.actions[i])
             row: dict[str, Any] = {"env": i, "length_s": float(t[-1])}
             if len(t) >= 2 and t[-1] >= 0.02:
-                trace = Trace(t=t, pos=pos, pos_sp=self.hold[i], cmd_t=t[:-1],
+                trace = Trace(t=t, pos=pos, pos_sp=hold, cmd_t=t[:-1],
                               rates_cmd=act[:, :3] * cfg.max_rate_rad_s,
                               thrust_cmd=0.5 * (act[:, 3] + 1.0))
                 gusts = [(a, b) for a, b in self.gusts[i] if a < t[-1]]
@@ -95,8 +97,7 @@ class EpisodeRecorder:
                                     contact_radius_m=cfg.contact_radius_m)
                 row.update({k: v for k, v in m.items() if k != "recovery_s"})
             rows.append(row)
-            self.pos[i], self.actions[i] = [], []
-            self.hold[i] = self.env.hold_point[i].cpu().numpy().copy()
+            self.pos[i], self.actions[i], self.hold[i] = [], [], []
             self.gusts[i] = self.env.gust_windows(i)
         return rows
 

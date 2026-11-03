@@ -36,14 +36,18 @@ def verify(profile: EstimateProfile, trace_path: str | Path,
     truth = np.stack([tr["tx"], tr["ty"], tr["tz"]], 1)
     est = np.stack([tr["ex"], tr["ey"], tr["ez"]], 1)
     est_v = np.stack([tr["evx"], tr["evy"], tr["evz"]], 1)
+    truth_v = np.stack([tr["tvx"], tr["tvy"], tr["tvz"]], 1)
     gps = np.stack([tr["gx"], tr["gy"], tr["gz"]], 1)
     max_pos = max_vel = max_gps = 0.0
     stale_mismatch = gps_mismatch = 0
     # The trace holds the corruptor's steps only; with a divisor > 1 the skipped truth
-    # samples are not logged, so the replay feeds each logged row as one step.
+    # samples are not logged, so the replay feeds each logged row as one step and takes
+    # the truth velocity the bridge logged (differenced over one source sample, which
+    # the logged rows alone cannot reproduce).
     replay = profile.bridge(dt=profile.dt * profile.divisor, divisor=1)
     for i in range(n):
-        s = replay.update(tr["t"][i], truth[i], engaged=bool(tr["engaged"][i]))
+        s = replay.update(tr["t"][i], truth[i], engaged=bool(tr["engaged"][i]),
+                          vel_enu=truth_v[i])
         max_pos = max(max_pos, float(np.abs(s.est_pos - est[i]).max()))
         max_vel = max(max_vel, float(np.abs(s.est_vel - est_v[i]).max()))
         stale_mismatch += int(s.stale != bool(tr["stale"][i]))

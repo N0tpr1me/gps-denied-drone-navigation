@@ -103,7 +103,11 @@ class Bridge:
         if self.profile.gps is not None:
             print(f"bridge: GPS at {self.profile.gps.rate_hz:.0f} Hz, {self.profile.gps.fix}, "
                   f"{len(self.profile.gps_faults)} scripted faults", flush=True)
-        self.mav.wait_heartbeat(timeout=args.heartbeat_timeout_s)
+        if self.mav.wait_heartbeat(timeout=args.heartbeat_timeout_s) is None:
+            # recv_match returns None on a timeout; going on would send the origin to
+            # system 0 and the flight would die later with an arming timeout blamed on PX4.
+            raise TimeoutError(f"no PX4 heartbeat on {args.mavlink} within "
+                               f"{args.heartbeat_timeout_s:g} s")
         print(f"bridge: PX4 heartbeat from system {self.mav.target_system}", flush=True)
         # Heartbeats at 20 Hz on this link, so the engage is seen within about 50 ms.
         self.mav.mav.command_long_send(

@@ -586,3 +586,71 @@ def test_range_spike_gate_drops_one_outlier_and_accepts_a_real_step_at_its_secon
                            num_envs=2, seed=5)
     off._take_range(take, off.clearance() + 5.0)
     assert off.range_input()[1].all()  # no gate: the outlier is used (clipped)
+
+
+def test_step_pos_is_the_true_position_after_the_step_even_when_it_crashed():
+    # step() resets a finished episode before it returns, so state.pos is then the next
+    # episode's start; scorers read step_pos for the point the crash happened at.
+    from envs.sims import QuadState
+
+    env = StructureHoldEnv(still_air(), num_envs=3, seed=2)
+    env.reset()
+    st = env.sim.state
+    pos = st.pos.clone()
+    pos[1, 0] = -0.5 * env.cfg.contact_radius_m  # env 1 starts inside the contact radius
+    env.sim.reset(torch.arange(3), QuadState(pos=pos, quat=st.quat.clone(), vel=st.vel.clone(),
+                                             ang_vel=st.ang_vel.clone()))
+    _, _, dones, _ = env.step(hover_action(env))
+    assert dones.tolist() == [False, True, False]
+    assert torch.allclose(env.step_pos[[0, 2]], env.state.pos[[0, 2]])
+    assert env.clearance(env.step_pos)[1] <= env.cfg.contact_radius_m  # where it hit
+    assert env.clearance()[1] >= 1.0  # the new episode's start, 1 to 3 m out
+
+
+def test_the_first_range_sample_is_up_to_one_period_old():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=10.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=64, seed=4)
+    env.reset()
+    age = env.range_age
+    assert (age >= 0.0).all() and (age < 0.1).all() and float(age.max()) > 0.05
+    assert torch.allclose(age + env.range_timer, torch.full_like(age, 0.1))
+
+
+def test_a_beam_that_misses_the_wall_does_not_become_the_spike_gate_reference():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    env.step(hover_action(env))
+    take = torch.ones(2, dtype=torch.bool)
+    wall = env.clearance()
+    env._take_range(take, torch.full((2,), math.inf))  # the beam missed: unusable, not a wall
+    assert not env.range_input()[1].any() and torch.allclose(env.range_accepted, wall)
+    env._take_range(take, wall + 5.0)  # the next outlier is still gated against the wall
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall + 0.01)
+    assert env.range_input()[1].all()
+
+
+def test_pd_thrust_is_the_demanded_force_along_the_body_axis():
+    """A tilted yardstick commands the full demanded force once its body axis is on the
+    demanded direction; level, it commands the vertical part. Taking the vertical part in
+    both cases under-thrusts a tilted hover by the cosine of the tilt (sagging in wind)."""
+    from envs.sims.torch_quad import GRAVITY
+    from envs.structure_hold.baseline import acceleration_to_action
+
+    env = StructureHoldEnv(still_air(), num_envs=1, seed=0)
+    env.reset()
+    obs, _ = env.get_observations()
+    quad = env.cfg.quad
+    a, g = 3.0, GRAVITY
+    acc = torch.tensor([[a, 0.0, 0.0]])  # 3 m/s2 toward the wall: a tilt of atan(a / g)
+    f_total = quad.mass * math.sqrt(a * a + g * g)
+    thrust = lambda act: 0.5 * (float(act[0, 3]) + 1.0) * quad.max_thrust  # noqa: E731
+
+    level = acceleration_to_action(env, obs, acc.clone(), tilt=5.0, yaw=2.0)
+    assert thrust(level) == pytest.approx(quad.mass * g, rel=1e-4)
+    phi = math.atan2(a, g)
+    env.sim.state.quat[:] = torch.tensor([math.cos(phi / 2), 0.0, math.sin(phi / 2), 0.0])
+    tilted = acceleration_to_action(env, obs, acc.clone(), tilt=5.0, yaw=2.0)
+    assert thrust(tilted) == pytest.approx(f_total, rel=1e-4)
+    assert torch.allclose(tilted[0, :2], torch.zeros(2), atol=1e-5)  # on axis: no rate demand

@@ -37,11 +37,16 @@ class RouteFollowVecEnv:
 
     @episode_length_buf.setter
     def episode_length_buf(self, value: torch.Tensor) -> None:
-        # rsl_rl randomises episode phase at the start; the target follows the clock.
+        # rsl_rl randomises the episode phase at the start. The target follows the clock, so
+        # the drone is put on it, flying along the route at its speed (an estimator and a
+        # window started afresh there): left at the first waypoint it would be "lost" on
+        # the first step in nearly every env.
         e = self.env
         e.episode_step[:] = value.to(e.episode_step.dtype)
         e.episode_time[:] = e.episode_step.to(e.dtype) * e.dt
-        e._update_target()
+        e.place_on_target()
+        obs, _ = e.get_observations()
+        self.history.fill(obs)
 
     def privileged(self) -> torch.Tensor:
         e = self.env
