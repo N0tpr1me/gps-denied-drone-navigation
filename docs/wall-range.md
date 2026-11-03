@@ -89,8 +89,9 @@ toward the wall right before the re-engage (not scored: no estimate-holder can a
 77 % crash against v22's 93 %, because the range reference is latched on the wall, not on
 the jumped estimate.
 
-The lift rule (`lift_not_higher`: mean height offset on the estimate not above the
-reference's) is the only rule v24 fails, both ways. v24 sits 1.2 to 1.6 cm above its hold
+The lift rule (then `lift_not_higher`: mean height offset on the estimate not above the
+reference's; since 2026-11-03 `lift_ok`, which also passes a lift under 0.05 m, so v24
+passes it on these numbers) was the only rule v24 failed, both ways. v24 sits 1.2 to 1.6 cm above its hold
 point where v22 sits 1.7 cm below, about the same size the other way. The rule was written
 against v5's 0.3 to 0.45 m Gazebo lift, but it is the rule. v25 doubled the height-error
 weight to fix it: the lift halved (+0.008 m) but the hold loosened back to v22's level
@@ -129,8 +130,10 @@ wall drifts and the range only pins the normal axis.
 v24 beats v22 everywhere it was measured in the mock, most with a rangefinder (Gazebo-like
 check p95 ratio 0.77, seed 3 toward the wall 0.075 against 0.188 m, Gate 1 headline -53 %
 against -47 %, stress 13/13) and a little without one (check ratio 0.95; Gate 1 pooled
-0.195 against v22's 0.190 m, a tie). Its one miss is the check's lift rule: it sits about
-1.5 cm above the hold point where v22 sits 1.7 cm below. It is not released: the module
+0.195 against v22's 0.190 m, a tie). Its one miss was the check's lift rule: it sits about
+1.5 cm above the hold point where v22 sits 1.7 cm below; since 2026-11-03 lift is a soft
+rule (under 0.05 m passes, `docs/gazebo_check.md`), so it passes the check both ways on the
+recorded numbers. It is still not released: the module
 header stays v22's (`HAS_WALL_RANGE` false), and v24 needs a Gazebo re-fly with
 `--rangefinder` on the GPU server, beating v22 there, before it can be. To fly it, generate
 the header from it (`sim2real/px4/README.md`); the module then reads the range on its own.
