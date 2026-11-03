@@ -84,3 +84,14 @@ def test_rescore_reads_a_kit_folder(tmp_path, capsys):
 def test_dry_run_needs_no_docker(capsys):
     assert eval_kit.main(["--dry-run", "--jobs", "1", "--faults", "reset"]) == 0
     assert "2 flights" in capsys.readouterr().out
+
+
+def test_one_unreadable_run_folder_does_not_lose_the_other_flights(tmp_path):
+    hold = fake_run(tmp_path)
+    broken = fake_run(tmp_path, runner="stock")
+    (broken / "estimate_trace.csv").write_text("t,tx\n1,2\n")  # columns missing
+    flights = [Flight("drift", "hold", ["--profile", "field_drift_at_engage"], str(hold)),
+               Flight("drift", "estimate", ["--profile", "field_drift_at_hover"], str(broken))]
+    rows = score_all(flights)
+    assert "error" not in rows[0] and "error" in rows[1]
+    assert rows[1]["error"].split(":")[0] in ("KeyError", "ValueError", "IndexError")

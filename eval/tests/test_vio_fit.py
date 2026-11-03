@@ -130,3 +130,11 @@ def test_euroc_csv_loader_reads_ns_and_velocity(tmp_path):
 def test_dir_source_resolves_inside_the_repo(tmp_path):
     with pytest.raises(FileNotFoundError):
         vio_fit.ensure_source({"name": "x", "dir": "runs/no_such_folder_for_test"})
+
+
+def test_a_flight_with_almost_no_overlap_is_refused_in_plain_words():
+    t, pos, vel = _truth(10.0, 0.05, 0)
+    tiny = slice(0, 5)
+    with pytest.raises(ValueError, match="fewer than 20"):
+        vio_fit.measure_flight("s", vio_fit.Trajectory(t[tiny], pos[tiny]),
+                               vio_fit.Trajectory(t, pos, vel), vio_fit.FitParams())

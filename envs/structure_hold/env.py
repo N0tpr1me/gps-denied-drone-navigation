@@ -182,6 +182,9 @@ class StructureHoldEnv:
         self.noise_std = torch.zeros(n, 3, dtype=dt, device=dev)  # rates, gravity, vel wander
         self.vel_wander = torch.zeros(n, 3, dtype=dt, device=dev)
         self.term_reason = torch.zeros(n, dtype=torch.long, device=dev)
+        # The true position after this step's physics, kept for scorers: step() resets the
+        # finished episodes before it returns, so state.pos is then the new episode's.
+        self.step_pos = torch.zeros(n, 3, dtype=dt, device=dev)
         self.counts = {"contact": 0, "ground": 0, "tilt": 0, "box": 0, "nonfinite": 0,
                        "timeout": 0}
         # Mid-episode re-engages (cfg.reengage_rate_hz): the episode's own hold point, which
@@ -347,6 +350,7 @@ class StructureHoldEnv:
         take = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         self._take_range(take, self._range_reading())
+        self.range_age[env_ids] = t(age)  # _take_range zeroed it: the sample is that old
 
     def _range_reading(self) -> torch.Tensor:
         """What the rangefinder would read now for every env, (N,): the beam's distance to
@@ -393,10 +397,13 @@ class StructureHoldEnv:
         if gate <= 0:
             return
         wall = reading * self._beam_cos()
-        accept = (~torch.isfinite(self.range_accepted)
+        accept = (torch.isnan(self.range_accepted)  # nothing accepted yet this flight
                   | ((wall - self.range_accepted).abs() <= gate)
                   | ((wall - self.range_pending).abs() <= gate))
-        self.range_accepted = torch.where(take & accept, wall, self.range_accepted)
+        # A beam that missed the wall (inf) is not a wall: the gate keeps its last finite
+        # reference, as the module's does (an unusable sample never reaches its gate).
+        self.range_accepted = torch.where(take & accept & torch.isfinite(wall), wall,
+                                          self.range_accepted)
         self.range_pending = torch.where(take, torch.where(accept, math.nan, wall),
                                          self.range_pending)
         self.range_rejected = torch.where(take, ~accept, self.range_rejected)
@@ -599,6 +606,7 @@ class StructureHoldEnv:
         self.reward_buf = torch.nan_to_num(reward, nan=-w.crash)
         self.episode_reward += self.reward_buf
         self.last_action = actions
+        self.step_pos = state.pos.clone()
 
         extras: dict[str, Any] = {"time_outs": self.time_out_buf, "observations": {}}
         done_ids = self.done_buf.nonzero(as_tuple=False).squeeze(-1)

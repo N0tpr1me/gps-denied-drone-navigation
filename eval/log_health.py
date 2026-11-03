@@ -607,6 +607,10 @@ def check_fusion(topics: Topics, params: dict[str, float], start_us: int, window
         return Check("Vision fused", "skip",
                      "The log has neither EKF2's aiding flags nor its vision fusion record."
                      + ctrl_txt, nums)
+    if math.isnan(active):
+        return Check("Vision fused", "skip",
+                     "EKF2's aiding record has no samples in the airborne window." + ctrl_txt,
+                     nums)
     pct = 100 * active
     where = "of the airborne time" if window else "of the log"
     if active < FUSED_WARN:

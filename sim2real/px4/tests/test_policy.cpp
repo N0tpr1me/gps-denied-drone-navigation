@@ -278,6 +278,49 @@ int main()
 		CHECK(!o.yaw_guarded && same(o.action[2], o.policy_action[2]));  // explicit off: the policy's yaw flies
 	}
 
+	// 8b. Heading reset: EKF2 renames the heading the vehicle still has by delta; the
+	//     structure yaw follows, the hold point stays, and the observation of the same
+	//     physical state (position, velocity and attitude renamed by the same delta) is
+	//     unchanged, so the policy sees nothing happen.
+	{
+		PolicyController ctl{};
+		const int k = 5;
+		ctl.engage(&testvec::HOLD_NED[k * 3], testvec::STRUCTURE_YAW_NED);
+		const VehicleSample s = sampleOf(k);
+		float before[policy::NUM_OBS];
+		const float zero[4] = {0.f, 0.f, 0.f, 0.f};
+		buildObservation(ctl.frame(), s, zero, before);
+
+		const float delta = 0.7f;
+		const float yaw = ctl.rotateFrame(delta);
+		CHECK(near(yaw, testvec::STRUCTURE_YAW_NED + delta, 1e-6f) && near(ctl.frame().yaw, yaw, 1e-6f));
+
+		for (int i = 0; i < 3; i++) { CHECK(same(ctl.frame().hold_ned[i], testvec::HOLD_NED[k * 3 + i])); }
+
+		// The same physical state in the renamed frame: rotate NED vectors about the hold
+		// point by delta (z unchanged), and the attitude by the same yaw.
+		const float c = cosf(delta), sn = sinf(delta);
+		VehicleSample r = s;
+		const float dx = s.pos_ned[0] - testvec::HOLD_NED[k * 3], dy = s.pos_ned[1] - testvec::HOLD_NED[k * 3 + 1];
+		r.pos_ned[0] = testvec::HOLD_NED[k * 3] + c * dx - sn * dy;
+		r.pos_ned[1] = testvec::HOLD_NED[k * 3 + 1] + sn * dx + c * dy;
+		r.vel_ned[0] = c * s.vel_ned[0] - sn * s.vel_ned[1];
+		r.vel_ned[1] = sn * s.vel_ned[0] + c * s.vel_ned[1];
+
+		for (int j = 0; j < 3; j++) {  // R' = Rz(delta) R: rotate each column
+			r.R[0][j] = c * s.R[0][j] - sn * s.R[1][j];
+			r.R[1][j] = sn * s.R[0][j] + c * s.R[1][j];
+		}
+
+		float after[policy::NUM_OBS];
+		buildObservation(ctl.frame(), r, zero, after);
+
+		for (int i = 0; i < policy::NUM_OBS; i++) { CHECK(near(after[i], before[i], 2e-5f)); }
+
+		// Wraps: a reset across +pi lands inside (-pi, pi].
+		CHECK(std::fabs(ctl.rotateFrame(6.f)) <= 3.1416f);
+	}
+
 	// 9. Parameter resolution: -1 / 0 take the defaults policy.json declared for this policy
 	//    (PolicyWeights.hpp), anything else overrides them in the field.
 	{

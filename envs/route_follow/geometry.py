@@ -284,6 +284,6 @@ class RouteGeometry:
         c = self.clearance(origin[:, None, :] + dist[..., None] * dirs)
         inside = self.clearance(origin) > 0
         hit = c.abs() <= tol_m + 1e-6 * dist
-        out = torch.where(dist > max_m, torch.full_like(dist, float("inf")), dist)
-        out = torch.where(hit | (dist > max_m), out, dist)  # not converged: reads short
+        # Not converged (no hit, inside max_m): dist as it stands, which reads short.
+        out = torch.where(hit | ~(dist > max_m), dist, torch.full_like(dist, float("inf")))
         return torch.where(inside[:, None], out, torch.zeros_like(out))

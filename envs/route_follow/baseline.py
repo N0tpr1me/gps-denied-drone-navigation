@@ -71,7 +71,6 @@ def acceleration_to_action(env: RouteFollowEnv, obs: torch.Tensor, acc: torch.Te
                            tilt: float, yaw: float) -> torch.Tensor:
     """World acceleration setpoint -> thrust and body rates, heading along the route frame's x
     (as ``envs/structure_hold/baseline.py``, which faces the wall instead)."""
-    gravity_body = obs[:, OBS["gravity_body"]]
     heading = obs[:, OBS["heading"]]
     n = obs.shape[0]
     mass, max_thrust, max_rate = env.cfg.quad.mass, env.cfg.quad.max_thrust, env.cfg.max_rate_rad_s
@@ -83,7 +82,7 @@ def acceleration_to_action(env: RouteFollowEnv, obs: torch.Tensor, acc: torch.Te
     z_body[:, 2] = 1.0
     rates = tilt * torch.cross(z_body, z_des_body, dim=-1)
     rates[:, 2] = -yaw * torch.atan2(heading[:, 1], heading[:, 0])
-    thrust = (f_norm.squeeze(-1) * (z_des_body * -gravity_body).sum(-1)).clamp(min=0.0)
+    thrust = (f_norm.squeeze(-1) * z_des_body[:, 2]).clamp(min=0.0)  # along the body z
     action = torch.empty(n, 4, dtype=obs.dtype, device=obs.device)
     action[:, :3] = rates / max_rate
     action[:, 3] = 2.0 * thrust / max_thrust - 1.0

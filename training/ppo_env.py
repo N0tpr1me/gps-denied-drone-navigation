@@ -93,7 +93,7 @@ class StructureHoldVecEnv:
 
     def __init__(self, env: StructureHoldEnv, history: int = 3,
                  curriculum: DropoutCurriculum | None = None, steps_per_iteration: int = 1,
-                 num_obs: int = NUM_OBS):
+                 num_obs: int = NUM_OBS, start_iteration: int = 0):
         self.env = env
         # The policy reads the first num_obs of the env's observation (NUM_OBS_V1 for the
         # 20-input layout every policy up to v21 has).
@@ -103,9 +103,10 @@ class StructureHoldVecEnv:
         self.curriculum = curriculum
         self.steps_per_iteration = max(1, int(steps_per_iteration))
         self.env_steps = 0
-        self.iteration = 0
+        self.start_iteration = int(start_iteration)
+        self.iteration = self.start_iteration
         if curriculum is not None:
-            env.set_dropout_max_s(curriculum.value(0))
+            env.set_dropout_max_s(curriculum.value(self.iteration))
         self.cfg = env.cfg
         self.num_envs = env.num_envs
         self.num_actions = env.num_actions
@@ -162,12 +163,20 @@ class StructureHoldVecEnv:
         # A re-engage (env cfg.reengage_rate_hz) refills the window as the module's engage does.
         self.history.push(obs[:, : self.num_obs], dones | self.env.reengaged)
         self.env_steps += 1
-        iteration = self.env_steps // self.steps_per_iteration
+        iteration = self.start_iteration + self.env_steps // self.steps_per_iteration
         if iteration != self.iteration:
             self.iteration = iteration
             if self.curriculum is not None:
                 self.env.set_dropout_max_s(self.curriculum.value(iteration))
         return self.observations(), reward, dones, extras
+
+    def set_start_iteration(self, iteration: int) -> None:
+        """A resumed run goes on from the runner's iteration: the curriculum (indexed by
+        the iteration) continues where the run it resumes left it, instead of restarting."""
+        self.start_iteration = self.iteration = int(iteration)
+        self.env_steps = 0
+        if self.curriculum is not None:
+            self.env.set_dropout_max_s(self.curriculum.value(self.iteration))
 
     def curriculum_state(self) -> dict[str, float]:
         return {"dropout_max_s": self.env.dropout_max_s}

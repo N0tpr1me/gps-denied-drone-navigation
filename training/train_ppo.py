@@ -37,7 +37,6 @@ scored evaluation episode), ``tb/`` (TensorBoard and rsl_rl's periodic ``model_<
 
 from __future__ import annotations
 
-import copy
 import statistics
 import sys
 import time
@@ -53,7 +52,7 @@ from eval.gate1 import check_not_held_out
 from training import evaluate
 from training.policy_io import export_policy, load_controller, policy_metadata
 from training.ppo_env import DropoutCurriculum, StructureHoldVecEnv
-from training.runlib import RunWriter, entry_args, load_yaml
+from training.runlib import RunWriter, entry_args, load_yaml, merge
 
 DEFAULTS: dict[str, Any] = {
     "num_envs": 1024,
@@ -90,13 +89,6 @@ DEFAULTS: dict[str, Any] = {
     "eval": {"num_envs": 256, "episodes": 1, "score_envs": 32, "env": {},
              "select_every": 250, "select_envs": 128},
 }
-
-
-def merge(base: dict[str, Any], over: dict[str, Any] | None) -> dict[str, Any]:
-    out = copy.deepcopy(base)
-    for k, v in (over or {}).items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
 
 
 def build_train_cfg(p: dict[str, Any]) -> dict[str, Any]:
@@ -326,6 +318,7 @@ def train(cfg: dict[str, Any], run_dir: Path, device: str, writer: RunWriter) ->
             for g in runner.alg.optimizer.param_groups:
                 g["lr"] = runner.alg.learning_rate
     p["_start_iteration"] = int(runner.current_learning_iteration)
+    vec.set_start_iteration(p["_start_iteration"])  # the curriculum counts from here
 
     t0 = time.perf_counter()
     runner.learn(int(p["iterations"]), init_at_random_ep_len=bool(p["init_at_random_ep_len"]))

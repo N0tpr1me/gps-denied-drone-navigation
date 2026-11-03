@@ -224,6 +224,7 @@ private:
 	uint8_t _land_xy_reset_counter{0};  // Structure Land and Structure Hover: estimator resets
 	uint8_t _land_z_reset_counter{0};   // the setpoint follows, as in PX4's own modes
 	uint8_t _land_heading_reset_counter{0};
+	uint8_t _hold_heading_reset_counter{0};  // Structure Hold: the structure yaw follows a heading reset
 	structure_hold::HandbackPlan _handback_plan{};  // targets of the running handback (Handback.hpp)
 	float _guard_speed{0.f};            // [m/s] the guard's recent push rate, away from the wall
 	uint8_t _config_resend{0};          // which mode's control config the next poll re-sends

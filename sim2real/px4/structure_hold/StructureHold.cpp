@@ -332,6 +332,7 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_last_control_us = 0;
 	_engaged_us = hrt_absolute_time();
 	_vel_fd_valid = false;
+	_hold_heading_reset_counter = lpos.heading_reset_counter;
 	_fallback_active = false;
 
 	for (int i = 0; i < 4; i++) { _last_action[i] = 0.f; }
@@ -867,6 +868,25 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 	} else if (!_hover_thrust_from_estimator) {
 		_hover_thrust = sanitizeHoverThrust(_param_mpc_thr_hover.get(), param_limits::HOVER_THRUST.def);
+	}
+
+	// An EKF2 heading reset (a vision or magnetometer yaw alignment) changes the estimate's
+	// yaw of the heading the vehicle still has, not the vehicle: the structure yaw, which is
+	// the wall's normal, follows it, as the guarded modes' setpoint does and PX4's own flight
+	// tasks do. Otherwise the policy (or the yaw guard) would turn the vehicle by the reset
+	// to meet the old number and hold the wall axis on a heading that is no longer the wall's.
+	// The hold point stays: the position frame did not move.
+	if (_local_position.heading_reset_counter != _hold_heading_reset_counter) {
+		_hold_heading_reset_counter = _local_position.heading_reset_counter;
+
+		if (PX4_ISFINITE(_local_position.delta_heading) && _param_ctrl.get() == 1) {
+			_setpoint.yaw = _policy.rotateFrame(_local_position.delta_heading);
+			PX4_INFO("heading reset by %.1f deg: structure yaw now %.1f deg",
+				 (double)math::degrees(_local_position.delta_heading), (double)math::degrees(_setpoint.yaw));
+
+		} else if (PX4_ISFINITE(_local_position.delta_heading)) {
+			_setpoint.yaw = matrix::wrap_pi(_setpoint.yaw + _local_position.delta_heading);
+		}
 	}
 
 	// Watchdog first: it decides whether the controller runs at all this tick.

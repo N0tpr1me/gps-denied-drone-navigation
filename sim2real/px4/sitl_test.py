@@ -331,11 +331,11 @@ class Vehicle:
         self.m.mav.command_long_send(self.m.target_system, self.m.target_component, cmd, 0, *p)
         end = time.monotonic() + timeout_s
         while time.monotonic() < end:
-            msg = self.m.recv_match(type="COMMAND_ACK", blocking=True, timeout=0.5)
+            msg = self.m.recv_match(blocking=True, timeout=0.5)
             if msg is None:
                 continue
-            self._handle(msg)
-            if msg.command == cmd:
+            self._handle(msg)  # texts and the live array keep flowing while we wait
+            if msg.get_type() == "COMMAND_ACK" and msg.command == cmd:
                 return msg.result
         raise TimeoutError(f"no ack for command {cmd}")
 
@@ -347,12 +347,31 @@ class Vehicle:
         """The vehicle's MAV_PARAM_TYPE for ``name`` (PARAM_REQUEST_READ), None if no answer."""
         self.m.mav.param_request_read_send(self.m.target_system, self.m.target_component,
                                            name.encode(), -1)
+        msg = self._wait_param_value(name, timeout_s)
+        return None if msg is None else int(msg.param_type)
+
+    def _wait_param_value(self, name: str, timeout_s: float):
+        """The next PARAM_VALUE for ``name``, or None; every other message is handled."""
         end = time.monotonic() + timeout_s
         while time.monotonic() < end:
-            msg = self.m.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
-            if msg is not None and msg.param_id.rstrip("\0") == name:
-                return int(msg.param_type)
+            msg = self.m.recv_match(blocking=True, timeout=0.5)
+            if msg is None:
+                continue
+            self._handle(msg)
+            if msg.get_type() == "PARAM_VALUE" and msg.param_id.rstrip("\0") == name:
+                return msg
         return None
+
+    def get_param(self, name: str, timeout_s: float = 2.0) -> float | int | None:
+        """The vehicle's value of ``name`` (an int for INT32 parameters), None if no answer."""
+        self.m.mav.param_request_read_send(self.m.target_system, self.m.target_component,
+                                           name.encode(), -1)
+        msg = self._wait_param_value(name, timeout_s)
+        if msg is None:
+            return None
+        if int(msg.param_type) == mavlink.MAV_PARAM_TYPE_INT32:
+            return struct.unpack("<i", struct.pack("<f", msg.param_value))[0]
+        return float(msg.param_value)
 
     def set_param(self, name: str, value: float | int) -> None:
         """PARAM_SET; PX4 encodes INT32 params by value bytes inside the float field. The
@@ -370,12 +389,8 @@ class Vehicle:
             encoded, ptype = float(value), mavlink.MAV_PARAM_TYPE_REAL32
         self.m.mav.param_set_send(self.m.target_system, self.m.target_component,
                                   name.encode(), encoded, ptype)
-        end = time.monotonic() + 5
-        while time.monotonic() < end:
-            msg = self.m.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
-            if msg is not None and msg.param_id.rstrip("\0") == name:
-                return
-        raise TimeoutError(f"no PARAM_VALUE ack for {name}")
+        if self._wait_param_value(name, 5.0) is None:
+            raise TimeoutError(f"no PARAM_VALUE ack for {name}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -762,6 +777,7 @@ def pilot_warning_step(v: Vehicle, result: dict) -> None:
     live = [d for d in v.live_since(time.monotonic() - 1.0) if int(d[LIVE_STATE]) == STATE_ENGAGED]
     err = max((d[LIVE_HOLD_ERROR] for d in live), default=math.nan)
     limit = max(0.2, err / 0.6) if math.isfinite(err) else 0.2  # 0.2 m is SH_WD_POS_ERR's minimum
+    was = v.get_param("SH_WD_POS_ERR")
     t0 = time.monotonic()
     v.set_param("SH_WD_POS_ERR", limit)
     warned: list[str] = []
@@ -770,7 +786,7 @@ def pilot_warning_step(v: Vehicle, result: dict) -> None:
         v.pump(0.1)
         warned = [t for t in v.texts_since(t0, mavlink.MAV_SEVERITY_WARNING)
                   if "watchdog trips at" in t]
-    v.set_param("SH_WD_POS_ERR", 2.0)
+    v.set_param("SH_WD_POS_ERR", 2.0 if was is None else was)  # as the flight had it
     v.pump(1.5)
     result["pilot_warning"] = {"hold_error_m": round(err, 3), "limit_m": round(limit, 3),
                                "text": warned[0] if warned else None}
@@ -943,11 +959,14 @@ def check_ulog(path: Path, result: dict) -> None:
         checks["keep_out_distance_logged"] = abs(
             float(max(status.data["keep_out_m"])) - result["keep_out"]["keep_out_m"]) < 1e-3
 
-    # Handback latency: first HANDBACK sample to commander's first nav_state change after it.
+    # Handback latency: the first HANDBACK sample of the sequence's own trip (SH_TEST_FAULT)
+    # to commander's first nav_state change after it. The ground checks' refused engage goes
+    # through a handback too (trip 7, "landed"), earlier in the log: not this one.
     vs = by_name.get("vehicle_status")
     st_state = status.data["state"]
-    hb = [t for t, s in zip(status.data["timestamp"], st_state, strict=True)
-          if int(s) == STATE_HANDBACK]
+    hb = [t for t, s, r in zip(status.data["timestamp"], st_state, status.data["trip_reason"],
+                               strict=True)
+          if int(s) == STATE_HANDBACK and int(r) == TRIP_TEST_FAULT]
     if vs is not None and hb:
         t_trip = hb[0]
         mode_id = int(status.data["mode_id"][-1])

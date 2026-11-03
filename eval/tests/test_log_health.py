@@ -234,3 +234,11 @@ def test_compass_agreeing_with_ekf2_passes():
     c = by_name(r)
     assert c["Vision frame"].status == "pass" and c["Heading"].status == "pass"
     assert abs(c["Heading"].numbers["ekf_vs_compass_drift_deg"]) < 1
+
+
+def test_aiding_flags_without_an_airborne_sample_skip_the_fusion_check():
+    topics = synthetic_log()
+    fl = topics[lh.FLAGS]
+    topics[lh.FLAGS] = {k: np.asarray(v)[:1] for k, v in fl.items()}  # one sample, on the ground
+    c = by_name(lh.check_topics(topics, GOOD_PARAMS, START))
+    assert c["Vision fused"].status == "skip" and "no samples" in c["Vision fused"].says

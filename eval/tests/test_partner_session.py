@@ -178,6 +178,19 @@ def test_a_refused_engage_before_the_hold_is_skipped():
     assert row["window_s"] == pytest.approx([22.0, 80.0]) and not row["ended_early"]
 
 
+def test_an_earlier_refusal_is_not_the_holds_trip():
+    """trip_reason is the module's LAST trip or refusal and clears on disarm only. A refused
+    engage on the ground (7, "landed") before the flight must not be reported as the reason
+    the hold ended; that is the reason on the first handback sample."""
+    topics = flight(mode_end=40.0)
+    st = topics["structure_hold_status"]
+    t = (st["timestamp"] - START_US) * 1e-6
+    st["trip_reason"] = np.where(t < 40.0, 7, st["trip_reason"])  # refused at 3 s, then held
+    st["state"] = np.where((t >= 40.0) & (t < 41.0), 3, st["state"])  # handback for 1 s
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, SESSION)
+    assert row["ended_early"] and row["trip_reason"] == "position_error"
+
+
 def test_hold_mode_on_the_ground_before_arming_is_not_the_hold():
     """PX4's SITL sits in Hold mode on the ground; the scored hold is the one flown."""
     topics = flight("tuned_px4")

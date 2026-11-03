@@ -25,7 +25,9 @@ fix (0 while fixes arrive):
      position is the least trustworthy part of the estimate, and holding velocity at zero
      is a level hover.
    - thrust vector `f = m * (a_sp + g_up)`; collective thrust = component of `f` along the
-     current body z (clamped at 0); desired body z = `f / |f|`.
+     current body z (clamped at 0); desired body z = `f / |f|`. (Until 2026-11-03 the
+     Python yardstick and the module's fallback took the vertical component instead,
+     `|f| cos(tilt_desired)`, whatever the vehicle's tilt: `docs/decisions.md`.)
    - body rates: `rates_xy = K_TILT * (z_body × z_desired)` (small-angle rotation vector in
      the body frame), `rate_z = -K_YAW * yaw_error` with the heading held on the structure
      (+x of the structure frame). This is the same attitude loop the PD yardstick and the

@@ -245,8 +245,8 @@ def score_all(flights: list[Flight]) -> list[dict[str, Any]]:
             continue
         try:
             rows.append(score_run(Path(f.run)))
-        except (OSError, ValueError, KeyError) as e:
-            rows.append({**base, "error": str(e)})
+        except Exception as e:  # one unreadable run folder must not lose the other flights
+            rows.append({**base, "error": f"{type(e).__name__}: {e}"})
     return rows
 
 

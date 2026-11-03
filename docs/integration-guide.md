@@ -62,7 +62,7 @@ in `docs/partner-pack.md`, step 2.
 | Topic | Used for | Freshness rule |
 | --- | --- | --- |
 | `vehicle_angular_velocity` | Wakes the module (at most every 2 ms) and the policy's body rates | The 10 ms control tick follows it |
-| `vehicle_local_position` | Position, velocity, EKF2's validity flags and reset counters | Invalid xy or z, or a NaN, trips `estimate_invalid` at once |
+| `vehicle_local_position` | Position, velocity, EKF2's validity flags and reset counters | Invalid xy or z, or a NaN, trips `estimate_invalid` at once. A heading reset (`heading_reset_counter`, `delta_heading`) turns the module's wall normal and yaw setpoint with it, so the vehicle does not turn; an xy reset moves Hover's and Land's setpoint, and is what `SH_RST_HOLD` waits out |
 | `vehicle_attitude` | Attitude for the observation, the tilt trip and the heading at engage | A NaN heading refuses the engage |
 | `vehicle_visual_odometry` | Fix freshness (`SH_FIX_SRC`), the frozen-fix trip | No new sample for `SH_FIX_GAP` marks the fix stale for the policy; for `SH_FB_T` starts the fallback; for `SH_WD_EST_TO` trips |
 | `distance_sensor` (any instance) | The forward range for the wall guard, the range input of rangefinder policies, Structure Hover's range hold | A sample counts if under 0.2 s old, inside the sensor's own limits, not flagged bad, and the body x axis is within 35 deg of the wall normal |

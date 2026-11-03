@@ -22,7 +22,6 @@ when ``params.policies`` maps names to ``policy.onnx`` files), on each condition
 
 from __future__ import annotations
 
-import copy
 import math
 import sys
 import traceback
@@ -36,7 +35,7 @@ import torch
 from envs.route_follow.baseline import RoutePd, RoutePdGains
 from envs.route_follow.config import RouteFollowConfig
 from envs.route_follow.env import TERM_REASONS, RouteFollowEnv
-from training.runlib import RunWriter, entry_args, load_yaml
+from training.runlib import RunWriter, entry_args, load_yaml, merge
 
 COMPLETE_TOL_M = 0.5
 HEADLINE_KEYS = ("cross_track_p95_m", "cross_track_worst_m", "track_p95_m",
@@ -139,14 +138,6 @@ def vs_baseline(results: dict[str, dict[str, Any]]) -> str:
              for name, h in results.items()]
     return "; ".join(parts) + (" (mock, vs the cascaded PD yardsticks, "
                                "envs/route_follow/baseline.py)")
-
-
-def merge(base: dict[str, Any], over: dict[str, Any] | None) -> dict[str, Any]:
-    out = copy.deepcopy(base)
-    for key, v in (over or {}).items():
-        out[key] = merge(out[key], v) if isinstance(v, dict) and isinstance(out.get(key),
-                                                                            dict) else v
-    return out
 
 
 def run(cfg: dict[str, Any], device: str, writer: RunWriter) -> dict[str, Any]:

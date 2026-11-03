@@ -205,8 +205,8 @@ def fly(env: StructureHoldEnv, controller: Any, window_s: float,
         obs, _, done, _ = env.step(a)
         est_z[k] = (env.estimate_pos[:, 2] - env.hold_point[:, 2]).cpu().numpy()
         still = alive & ~done
-        s = still.cpu().numpy()
-        pos[k + 1] = np.where(s[:, None], env.state.pos.cpu().numpy(), pos[k])
+        # The crash step included: state.pos is already the next episode's for ended envs.
+        pos[k + 1] = np.where(alive.cpu().numpy()[:, None], env.step_pos.cpu().numpy(), pos[k])
         newly = (alive & done).cpu().numpy()
         if newly.any():
             end[newly] = k + 1

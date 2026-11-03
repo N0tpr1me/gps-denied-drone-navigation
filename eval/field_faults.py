@@ -92,6 +92,8 @@ def score_run(run: Path, window_s: float = WINDOW_S) -> dict[str, Any]:
         return {**row, "error": "the trace ends before the fault"}
     before = (t >= t_fault - 5.0) & (t < t_fault)
     win = (t >= t_fault) & (t <= t_fault + window_s)
+    if not win.any():
+        return {**row, "error": f"no trace samples within {window_s:g} s after the fault"}
     ground = float(truth[0, 2])
     clear = wall_clearance(scenario, truth)
     d = truth[win] - truth[i0]

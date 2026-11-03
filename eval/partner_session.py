@@ -59,6 +59,7 @@ SETPOINT = "vehicle_local_position_setpoint"
 # vehicle_status nav_state and arming_state on PX4 v1.17.0 (msg/VehicleStatus.msg).
 NAV_POSCTL, NAV_AUTO_LOITER, NAV_EXTERNAL1 = 2, 4, 23
 ARMING_STATE_ARMED = 2
+STATE_HANDBACK = 3  # structure_hold_status.state
 CONTROLLERS = ("tuned_px4", "structure_hold")
 TRIP_NAMES = {0: "none", 1: "test_fault", 2: "estimate_invalid", 3: "estimate_stale",
               4: "tilt", 5: "position_error", 6: "estimate_reset", 7: "landed", 8: "range_lost",
@@ -187,7 +188,14 @@ def score_run(topics: Topics, start_us: int, run: dict[str, Any], session: dict[
         st = topics[STATUS]
         t = seconds(st, start_us)
         near = (t >= window[1] - 0.5) & (t <= window[1] + 2.0)
-        if near.any():
+        # trip_reason is the LAST trip or refusal and clears on disarm only, so a refused
+        # engage earlier in the flight (code 7, "landed") is still there during the hold.
+        # The hold's own trip is the reason on the first handback sample inside the window
+        # (the module enters STATE_HANDBACK as it trips).
+        hb = near & (np.asarray(st["state"]) == STATE_HANDBACK) if "state" in st else near
+        if hb.any():
+            trip = TRIP_NAMES.get(int(np.asarray(st["trip_reason"])[hb][0]), "unknown")
+        elif near.any():  # no handback sample logged (a thinned topic): the last code seen
             trip = TRIP_NAMES.get(int(np.asarray(st["trip_reason"])[near].max()), "unknown")
     next_mode = int(np.asarray(vs["nav_state"])[after]) if after < len(vs["nav_state"]) else None
     tv = seconds(vs, start_us)

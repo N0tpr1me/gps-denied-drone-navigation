@@ -9,6 +9,7 @@ creates the run folder, starts the entrypoint, and records the outcome.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import time
@@ -16,6 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+def merge(base: dict[str, Any], over: dict[str, Any] | None) -> dict[str, Any]:
+    """``over`` laid over ``base``, nested dicts merged key by key; neither is changed."""
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
 
 
 def entry_args(argv: list[str] | None = None) -> argparse.Namespace:

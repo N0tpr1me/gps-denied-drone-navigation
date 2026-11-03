@@ -186,9 +186,12 @@ class EstimateBridge:
     def anchored(self) -> bool:
         return self.anchor_step is not None
 
-    def update(self, t: float, pos_enu, engaged: bool = False) -> BridgeSample | None:
+    def update(self, t: float, pos_enu, engaged: bool = False,
+               vel_enu=None) -> BridgeSample | None:
         """One truth sample in. ``engaged`` is whether Structure Hold is flying at this
-        sample; with ``fault_anchor == "engage"`` the first True anchors the schedule."""
+        sample; with ``fault_anchor == "engage"`` the first True anchors the schedule.
+        The truth velocity is the finite difference over one source sample unless
+        ``vel_enu`` gives it (the trace replay, which only has every divisor-th sample)."""
         pos = np.asarray(pos_enu, dtype=np.float64).reshape(3)
         if self._last_pos is None:
             vel = np.zeros(3)
@@ -200,6 +203,8 @@ class EstimateBridge:
             if span <= 0:
                 raise ValueError(f"non-increasing sample time {t} after {self._last_t}")
             vel = (pos - self._last_pos) / span
+        if vel_enu is not None:
+            vel = np.asarray(vel_enu, dtype=np.float64).reshape(3)
         self._last_t, self._last_pos = float(t), pos
         self._received += 1
         if (self._received - 1) % self.divisor:

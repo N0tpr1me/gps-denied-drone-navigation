@@ -116,6 +116,19 @@ def test_dropout_curriculum_grows_the_cap_with_the_iteration():
     assert train_ppo.make_curriculum(smoke_params()) is None  # off by default
 
 
+def test_a_resumed_run_continues_the_curriculum_from_its_iteration():
+    c = DropoutCurriculum(start_s=0.5, end_s=3.0, iterations=10)
+    env = StructureHoldEnv(StructureHoldConfig(episode_length_s=1.0), num_envs=2, seed=0)
+    vec = StructureHoldVecEnv(env, history=2, curriculum=c, steps_per_iteration=4,
+                              start_iteration=5)
+    assert env.dropout_max_s == pytest.approx(1.75)  # iteration 5, not a restart at 0.5
+    for _ in range(4):
+        vec.step(torch.zeros(2, 4))
+    assert vec.iteration == 6 and env.dropout_max_s == pytest.approx(2.0)
+    vec.set_start_iteration(10)  # what train_ppo does once the runner's checkpoint is loaded
+    assert vec.iteration == 10 and env.dropout_max_s == pytest.approx(3.0)
+
+
 # ---------------------------------------------------------------- training and export
 
 
@@ -310,6 +323,25 @@ def test_train_then_eval_entrypoints(tmp_path: Path):
     assert sum("summary" in r for r in rows) == 4
 
 
+def test_eval_env_overrides_are_laid_over_the_policy_env(trained, tmp_path: Path):
+    from training import eval_policy
+
+    cfg = yaml.safe_load(EVAL_CONFIG.read_text())
+    cfg["params"].update(cfg.pop("smoke"))
+    cfg["params"].update({"policy": str(trained["onnx"]), "num_envs": 4, "score_envs": 2,
+                          "episodes": 1, "env": {"estimate": {"dropout_rate_hz": 0.0}}})
+    cfg["seed"] = 1
+    writer = RunWriter(tmp_path)
+    summary = eval_policy.run(cfg, "cpu", writer)
+    writer.close()
+    assert summary["headline"]["policy_p95_m_mean"] >= 0
+    # The policy's training tick and airframe stay; only the dropout rate changed.
+    env_cfg = json.loads((trained["run_dir"] / "policy.json").read_text())["env_cfg"]
+    assert summary["env_cfg"]["dt"] == env_cfg["dt"]
+    assert summary["env_cfg"]["quad"]["mass"] == env_cfg["quad"]["mass"]
+    assert summary["env_cfg"]["estimate"]["dropout_rate_hz"] == 0.0
+
+
 def test_eval_entrypoint_reports_a_missing_policy(tmp_path: Path):
     cfg = {"name": "x", "entrypoint": "training.eval_policy", "seed": 0,
            "params": {"policy": str(tmp_path / "nope.onnx"), "num_envs": 2}}
@@ -324,3 +356,20 @@ def test_eval_entrypoint_reports_a_missing_policy(tmp_path: Path):
     assert proc.returncode == 1
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["status"] == "failed" and "nope.json" in summary["error"]
+
+
+def test_scoring_restarts_the_window_on_a_reengage_like_training_does():
+    from training.evaluate import score_controller
+
+    cfg = StructureHoldConfig(episode_length_s=2.0, reengage_rate_hz=5.0, reengage_min_s=0.2)
+    env = StructureHoldEnv(cfg, num_envs=8, seed=0)
+    resets = []
+
+    def controller(obs):
+        return torch.zeros(obs.shape[0], 4)
+
+    # Called right after env.step, so done_buf is that step's dones: a restart on a live env
+    # is a re-engage.
+    controller.reset_history = lambda obs, mask: resets.append(bool((mask & ~env.done_buf).any()))
+    score_controller(env, controller, episodes=1, score_envs=4)
+    assert any(resets)  # windows restarted mid-episode, on re-engages, not only at episode ends

@@ -74,6 +74,10 @@ What it does today:
     through one last check (a non-finite rate becomes 0, a non-finite thrust the hover thrust);
   - Structure Hover and Structure Land move their setpoint with EKF2's height and heading
     resets as well as xy ones, as PX4's own modes do (Hover held the old height before);
+    Structure Hold turns its structure frame (the wall normal latched at engage) and its yaw
+    setpoint by a heading reset too (`PolicyController::rotateFrame`, `test_policy.cpp`
+    "Heading reset"), so a re-labelled heading does not turn the vehicle; the hold point
+    and the observation history stay (decided 2026-11-03);
   - `Run()` wakes at most every 2 ms (a flight controller can publish the gyro at up to
     8 kHz; the tick stays 10 ms), and `structure_hold status` prints the worst control step
     since boot and the tick interval (`docs/bench-test.md`, CPU budget).

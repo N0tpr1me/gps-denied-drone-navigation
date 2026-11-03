@@ -195,6 +195,8 @@ class FlightStats:
 
 def measure_flight(name: str, est: Trajectory, gt: Trajectory, p: FitParams) -> FlightStats:
     est, gt_pos, gt_vel = associate(est, gt)
+    if est.t.size < 20:
+        raise ValueError(f"{name}: fewer than 20 VIO samples overlap the truth")
     keep = est.t >= est.t[0] + p.skip_start_s
     t, pos = est.t[keep], est.pos[keep]
     gt_pos, gt_vel = gt_pos[keep], gt_vel[keep]

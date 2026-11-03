@@ -74,3 +74,13 @@ def test_an_anchor_that_never_fired_is_reported(tmp_path):
     run = fake_run(tmp_path)
     (run / "estimate_verify.json").write_text(json.dumps({"anchor_t": None}))
     assert "error" in score_run(run)
+
+
+def test_a_trace_gap_over_the_whole_window_is_reported_not_scored(tmp_path):
+    run = fake_run(tmp_path)
+    path = run / "estimate_trace.csv"
+    head, *rows = path.read_text().splitlines()
+    kept = [r for r in rows if not (30.0 <= float(r.split(",")[1]) < 62.0)]
+    path.write_text("\n".join([head, *kept]) + "\n")
+    r = score_run(run)
+    assert "error" in r and "no trace samples" in r["error"]

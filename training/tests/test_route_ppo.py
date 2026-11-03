@@ -33,6 +33,15 @@ def test_vecenv_groups_and_privileged_truth():
     assert (td["privileged"][:, -1] > 0).all()  # true clearance, inside the walls
     vec.episode_length_buf = torch.full((4,), 100)
     assert torch.allclose(vec.env.episode_time, torch.full((4,), 100 * cfg.dt))
+    # The randomised phase puts the drone on the target as it stands then, flying with it,
+    # with a flat history; left at the first waypoint it would be lost on the first step.
+    e = vec.env
+    assert torch.allclose(e.sim.state.pos, e.target_pos, atol=1e-5)
+    assert torch.allclose(e.sim.state.vel, e.target_vel, atol=1e-5)
+    td = vec.get_observations()
+    assert torch.equal(td["policy"][:, -NUM_OBS:], td["policy"][:, :NUM_OBS])
+    _, _, done, _ = vec.step(torch.zeros(4, 4))
+    assert not done.any()
 
 
 def test_smoke_training_exports_a_policy_scored_against_both_yardsticks(tmp_path: Path):

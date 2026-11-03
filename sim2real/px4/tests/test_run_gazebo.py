@@ -165,6 +165,16 @@ def test_hold_checks_rejudged_on_truth():
     assert untouched == {"checks": {"position_held": False}, "passed": False}
 
 
+def test_a_sequence_that_raised_is_not_passed_on_truth():
+    # sitl_test.py writes "error" when the sequence raised; whatever the truth says about
+    # the part that flew, the flight failed.
+    summary = {"checks": {"position_held": False, "altitude_held": True}, "passed": False,
+               "error": "TimeoutError: no heartbeat"}
+    run_gazebo.judge_hold_on_truth(summary, {"truth_drift": {"xy_max_m": 0.1, "z_max_m": 0.1}},
+                                   1.0)
+    assert not summary["passed"] and "estimate_checks" not in summary
+
+
 def test_reengage_entry_state_and_overrun():
     # Re-engage at 9 s (synthetic_status): the truth closes on a wall at x = 0 from x = -1.0
     # at 0.3 m/s until 9.2 s, then backs off; the first engage is not reported.
