@@ -98,6 +98,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_hb_guard, param_limits::SH_HB_GUARD, "SH_HB_GUARD");
 	sanitizeParam(_param_hb_range, param_limits::SH_HB_RANGE, "SH_HB_RANGE");
 	sanitizeParam(_param_ko_dist, param_limits::SH_KO_DIST, "SH_KO_DIST");
+	sanitizeParam(_param_shift_max, param_limits::SH_SHIFT_MAX, "SH_SHIFT_MAX");
 	sanitizeParam(_param_gcs_per, param_limits::SH_GCS_PER, "SH_GCS_PER");
 
 	WatchdogLimits limits{};
@@ -139,6 +140,7 @@ void StructureHold::updateParams()
 	WallGuardLimits wall{};
 	wall.min_standoff_m = _param_wall_min.get();
 	wall.spike_gate_m = policy::RANGE_SPIKE_GATE_M;  // short returns off dust (WallGuard.hpp)
+	wall.max_total_shift_m = _param_shift_max.get();  // the retreat cap (WallGuard.hpp)
 	_wall_guard.setLimits(wall);
 	_range_ref.setSpikeGate(policy::RANGE_SPIKE_GATE_M);
 
@@ -151,6 +153,7 @@ void StructureHold::updateParams()
 	KeepOutLimits keep_out{};
 	keep_out.keep_out_m = resolveKeepOut(_param_ko_dist.get(), cp_dist, param_limits::SH_KO_DIST.max);
 	keep_out.wall_min_m = _param_wall_min.get();
+	keep_out.max_total_shift_m = _param_shift_max.get();
 	_keep_out.setLimits(keep_out);
 }
 
@@ -344,6 +347,8 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	_keep_out_out = KeepOutOutput{};
 	_keep_out_warned = false;
 	_no_room_warned = false;
+	_wall_capped_warned = false;
+	_keep_out_capped_warned = false;
 
 	if (_keep_out.enabled() && !keepOutDataFresh(hrt_absolute_time())) {
 		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: keep-out %.1f m is on but no obstacle data is coming in",
@@ -424,6 +429,8 @@ void StructureHold::engageGuarded(const vehicle_local_position_s &lpos, bool des
 	_keep_out_out = KeepOutOutput{};
 	_keep_out_warned = false;
 	_no_room_warned = false;
+	_wall_capped_warned = false;
+	_keep_out_capped_warned = false;
 	_range_hover.stop();
 	_range_hover_xy_back_us = 0;
 	sayEngaged(hrt_absolute_time(), descend ? LAND_MODE_NAME : HOVER_MODE_NAME);
@@ -742,6 +749,12 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 		}
 	}
 
+	if (_wall_out.capped && !_wall_capped_warned) {
+		_wall_capped_warned = true;
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: wall guard has moved the hold point %.1f m back this hold (SH_SHIFT_MAX), not moving it further",
+				     (double)_wall_guard.totalShift());
+	}
+
 	applyKeepOut(now, pos, r);
 }
 
@@ -796,6 +809,12 @@ void StructureHold::applyKeepOut(const hrt_abstime now, const Vector3f &pos, con
 	if (_keep_out_out.no_room && !_no_room_warned) {
 		_no_room_warned = true;
 		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: keep-out has no room, holding between obstacles");
+	}
+
+	if (_keep_out_out.capped && !_keep_out_capped_warned) {
+		_keep_out_capped_warned = true;
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: keep-out has moved the hold point %.1f m this hold (SH_SHIFT_MAX), not moving it further",
+				     (double)_keep_out.totalShift());
 	}
 }
 
@@ -1763,8 +1782,9 @@ int StructureHold::print_status()
 		 rangeFresh(now) ? "fresh" : "none", (double)_range.distance_m,
 		 _range.timestamp_us > 0 && now >= _range.timestamp_us ? (double)((now - _range.timestamp_us) * 1e-6f) : -1.0);
 
-	PX4_INFO("keep-out: %.2f m (SH_KO_DIST %.2f, -1 follows CP_DIST), obstacle data %s",
-		 (double)_keep_out.limits().keep_out_m, (double)_param_ko_dist.get(), keepOutDataFresh(now) ? "fresh" : "none");
+	PX4_INFO("keep-out: %.2f m (SH_KO_DIST %.2f, -1 follows CP_DIST), obstacle data %s; retreat cap %.1f m per hold (SH_SHIFT_MAX, 0 = none)",
+		 (double)_keep_out.limits().keep_out_m, (double)_param_ko_dist.get(), keepOutDataFresh(now) ? "fresh" : "none",
+		 (double)_param_shift_max.get());
 
 	if (_state == structure_hold_status_s::STATE_ENGAGED || _state == structure_hold_status_s::STATE_LANDING
 	    || _state == structure_hold_status_s::STATE_HOVER) {
@@ -1772,11 +1792,12 @@ int StructureHold::print_status()
 			 (double)_setpoint.pos(2), (double)math::degrees(_setpoint.yaw));
 		PX4_INFO("error NED: %.2f %.2f %.2f m, thrust %.2f", (double)_last_output.pos_err(0),
 			 (double)_last_output.pos_err(1), (double)_last_output.pos_err(2), (double)_last_output.thrust);
-		PX4_INFO("wall %.2f m, hold point clearance %.2f m, moved back %.2f m since engage",
-			 (double)_wall_out.wall_m, (double)_wall_out.clearance_m, (double)_wall_guard.totalShift());
-		PX4_INFO("keep-out: %d points, nearest obstacle %.2f m from the hold point, moved %.2f m since engage%s",
+		PX4_INFO("wall %.2f m, hold point clearance %.2f m, moved back %.2f m since engage%s",
+			 (double)_wall_out.wall_m, (double)_wall_out.clearance_m, (double)_wall_guard.totalShift(),
+			 _wall_guard.capped() ? ", AT THE CAP" : "");
+		PX4_INFO("keep-out: %d points, nearest obstacle %.2f m from the hold point, moved %.2f m since engage%s%s",
 			 _keep_out_out.points, (double)_keep_out_out.nearest_m, (double)_keep_out.totalShift(),
-			 _keep_out_out.no_room ? ", NO ROOM" : "");
+			 _keep_out_out.no_room ? ", NO ROOM" : "", _keep_out.capped() ? ", AT THE CAP" : "");
 	}
 
 	PX4_INFO("range hover (SH_HB_RANGE %d): %s, reference %.2f m, error %.2f m; wind lean N %.2f E %.2f m/s^2%s",

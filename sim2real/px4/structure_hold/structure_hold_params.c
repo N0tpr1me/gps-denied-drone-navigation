@@ -375,6 +375,25 @@ PARAM_DEFINE_FLOAT(SH_WALL_MIN, 0.7f);
 PARAM_DEFINE_FLOAT(SH_KO_DIST, -1.0f);
 
 /**
+ * Guards: how far the hold point may retreat in one hold
+ *
+ * The wall guard and the keep-out only ever move the hold point away (a ratchet). Each of
+ * them moves it at most this far, summed over a hold, so a rangefinder stuck reading short
+ * or an obstacle that keeps coming (a person walking up) cannot walk the vehicle backwards
+ * without limit, possibly toward something no sensor sees. At the cap the point stops and
+ * the pilot is told once (critical). Keep it well above the biggest estimate jump the drone
+ * can meet: with GPS on the wall guard has to answer a 1.5 m jump in full. 0 removes the
+ * cap. The count restarts at every engage.
+ *
+ * @unit m
+ * @min 0.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_SHIFT_MAX, 3.0f);
+
+/**
  * Wall guard: require a forward range to engage
  *
  * When set, the mode reports itself unavailable to commander while no usable forward

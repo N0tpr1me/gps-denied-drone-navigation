@@ -258,6 +258,8 @@ private:
 	structure_hold::KeepOutOutput _keep_out_out{};
 	param_t _param_cp_dist{PARAM_INVALID};  // PX4's CP_DIST, if this build has it
 	bool _keep_out_warned{false};          // "keep-out moved the hold point" sent this engage
+	bool _wall_capped_warned{false};       // the wall guard's retreat cap message sent this engage
+	bool _keep_out_capped_warned{false};   // the keep-out's retreat cap message sent this engage
 	bool _no_room_warned{false};
 
 	// Structure Hover on the range alone (SH_HB_RANGE, RangeHover.hpp): the controller, the
@@ -331,6 +333,7 @@ private:
 		(ParamInt<px4::params::SH_HB_GUARD>) _param_hb_guard,
 		(ParamInt<px4::params::SH_HB_RANGE>) _param_hb_range,
 		(ParamFloat<px4::params::SH_KO_DIST>) _param_ko_dist,
+		(ParamFloat<px4::params::SH_SHIFT_MAX>) _param_shift_max,
 		(ParamFloat<px4::params::SH_GCS_PER>) _param_gcs_per,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
