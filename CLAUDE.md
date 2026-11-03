@@ -172,8 +172,11 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   set-up v22 -54 to -55 %, v19 -47 to -48 % (`docs/baseline.md`). Crash is judged on the 60 s
   hold only; seed 6 is the hard seed. The mock fusion has a barometer-height option
   (`fusion.height_source: baro`, numbers from EKF2 on Gazebo hovers; `docs/baseline.md`
-  "The mock fusion on barometer height"); `gz_x500_sitl`, the check and training stay on
-  vision height until Zain decides the Proposed row of 2026-11-03.
+  "The mock fusion on barometer height"); `gz_x500_sitl`, and with it the release check,
+  training and Route Follow, fly on it since 2026-11-03 (Decided). The Gate 1 configs state
+  their own vision-height fusion block, so the Gate 1 numbers stand; every policy up to v22
+  trained and was gated on vision height, and its check numbers on the barometer are in
+  `docs/gazebo_check.md` "Policies judged".
 - Module hardening (Phase 2, Oct 2026): the wall guard (`SH_WALL_MIN`, a forward
   rangefinder keeps the hold point off the wall; `WallGuard.hpp`) and the props-off bench
   test (`sim2real/px4/bench_test.py`, `docs/bench-test.md`), and Structure Land (second

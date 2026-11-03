@@ -291,6 +291,18 @@ so how a policy copes with steeper ramps is luck of the run; v0 happened to cope
 pipe without rangefinders stays the hard world (16 % crashes, PD 29 %), for the reason the
 stress tests gave: estimate jumps in a 0.4 m gap.
 
+Since 2026-11-03 the `gz_x500_sitl` airframe fuses on barometer height (Decided,
+`docs/decisions.md`; Structure Hold's reason in `docs/baseline.md`), and Route Follow inherits
+it. v2 re-scored on the four sets with the barometer (run `20261103-104633`, the same 256
+routes a set): cross-track p95 0.22 / 0.20 / 0.23 / 0.20 m against the PD's 0.32 / 0.35 /
+0.32 / 0.34 m and PD + centring's 0.32 / 0.33 / 0.32 / 0.34 m, routes finished 97 / 94 / 96 /
+97 %, crashes 0 / 0 / 1 / 1 %. Everything is 0.01 to 0.05 m tighter than the table above, the
+PDs too, as it was for Structure Hold (no vision height resets), and the ranking is the same.
+The worlds and stress tables above are on vision height; the stress set is re-run on the
+server's queue (`eval/configs/route_follow_stress_server.yaml`, v2 beside the pipes policy)
+and the worlds set with the next policy, not here, since the ranking did not move on the
+four sets.
+
 What this says: the recipe is repeatable (a fresh seed lands where v0 did), the training fix
 cost nothing, and steeper ramps belong in training before anything is claimed about slopes.
 Both go on the GPU server with the rest (`training/configs/route_follow_ppo_pipes.yaml`,
