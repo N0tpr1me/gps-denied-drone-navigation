@@ -1,8 +1,9 @@
-# Route Follow v0 (run 20261101-174152, the first 30 min CPU run; its policy lives only in
-# that run folder) against the classical yardsticks, on the same four sets as
-# eval/configs/route_follow_baseline.yaml (docs/route-follow.md, "First results").
-#   python -m training.launch --config eval/configs/route_follow_v0.yaml --device cpu
-name: route_follow_v0
+# Route Follow v2 (training/policies/route_follow_v2.onnx, the first tracked Route Follow
+# policy: v0's recipe retrained on 2026-11-03 with the episode-phase fix) against the
+# classical yardsticks, on the same four sets as eval/configs/route_follow_baseline.yaml
+# (docs/route-follow.md, "v2").
+#   python -m training.launch --config eval/configs/route_follow_v2.yaml --device cpu
+name: route_follow_v2
 entrypoint: eval.route_follow
 seed: 7300
 expected_hours: 0.3
@@ -10,7 +11,7 @@ gpus: 1
 params:
   num_envs: 256
   episodes: 1
-  policy: runs/20261101-174152_route_follow_ppo_s0_cdbaa61/policy.onnx
+  policy: training/policies/route_follow_v2.onnx
   env:
     airframe: gz_x500_sitl
     episode_length_s: 30.0

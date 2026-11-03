@@ -2,7 +2,8 @@
 # time on the corridor and tunnel mix with rangefinders on 70 % of the beams, as a drone
 # would fly it, against the classical yardsticks (PD on the estimate, PD with range
 # centring). The pipe sets ask whether narrow-pipe crashes come from the estimate's drift or
-# from the flying. Policies' ONNX files live in their run folders (not committed).
+# from the flying. v0 and v1 (the first two policies, docs/route-follow.md) lived only in
+# their run folders, which are gone; v2 is the first tracked policy (training/policies/).
 #   python -m training.launch --config eval/configs/route_follow_stress.yaml --device cpu
 name: route_follow_stress
 entrypoint: eval.route_follow
@@ -13,8 +14,7 @@ params:
   num_envs: 256
   episodes: 1
   policies:
-    v0: runs/20261101-174152_route_follow_ppo_s0_cdbaa61/policy.onnx
-    v1: runs/20261102-003213_route_follow_ppo_worlds_s1_a50c302/policy.onnx
+    v2: training/policies/route_follow_v2.onnx
   env:
     airframe: gz_x500_sitl
     episode_length_s: 30.0

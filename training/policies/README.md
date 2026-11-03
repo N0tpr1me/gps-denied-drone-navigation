@@ -36,3 +36,9 @@ Decisive comparison of v1 (run `20261021-232411_structure_hold_eval_s1_9f99246`,
 holds much tighter and crashes more, about eight standard errors apart, so the gap is real.
 
 Score any of them: `python -m training.launch --config training/configs/structure_hold_eval.yaml --device cpu`.
+
+## Route Follow (docs/route-follow.md)
+
+| File | Run | Result (256 routes a set, x500 as SITL flies it, true position) |
+| --- | --- | --- |
+| `route_follow_v2.onnx` + `.json` | `20261103-033000_route_follow_ppo_s0_46b29e4` (`training/configs/route_follow_ppo.yaml`, v0's recipe with the episode-phase fix of 2026-11-03, 1000 iterations, 29 min on 4 CPU cores) | **The first tracked Route Follow policy; a mock result only, not flown.** v0 and v1 lived in run folders that are gone. Four-set, worlds and stress scores against the PD yardsticks are in `docs/route-follow.md` ("v2"). Score it: `eval/configs/route_follow_v2.yaml`, `route_follow_worlds.yaml`, `route_follow_stress.yaml`. |

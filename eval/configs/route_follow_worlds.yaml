@@ -1,8 +1,9 @@
 # Route Follow on the other worlds (docs/route-follow.md, "Worlds"): arched mine drifts,
 # narrow pipes, narrowed stretches, side branches, steep ramps, and a mix of all of them,
 # against the classical yardsticks (PD on the estimate, PD with range centring), on the x500
-# as SITL flies it. Policies trained so far are listed under params.policies; their ONNX
-# files live in their run folders (not committed), so drop a line whose run is gone.
+# as SITL flies it. Policies are listed under params.policies. v0 (run 20261101-174152) and
+# v1 (v0 + 1000 iterations on the mix, run 20261102-003213) lived only in their run folders,
+# which are gone; v2 is the first tracked Route Follow policy (training/policies/).
 #   python -m training.launch --config eval/configs/route_follow_worlds.yaml --device cpu
 name: route_follow_worlds
 entrypoint: eval.route_follow
@@ -13,8 +14,7 @@ params:
   num_envs: 256
   episodes: 1
   policies:
-    v0: runs/20261101-174152_route_follow_ppo_s0_cdbaa61/policy.onnx
-    v1: runs/20261102-003213_route_follow_ppo_worlds_s1_a50c302/policy.onnx  # v0 + 1000 its on the mix
+    v2: training/policies/route_follow_v2.onnx
   env:
     airframe: gz_x500_sitl
     episode_length_s: 30.0
