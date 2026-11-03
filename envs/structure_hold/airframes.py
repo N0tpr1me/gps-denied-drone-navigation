@@ -63,7 +63,12 @@ piece):
 - ``fusion`` on with the bridge's EKF2 settings (``sim2real/estimate_bridge/ekf2_ev.params``):
   the module reads EKF2's estimate, not the fix; with EKF2's resets, so an estimate jump the
   gate rejects reaches the module as a step 1 s later, and every dropout over 0.4 s ends in
-  one (``resets``, from 2026-10-23 06:30; earlier runs had them off).
+  one (``resets``, from 2026-10-23 06:30; earlier runs had them off); height from the
+  barometer (``height_source`` baro, decided 2026-11-03), as the benchmark's EKF2 flies it
+  since 2026-11-01 (``EKF2_HGT_REF`` 0; ``docs/baseline.md`` "The mock fusion on barometer
+  height"), so a vision reset or dropout never moves the estimated height. Every policy up
+  to v22 trained and was gated on vision height; the check re-run on the barometer is in
+  ``docs/gazebo_check.md``.
 """
 
 from __future__ import annotations
@@ -188,7 +193,8 @@ def gz_x500_sitl() -> dict[str, Any]:
     cfg["dt"] = 0.012
     cfg["vision_offset_down_m"] = 0.24
     cfg["fusion"] = {"enabled": True, "vision_rate_hz": 50.0, "ev_delay_s": 0.1,
-                     "pos_noise_m": 0.1, "vel_noise_mps": 0.1, "gate_sd": 5.0, "resets": True}
+                     "pos_noise_m": 0.1, "vel_noise_mps": 0.1, "gate_sd": 5.0, "resets": True,
+                     "height_source": "baro"}
     return cfg
 
 
