@@ -171,6 +171,29 @@ def test_offsets_move_the_estimate_and_the_drone_follows():
     assert all(r["p95_m"] < 0.05 for r in rows)
 
 
+def test_lift_is_a_soft_rule_under_the_ceiling():
+    # v24's case (docs/wall-range.md): 1.5 cm above the hold point against a reference 1.7 cm
+    # below passes; v5's 0.3 m lift still fails, as does any lift above a higher reference.
+    rng = np.random.default_rng(0)
+
+    def rows(p95, lift):
+        return [{"p95_m": p95, "crash": False, "lift_m": lift, "wobble": False,
+                 "wobble_rms": 0.01, "fast_ring_rms": 0.01}] * 8
+
+    ref = gazebo_check.describe(rows(0.2, -0.017))
+    cmp = gazebo_check.paired_p95_ratio(rows(0.15, 0.015), rows(0.2, -0.017), rng, 50)
+    rules = gazebo_check.DEFAULT_RULES
+    assert gazebo_check.pooled_checks(cmp, gazebo_check.describe(rows(0.15, 0.015)),
+                                      ref, rules)["lift_ok"]
+    assert not gazebo_check.pooled_checks(cmp, gazebo_check.describe(rows(0.15, 0.3)),
+                                          ref, rules)["lift_ok"]
+    high_ref = gazebo_check.describe(rows(0.2, 0.08))
+    assert gazebo_check.pooled_checks(cmp, gazebo_check.describe(rows(0.15, 0.07)),
+                                      high_ref, rules)["lift_ok"]
+    assert not gazebo_check.pooled_checks(cmp, gazebo_check.describe(rows(0.15, 0.09)),
+                                          high_ref, rules)["lift_ok"]
+
+
 def test_smoke_run_writes_report(tmp_path):
     out = subprocess.run(
         [sys.executable, "-m", "training.launch", "--config", "eval/configs/gazebo_check.yaml",

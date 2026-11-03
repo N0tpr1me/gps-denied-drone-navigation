@@ -28,7 +28,8 @@ static const FloatRange FLOATS[] = {
 	param_limits::SH_RST_HOLD,
 	param_limits::SH_P_POS, param_limits::SH_P_VEL, param_limits::SH_P_ATT, param_limits::SH_V_MAX,
 	param_limits::SH_FB_T, param_limits::SH_FIX_GAP, param_limits::SH_YAW_P, param_limits::SH_RATE_MAX,
-	param_limits::SH_FB_K, param_limits::SH_FB_TILT, param_limits::SH_WALL_MIN, param_limits::HOVER_THRUST,
+	param_limits::SH_FB_K, param_limits::SH_FB_TILT, param_limits::SH_WALL_MIN, param_limits::SH_KO_DIST,
+	param_limits::SH_SHIFT_MAX, param_limits::HOVER_THRUST,
 };
 
 static const IntRange INTS[] = {

@@ -78,6 +78,8 @@ static constexpr IntRange SH_HB_GUARD{0, 1, 1};
 static constexpr IntRange SH_HB_RANGE{0, 1, 1};
 // Keep-out from PX4's collision-prevention data; -1 follows CP_DIST
 static constexpr FloatRange SH_KO_DIST{-1.0f, 5.0f, -1.0f};
+// Retreat cap on both guards per hold; 0 = no cap
+static constexpr FloatRange SH_SHIFT_MAX{0.0f, 10.0f, 3.0f};
 
 // Ground station (PilotStatus.hpp)
 static constexpr FloatRange SH_GCS_PER{0.0f, 60.0f, 10.0f};

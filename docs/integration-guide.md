@@ -163,6 +163,7 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WALL_MIN` | 0.7 | 0 to 5 | m | The hold point never comes closer than this to the measured wall; set your prop reach plus at least 0.3 m. 0 turns the guard off |
 | `SH_KO_DIST` | -1.0 | -1 to 5 | m | Keep-out from obstacles PX4's collision-prevention sensors see (not the structure ahead, which keeps `SH_WALL_MIN`). -1 follows PX4's `CP_DIST` (off unless you set it); 0 off |
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
+| `SH_SHIFT_MAX` | 3.0 | 0 to 10 | m | Retreat cap: the wall guard and the keep-out each move the hold point at most this far in one hold, then stop and tell the pilot. Keep it above the biggest estimate jump your drone can meet (1.5 m with GPS on). 0 removes the cap |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
 | `SH_HB_RANGE` | 1 | 0 or 1 | | Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |
@@ -210,6 +211,8 @@ Inspector).
 | Critical | `Structure Hold: engage refused, EKF reset its position <t> s ago (SH_RST_HOLD <t> s)` | Within the reset hold-off |
 | Critical | `Structure Hold: policy produced a non-finite action` | Should never happen; the setpoint is replaced by a safe one |
 | Critical | `Structure Hold: keep-out has no room, holding between obstacles` | Obstacles closer together than twice the keep-out; the hold point sits between them |
+| Critical | `Structure Hold: wall guard has moved the hold point <s> m back this hold (SH_SHIFT_MAX), not moving it further` | The retreat cap: the guard stops moving the point; the pilot takes over |
+| Critical | `Structure Hold: keep-out has moved the hold point <s> m this hold (SH_SHIFT_MAX), not moving it further` | The same cap on the keep-out |
 | Critical | `Structure Hover: position lost, holding <d> m from the wall on the rangefinder` | `SH_HB_RANGE` 1 only |
 | Warning | `Structure Hold: wall guard moved the hold point <s> m back, to <d> m from the wall` | The guard pushed the hold point |
 | Warning | `Structure Hold: keep-out moved the hold point <s> m, to <d> m from the nearest obstacle` | The keep-out pushed the hold point (first push of each engage) |

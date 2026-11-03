@@ -421,6 +421,46 @@ int main()
 		CHECK(near(off.backOffSpeed(o), 0.f));
 	}
 
+	// Retreat cap (SH_SHIFT_MAX): a sensor stuck reading 0.3 m while the vehicle follows the
+	// hold point back would ratchet it away for ever; with a 1 m cap it moves 1 m and stops,
+	// telling the module once per tick that it is capped. Cap 0 is no cap.
+	{
+		WallGuardLimits l{};
+		l.min_standoff_m = 0.7f;
+		l.max_total_shift_m = 1.0f;
+		WallGuard g{};
+		g.setLimits(l);
+		float pos[3] = {0.f, 0.f, -2.5f};
+		float hold[3] = {0.f, 0.f, -2.5f};
+		WallGuardOutput o = g.apply(range(0.3f), NOW, pos, n_north, bx_north, hold);
+		CHECK(near(o.shift_m, 0.4f) && !o.capped && !g.capped());
+		pos[0] = hold[0];  // the vehicle reaches the point; the reading is still 0.3 m
+		o = g.apply(range(0.3f), NOW, pos, n_north, bx_north, hold);
+		CHECK(near(o.shift_m, 0.4f) && !o.capped && near(g.totalShift(), 0.8f));
+		pos[0] = hold[0];
+		o = g.apply(range(0.3f), NOW, pos, n_north, bx_north, hold);
+		CHECK(near(o.shift_m, 0.2f) && o.capped && g.capped());
+		CHECK(near(o.clearance_m, 0.5f));  // short of the standoff: the cap held it
+		CHECK(near(g.totalShift(), 1.0f) && near(hold[0], -1.0f));
+		pos[0] = hold[0];
+		o = g.apply(range(0.3f), NOW, pos, n_north, bx_north, hold);
+		CHECK(near(o.shift_m, 0.f) && o.capped && o.range_ok && near(hold[0], -1.0f));
+		g.engage();
+		CHECK(!g.capped());  // a new hold starts the count again
+
+		WallGuard free = guard(0.7f);
+		float pos2[3] = {0.f, 0.f, -2.5f};
+		float hold2[3] = {0.f, 0.f, -2.5f};
+
+		for (int i = 0; i < 10; i++) {
+			const WallGuardOutput f = free.apply(range(0.3f), NOW, pos2, n_north, bx_north, hold2);
+			CHECK(near(f.shift_m, 0.4f) && !f.capped);
+			pos2[0] = hold2[0];
+		}
+
+		CHECK(near(free.totalShift(), 4.0f) && !free.capped());
+	}
+
 	if (failures == 0) {
 		std::printf("wall guard tests: all passed\n");
 		return 0;

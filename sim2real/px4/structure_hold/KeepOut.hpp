@@ -34,6 +34,12 @@
  * one to the other. When there is no room (two obstacles nearer together than twice the
  * keep-out), the point ends between them and no_room is set: the module tells the pilot.
  *
+ * Retreat cap (max_total_shift_m, 0 off; SH_SHIFT_MAX, shared with the wall guard): the
+ * hold point moves at most this far in one hold, summed over ticks. An obstacle that keeps
+ * coming (a person walking up) would otherwise push the point away without limit, possibly
+ * toward something no sensor sees. At the cap the point stops, ``capped`` is set and the
+ * module tells the pilot once.
+ *
  * Plain C++, no PX4 headers, so tests/test_keep_out.cpp runs it in a bare g++ build.
  */
 
@@ -69,6 +75,7 @@ struct KeepOutLimits {
 	uint64_t max_age_us{500000};       // PX4 collision prevention's own timeout (RANGE_STREAM_TIMEOUT_US)
 	float wall_cone_rad{0.1745f};      // 10 deg: points this close to the normal measure the wall
 	float structure_tol_m{0.3f};       // a point this close to the wall plane is the structure
+	float max_total_shift_m{0.f};      // SH_SHIFT_MAX: the point moves at most this per hold; 0 = no cap
 };
 
 /** PX4 obstacle_distance, as the uORB message carries it. */
@@ -92,6 +99,7 @@ struct KeepOutOutput {
 	float nearest_m{-1.f};       // hold point to the nearest obstacle point, -1 without one
 	float shift_m{0.f};          // how far the hold point moved this tick
 	bool no_room{false};         // the keep-out could not be met everywhere
+	bool capped{false};          // the retreat cap held the point short of the keep-out this tick
 };
 
 class KeepOut
@@ -249,6 +257,19 @@ public:
 			hy += sy / static_cast<float>(count);
 		}
 
+		// The retreat cap: the move is cut back to what is left of it this hold.
+		if (_limits.max_total_shift_m > 0.f) {
+			const float left = fmaxf(_limits.max_total_shift_m - _total_shift_m, 0.f);
+			const float move = hypotf(hx - x0, hy - y0);
+
+			if (move > left) {
+				const float f = move > 0.f ? left / move : 0.f;
+				hx = x0 + (hx - x0) * f;
+				hy = y0 + (hy - y0) * f;
+				out.capped = true;
+			}
+		}
+
 		// What is left: the nearest obstacle and whether anything is still inside.
 		float worst = 0.f;
 
@@ -274,6 +295,12 @@ public:
 		}
 
 		return out;
+	}
+
+	/** True once the retreat cap is used up for this hold. */
+	bool capped() const
+	{
+		return _limits.max_total_shift_m > 0.f && !(_total_shift_m < _limits.max_total_shift_m);
 	}
 
 private:
