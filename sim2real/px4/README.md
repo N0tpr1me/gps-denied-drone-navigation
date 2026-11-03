@@ -105,7 +105,10 @@ What it does today:
   own offset cancels in that sum, so it is the case the hold-off above cannot fix: a hold
   point captured on a jumped estimate that lies on the wall face (Gazebo seed 3,
   `docs/baseline.md` v11 section). The point only ever moves away from the wall during a
-  hold. Samples count only when under 0.2 s old, inside the sensor's own range, not flagged
+  hold, and at most `SH_SHIFT_MAX` (3 m) in one hold: at the cap it stops and the pilot is
+  told, so a sensor stuck reading short cannot walk the vehicle back without limit
+  (decided 2026-11-03; the cap stays above the 1.5 m GPS jump the guard must answer).
+  Samples count only when under 0.2 s old, inside the sensor's own range, not flagged
   bad, and with the body x axis within 35 deg of the wall normal, and a reading more than
   0.25 m from the last accepted one waits for the next to agree (the spike gate: a lone
   short return off dust or spray is not a wall); without one the guard
@@ -124,7 +127,8 @@ What it does today:
   fresh `obstacle_distance` scan (a 360 deg lidar, or `OBSTACLE_DISTANCE` from a companion;
   north- or body-aligned) and every side-facing `distance_sensor` (yaw orientations 1 to 7)
   becomes an obstacle point, and the hold point of Structure Hold, Hover and Land moves
-  straight away from any point closer than the keep-out, never back (a ratchet). Points on
+  straight away from any point closer than the keep-out, never back (a ratchet), and at
+  most `SH_SHIFT_MAX` per hold, as the wall guard. Points on
   the structure ahead (within 0.3 m of the wall plane the forward rangefinder or the lidar's
   forward 10 deg measures) are not obstacles; they keep `SH_WALL_MIN` instead, so a drone
   with a lidar and no forward rangefinder gets a wall floor too. Obstacles on both sides
@@ -210,7 +214,7 @@ What it does today:
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
   source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*` (the frozen-fix trip `SH_WD_FRZ_T` among them), the engage hold-off
-  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the ground-station status period `SH_GCS_PER`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
+  after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, the guards' retreat cap `SH_SHIFT_MAX`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the ground-station status period `SH_GCS_PER`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 
 Not here yet: choosing the standoff (the hold point is the engage point, kept outside

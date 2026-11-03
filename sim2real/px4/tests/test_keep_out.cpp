@@ -427,6 +427,39 @@ int main()
 	CHECK(near(resolveKeepOut(0.8f, 1.2f, 5.f), 0.8f));
 	CHECK(near(resolveKeepOut(0.8f, -1.f, 5.f), 0.8f));
 
+	// Retreat cap (SH_SHIFT_MAX): a pole that keeps coming (0.5 m east of the vehicle every
+	// tick, the vehicle following its hold point) pushes the point west until 1.5 m is used
+	// up, then the point stays and the output says so; the nearest distance and no_room
+	// report the point where it stopped.
+	{
+		KeepOutLimits l{};
+		l.keep_out_m = 1.5f;
+		l.wall_min_m = 0.f;
+		l.max_total_shift_m = 1.5f;
+		KeepOut k{};
+		k.setLimits(l);
+		float pos2[3] = {0.f, 0.f, -2.5f};
+		float hold[3] = {0.f, 0.f, -2.5f};
+		k.begin();
+		k.addPoint(90.f * DEG, 0.5f);
+		KeepOutOutput o = k.apply(pos2, n_north, -1.f, hold);
+		CHECK(near(o.shift_m, 1.0f) && !o.capped && near(hold[1], -1.0f));
+		pos2[1] = hold[1];
+		k.begin();
+		k.addPoint(90.f * DEG, 0.5f);
+		o = k.apply(pos2, n_north, -1.f, hold);
+		CHECK(near(o.shift_m, 0.5f) && o.capped && k.capped());
+		CHECK(near(hold[1], -1.5f) && near(k.totalShift(), 1.5f));
+		CHECK(near(o.nearest_m, 1.0f) && o.no_room);  // still 0.5 m inside the keep-out
+		pos2[1] = hold[1];
+		k.begin();
+		k.addPoint(90.f * DEG, 0.5f);
+		o = k.apply(pos2, n_north, -1.f, hold);
+		CHECK(near(o.shift_m, 0.f) && o.capped && near(hold[1], -1.5f));
+		k.engage();
+		CHECK(!k.capped());
+	}
+
 	if (failures == 0) {
 		std::printf("keep-out tests passed\n");
 		return 0;

@@ -37,6 +37,14 @@
  * once; the gate belongs to the sensor, so it carries across engages. It is the same rule
  * as RangeReference's gate below (the env's RangeSensor.spike_gate_m), applied first.
  *
+ * Retreat cap (max_total_shift_m, 0 off; SH_SHIFT_MAX): the ratchet never moves the hold
+ * point back more than this in one hold. A sensor stuck reading short, or anything else the
+ * gate lets through tick after tick, would otherwise walk the vehicle backwards without
+ * limit, possibly toward something no sensor sees. At the cap the point stops and
+ * ``capped`` is set, so the module can tell the pilot once; the cap is well above the
+ * biggest estimate jump in the envelope (1.5 m with GPS on), which the guard must still be
+ * free to answer in full.
+ *
  * Plain C++, no PX4 headers, so tests/test_wall_guard.cpp runs it in a bare g++ build.
  */
 
@@ -55,6 +63,7 @@ struct WallGuardLimits {
 	float spike_gate_m{0.f};              // a reading this far from the last accepted waits for a second
 	float back_off_gain{2.f};             // [1/s] back-off speed per m the vehicle is inside the standoff
 	float max_back_off_mps{0.5f};         // [m/s] cap on that speed
+	float max_total_shift_m{0.f};         // SH_SHIFT_MAX: the point moves back at most this per hold; 0 = no cap
 };
 
 /** One forward rangefinder reading, as PX4's distance_sensor carries it. */
@@ -72,6 +81,7 @@ struct WallGuardOutput {
 	float wall_m{-1.f};        // perpendicular distance vehicle -> wall, -1 without a sample
 	float clearance_m{-1.f};   // hold point -> wall along n, -1 without a sample
 	float shift_m{0.f};        // hold point moved back this tick
+	bool capped{false};        // the retreat cap held the point short of the standoff this tick
 };
 
 class WallGuard
@@ -164,14 +174,31 @@ public:
 		out.clearance_m = out.wall_m - ahead;
 
 		if (enabled() && out.clearance_m < _limits.min_standoff_m) {
-			out.shift_m = _limits.min_standoff_m - out.clearance_m;
-			hold_ned[0] -= out.shift_m * normal_ned[0];
-			hold_ned[1] -= out.shift_m * normal_ned[1];
-			out.clearance_m = _limits.min_standoff_m;
-			_total_shift_m += out.shift_m;
+			float shift = _limits.min_standoff_m - out.clearance_m;
+
+			if (_limits.max_total_shift_m > 0.f) {
+				const float left = _limits.max_total_shift_m - _total_shift_m;
+
+				if (shift > left) {
+					shift = left > 0.f ? left : 0.f;
+					out.capped = true;
+				}
+			}
+
+			out.shift_m = shift;
+			hold_ned[0] -= shift * normal_ned[0];
+			hold_ned[1] -= shift * normal_ned[1];
+			out.clearance_m += shift;
+			_total_shift_m += shift;
 		}
 
 		return out;
+	}
+
+	/** True once the retreat cap is used up for this hold. */
+	bool capped() const
+	{
+		return _limits.max_total_shift_m > 0.f && !(_total_shift_m < _limits.max_total_shift_m);
 	}
 
 	/**
