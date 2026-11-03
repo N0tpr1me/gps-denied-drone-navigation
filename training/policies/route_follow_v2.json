@@ -1,0 +1,430 @@
+{
+  "format": "route_follow_policy/1",
+  "input": {
+    "name": "obs",
+    "size": 114,
+    "history": 3,
+    "order": "oldest first; the newest observation is the last num_obs values",
+    "num_obs": 38,
+    "layout": {
+      "pos_err": [
+        0,
+        3
+      ],
+      "vel": [
+        3,
+        6
+      ],
+      "target_speed": [
+        6,
+        7
+      ],
+      "preview": [
+        7,
+        13
+      ],
+      "gravity_body": [
+        13,
+        16
+      ],
+      "heading": [
+        16,
+        18
+      ],
+      "ang_vel": [
+        18,
+        21
+      ],
+      "last_action": [
+        21,
+        25
+      ],
+      "stale": [
+        25,
+        26
+      ],
+      "age": [
+        26,
+        27
+      ],
+      "remaining": [
+        27,
+        28
+      ],
+      "ranges": [
+        28,
+        33
+      ],
+      "range_ok": [
+        33,
+        38
+      ]
+    }
+  },
+  "output": {
+    "name": "actions",
+    "size": 4,
+    "range": [
+      -1.0,
+      1.0
+    ],
+    "max_rate_rad_s": 2.0,
+    "max_thrust_n": 34.19432,
+    "yaw": "policy"
+  },
+  "rate_hz": 83,
+  "env_cfg": {
+    "airframe": "gz_x500_sitl",
+    "dt": 0.012,
+    "episode_length_s": 30.0,
+    "start_offset_std_m": 0.1,
+    "start_yaw_std_rad": 0.1,
+    "max_rate_rad_s": 2.0,
+    "rate_lag_s": [
+      0.0,
+      0.0
+    ],
+    "max_track_error_m": 3.0,
+    "max_tilt_deg": 80.0,
+    "contact_radius_m": 0.4,
+    "obs_pos_clip_m": 3.0,
+    "heading_lookahead_m": 1.0,
+    "preview_m": [
+      1.0,
+      2.5
+    ],
+    "remaining_cap_m": 10.0,
+    "vision_offset_down_m": 0.24,
+    "route": {
+      "segments": 4,
+      "min_segment_m": 3.0,
+      "segment_weight": [
+        1.0,
+        2.0
+      ],
+      "turn_deg": [
+        -90.0,
+        90.0
+      ],
+      "climb_deg": [
+        -10.0,
+        10.0
+      ],
+      "tunnel_prob": 0.5,
+      "corridor_width_m": [
+        2.0,
+        4.0
+      ],
+      "corridor_height_m": [
+        2.4,
+        4.0
+      ],
+      "tunnel_radius_m": [
+        1.1,
+        2.0
+      ],
+      "arch_prob": 0.0,
+      "pinch_prob": 0.0,
+      "pinch_frac": [
+        0.6,
+        0.85
+      ],
+      "branches": 0,
+      "branch_prob": 1.0,
+      "branch_len_m": [
+        2.0,
+        6.0
+      ],
+      "speed_mps": [
+        0.5,
+        1.5
+      ],
+      "accel_mps2": 0.5,
+      "corner_speed_min_frac": 0.2,
+      "end_hold_s": 5.0,
+      "max_length_m": 60.0,
+      "start_height_m": 2.0
+    },
+    "ranges": {
+      "present_prob": 0.7,
+      "rate_hz": 20.0,
+      "noise_std_m": 0.01,
+      "noise_frac": 0.005,
+      "outlier_prob": 0.01,
+      "min_m": 0.1,
+      "max_m": 8.0,
+      "obs_max_m": 4.0,
+      "trace_iters": 40
+    },
+    "reward": {
+      "alive": 2.0,
+      "track": 1.5,
+      "track_scale_m": 0.5,
+      "vel": 0.1,
+      "clearance": 2.0,
+      "clear_margin_m": 0.4,
+      "heading": 0.5,
+      "ang_vel": 0.01,
+      "action": 0.02,
+      "action_rate": 0.15,
+      "tilt": 2.0,
+      "tilt_free_deg": 45.0,
+      "crash": 20.0
+    },
+    "quad": {
+      "mass": 2.0643076923076924,
+      "inertia": [
+        0.023666647360567443,
+        0.023666647360567443,
+        0.043999953714003955
+      ],
+      "max_thrust": 34.19432,
+      "max_torque": [
+        2.1110656392423497,
+        2.1110656392423506,
+        0.18529729748835688
+      ],
+      "motor_tau": 0.018750000000000003,
+      "substeps": 2
+    },
+    "rate_pid": {
+      "p": [
+        0.1466,
+        0.1102,
+        0.2
+      ],
+      "i": [
+        0.1958,
+        0.1466,
+        0.1
+      ],
+      "d": [
+        0.0029,
+        0.00212,
+        0.0
+      ],
+      "ff": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "int_lim": [
+        0.3,
+        0.3,
+        0.3
+      ],
+      "d_cutoff_hz": 30.0,
+      "gyro_cutoff_hz": 40.0,
+      "yaw_torque_cutoff_hz": 2.0
+    },
+    "actuation": {
+      "torque_per_unit": [
+        3.4066833541165455,
+        5.503103879726727,
+        0.6831090782821667
+      ],
+      "esc_min_frac": 0.15,
+      "thrust_cmd_range": [
+        0.08,
+        0.9
+      ]
+    },
+    "disturbance": {
+      "mean_speed": [
+        0.0,
+        3.0
+      ],
+      "mean_heading_deg": [
+        0.0,
+        0.0
+      ],
+      "num_gusts": 2,
+      "gust_start": [
+        2.0,
+        40.0
+      ],
+      "gust_duration": [
+        0.5,
+        3.0
+      ],
+      "gust_speed": [
+        0.0,
+        2.0
+      ],
+      "turb_sigma": [
+        0.0,
+        0.5
+      ],
+      "turb_vertical_ratio": [
+        0.5,
+        0.5
+      ],
+      "turb_tau": [
+        0.5,
+        3.0
+      ],
+      "turb_components": 32,
+      "turb_omega": [
+        0.02,
+        30.0
+      ],
+      "k_lin": [
+        0.0,
+        0.0
+      ],
+      "k_quad": [
+        0.02264403615849031,
+        0.033966054237735466
+      ],
+      "wall_decay": [
+        0.5302447674599842,
+        2.1209790698399367
+      ],
+      "wall_floor": [
+        0.0,
+        0.3
+      ],
+      "wall_deflect": [
+        0.0,
+        0.0
+      ],
+      "wall_deflect_angle_deg": [
+        0.0,
+        360.0
+      ],
+      "wall_recirc": [
+        0.0,
+        0.0
+      ],
+      "wall_recirc_length": [
+        0.5,
+        3.0
+      ],
+      "wake_ti": [
+        0.0,
+        0.0
+      ],
+      "wake_length": [
+        1.0,
+        4.0
+      ],
+      "shed_amp": [
+        0.0,
+        0.0
+      ],
+      "shed_width": [
+        0.5,
+        5.0
+      ],
+      "shed_strouhal": [
+        0.1,
+        0.21
+      ],
+      "shed_angle_deg": [
+        0.0,
+        0.0
+      ]
+    },
+    "estimate": {
+      "delay_min_s": 0.05,
+      "delay_max_s": 0.15,
+      "pos_noise_std_m": 0.02,
+      "vel_noise_std_mps": 0.05,
+      "bias_walk_std_m_per_sqrt_s": 0.02,
+      "bias_max_m": 0.5,
+      "jump_rate_hz": 0.02,
+      "jump_min_m": 0.1,
+      "jump_max_m": 2.0,
+      "jump_decay_s": 5.0,
+      "dropout_rate_hz": 0.02,
+      "dropout_min_s": 0.2,
+      "dropout_max_s": 3.0,
+      "dropout_mode": "dead_reckon",
+      "dropout_accel_bias_mps2": 0.3,
+      "fault_start_s": 0.0
+    },
+    "fusion": {
+      "enabled": true,
+      "vision_rate_hz": 50.0,
+      "ev_delay_s": 0.1,
+      "pos_noise_m": 0.1,
+      "vel_noise_mps": 0.1,
+      "gate_sd": 5.0,
+      "accel_noise_mps2": 0.35,
+      "imu_noise_mps2": 0.05,
+      "imu_bias_mps2": 0.0,
+      "output_tau_s": 0.25,
+      "resets": true,
+      "stop_after_s": 0.4,
+      "hpos_reset_after_s": 1.0,
+      "hgt_reset_after_s": 5.0,
+      "height_source": "vision",
+      "baro_rate_hz": 50.0,
+      "baro_noise_m": 0.02,
+      "baro_walk_m_per_sqrt_s": 0.005,
+      "baro_walk_max_m": 0.3
+    }
+  },
+  "train_cfg": {
+    "num_steps_per_env": 48,
+    "save_interval": 50,
+    "logger": "tensorboard",
+    "obs_groups": {
+      "actor": [
+        "policy"
+      ],
+      "critic": [
+        "policy",
+        "privileged"
+      ]
+    },
+    "actor": {
+      "class_name": "MLPModel",
+      "obs_normalization": true,
+      "distribution_cfg": {
+        "class_name": "GaussianDistribution",
+        "init_std": 0.25,
+        "std_range": [
+          0.01,
+          1.0
+        ]
+      },
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "activation": "elu"
+    },
+    "critic": {
+      "class_name": "MLPModel",
+      "obs_normalization": true,
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "activation": "elu"
+    },
+    "algorithm": {
+      "class_name": "PPO",
+      "num_learning_epochs": 5,
+      "num_mini_batches": 4,
+      "clip_param": 0.2,
+      "gamma": 0.995,
+      "lam": 0.97,
+      "value_loss_coef": 1.0,
+      "entropy_coef": 0.0,
+      "learning_rate": 0.001,
+      "max_grad_norm": 1.0,
+      "schedule": "adaptive",
+      "desired_kl": 0.01
+    },
+    "multi_gpu": null
+  },
+  "seed": 0,
+  "iterations": 1000,
+  "num_envs": 1024,
+  "actor_params": 11784,
+  "train_reward_mean": 3995.1989428710935,
+  "start_iteration": 0,
+  "resumed_from": null
+}
