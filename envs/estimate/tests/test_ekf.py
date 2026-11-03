@@ -11,10 +11,11 @@ from envs.estimate.ekf import FusionConfig, TorchFusion  # noqa: E402
 DT = 0.012
 
 
-def fly(cfg: FusionConfig, accel_fn, steps: int, fix_fn=None, fresh_fn=None, n: int = 2):
+def fly(cfg: FusionConfig, accel_fn, steps: int, fix_fn=None, fresh_fn=None, n: int = 2,
+        seed: int = 0):
     """Integrate a known trajectory and fuse its exact fix, as old as the filter assumes;
     returns (true position, true velocity, fused position, fused velocity) per step."""
-    f = TorchFusion(cfg, n, DT, seed=0)
+    f = TorchFusion(cfg, n, DT, seed=seed)
     p, v = torch.zeros(n, 3), torch.zeros(n, 3)
     f.reset(torch.arange(n), p, v)
     past = [(p, v)] * (f.delay_steps + 1)
@@ -27,7 +28,7 @@ def fly(cfg: FusionConfig, accel_fn, steps: int, fix_fn=None, fresh_fn=None, n: 
         fix_p, fix_v = past[0]
         fix_p = fix_p if fix_fn is None else fix_fn(k * DT, fix_p)
         fresh = torch.ones(n, dtype=torch.bool) if fresh_fn is None else fresh_fn(k * DT)
-        pe, ve = f.step(a, fix_p, fix_v, fresh)
+        pe, ve = f.step(a, fix_p, fix_v, fresh, true_pos=p)
         out.append((p.clone(), v.clone(), pe.clone(), ve.clone()))
     return out
 
@@ -159,3 +160,53 @@ def test_imu_bias_hides_under_the_fix_and_drifts_in_a_dropout():
     assert 0.25 < after < 0.5
     with pytest.raises(ValueError):
         FusionConfig(imu_bias_mps2=-0.1)
+
+
+def test_baro_height_follows_the_barometer_and_never_freezes_or_resets():
+    """Barometer height reference (the benchmark since 2026-11-01): the fused height tracks
+    the barometer's slow error, not the vision fix, keeps moving through a vision dropout,
+    and a restart after it leaves the height where the barometer has it."""
+    noise = dict(enabled=True, imu_noise_mps2=0.0, resets=True, baro_noise_m=0.01)
+    vision = FusionConfig(**noise)
+    baro = FusionConfig(**noise, height_source="baro", baro_walk_m_per_sqrt_s=0.0)
+    walk = FusionConfig(**noise, height_source="baro", baro_walk_m_per_sqrt_s=0.05)
+    with pytest.raises(ValueError, match="height_source"):
+        FusionConfig(height_source="gps")
+    with pytest.raises(ValueError, match="true_pos"):
+        TorchFusion(baro, 1, DT, 0).step(torch.zeros(1, 3), torch.zeros(1, 3), torch.zeros(1, 3),
+                                         torch.ones(1, dtype=torch.bool))
+    # Climb at 0.2 m/s; the vision fix reads 0.4 m too high after 1 s and drops out 3 to 4 s.
+    climb = lambda t: torch.tensor([[0.0, 0.0, 0.2 / DT]]) if t < DT / 2 else torch.zeros(1, 3)  # noqa: E731
+    gap = lambda t: torch.tensor([not 3.0 <= t < 4.0] * 2)  # noqa: E731
+    off = lambda t, p: p + torch.tensor([[0.0, 0.0, 0.4]]) if t >= 1.0 else p  # noqa: E731
+    steps = int(6.0 / DT)
+    v_out = fly(vision, climb, steps, off, gap)
+    b_out = fly(baro, climb, steps, off, gap)
+    t = torch.arange(steps) * DT
+    zerr = lambda out: torch.tensor([float(o[2][0, 2] - o[0][0, 2]) for o in out])  # noqa: E731
+    zv, zb = zerr(v_out), zerr(b_out)
+    assert zv[t > 4.5].min() > 0.3  # vision height: the restart puts the height on the fix
+    assert zb.abs().max() < 0.03  # barometer height: the offset fix and the gap change nothing
+    # The barometer's own error walks in: the fused height follows it, in and out of the gap,
+    # and the gate never rejects it (EKF2's barometer gate is loose).
+    zw = zerr(fly(walk, climb, steps, off, gap, seed=3))
+    assert 0.05 < zw.abs().max() < walk.baro_walk_max_m + 0.05
+    assert (zw[1:] - zw[:-1]).abs().max() < 0.05  # it walks, it does not step
+
+
+def test_baro_height_keeps_the_imu_bias_out_of_the_height_in_a_dropout():
+    still = lambda t: torch.zeros(1, 3)  # noqa: E731
+    gap = lambda t: torch.tensor([not 5.0 <= t < 8.0] * 64)  # noqa: E731
+    frozen = {}
+
+    def fix(t, p):
+        if not 5.0 <= t < 8.0:
+            frozen["p"] = p.clone()
+        return frozen["p"]
+
+    cfg = FusionConfig(enabled=True, imu_noise_mps2=0.0, imu_bias_mps2=0.1,
+                       height_source="baro", baro_walk_m_per_sqrt_s=0.0)
+    out = fly(cfg, still, int(8.0 / DT), fix, gap, n=64)
+    err = out[-1][2] - out[-1][0]
+    assert err[:, 0].abs().mean() > 0.25  # x drifts under the bias as before
+    assert err[:, 2].abs().max() < 0.05  # z stays on the barometer
