@@ -1,0 +1,76 @@
+# Route Follow for narrow pipes: the GPU server's first Route Follow training
+# (docs/gpu-server-plan.md, job "route_pipes"; docs/route-follow.md "Stress results").
+# The crashes left in 0.8 to 1.1 m pipes come from the estimate's jumps and dropouts: with a
+# perfect estimate nobody crashes there. So this recipe trains from scratch on the mix of
+# worlds with the tunnels weighted toward pipes (70 % tunnels, radius down to 0.8 m) and the
+# estimate's jumps and dropouts five times the tunnel defaults, as v10 and v17 did for
+# Structure Hold, so the policy meets a jump in a pipe often enough to learn to lean on the
+# rangefinders (on 70 % of the beams) when the estimate moves and the walls do not.
+# GPU-sized: 4096 drones, 1500 iterations a part, chained 3 times by the queue runner (each
+# part resumes the previous policy.pt), about 45 min a part at the mock's GPU speed; check the
+# smoke run's env_steps_per_s first and shorten `iterations` if a part would pass 1 h.
+# Scored on the pipes alone (eval.env) against both PD yardsticks; eval/configs/
+# route_follow_stress.yaml with this policy added judges the full set.
+#   python -m training.launch --config training/configs/route_follow_ppo_pipes.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/route_follow_ppo_pipes.yaml --device cuda
+name: route_follow_ppo_pipes
+entrypoint: training.train_route_ppo
+seed: 3
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  iterations: 1500
+  num_steps_per_env: 48
+  history: 3
+  sim: torch
+  save_interval: 100
+  resume: null  # part 2 and later: the queue sets params.resume to the previous part's policy.pt
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    route:
+      tunnel_prob: 0.7  # pipes are the hard world; corridors keep the mix honest
+      tunnel_radius_m: [0.8, 2.0]  # down to the narrow pipe (props 0.4 m from the wall)
+      arch_prob: 0.4  # of the corridors
+      pinch_prob: 0.25
+      pinch_frac: [0.7, 0.9]
+      branches: 2
+      branch_prob: 0.5
+      climb_deg: [-20.0, 20.0]
+    estimate:
+      jump_rate_hz: 0.1  # five times the tunnel default: a 0.2 to 1 m jump about every 10 s
+      jump_min_m: 0.2
+      jump_max_m: 1.0
+      dropout_rate_hz: 0.1  # and a 1 to 3 s loss about every 10 s
+      dropout_min_s: 1.0
+      dropout_max_s: 3.0
+    ranges:
+      present_prob: 0.7
+      outlier_prob: 0.01
+  eval:
+    num_envs: 256
+    episodes: 1
+    env:
+      route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}  # the stress set's pipe_nominal
+      estimate: {jump_rate_hz: 0.02, dropout_rate_hz: 0.02}  # at the tunnel defaults
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  resume: null
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
+    route: {tunnel_prob: 0.7, tunnel_radius_m: [0.8, 2.0], arch_prob: 0.4, pinch_prob: 0.25,
+            pinch_frac: [0.7, 0.9], branches: 2, branch_prob: 0.5, climb_deg: [-20.0, 20.0]}
+    estimate: {jump_rate_hz: 0.1, jump_min_m: 0.2, jump_max_m: 1.0, dropout_rate_hz: 0.1,
+               dropout_min_s: 1.0, dropout_max_s: 3.0}
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  eval:
+    num_envs: 8
+    episodes: 1
+    env: {}

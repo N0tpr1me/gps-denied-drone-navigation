@@ -9,8 +9,13 @@ What it does, in order:
 2. Refuses more than 1 GPU, or an expected run over 1 hour, without ``--approved``.
 3. With ``--device cuda``, reads ``nvidia-smi`` and refuses unless enough GPUs are free
    (little memory used, low utilisation, no compute processes). ``--device cpu`` skips this.
+   ``--gpu N`` pins the run to GPU N instead (still refused if N is busy); the queue runner
+   (``training/queue.py``) uses it so two runs started together never pick the same card.
 4. Refuses a real (non-smoke) run on a dirty git tree unless ``--allow-dirty``, because the
-   log line must name the code that ran.
+   log line must name the code that ran. Lines appended to ``experiments/LOG.md`` do not
+   count: every real run adds one, and a chain of runs must not refuse its own second part.
+   ``--set params.KEY=VALUE`` (or ``--set seed=N``) overrides one value, parsed as YAML,
+   after the smoke block; the overrides are written into ``config.yaml`` and the log line.
    ``--sim torch|isaac`` overrides the config's ``params.sim`` (refused for a config that
    does not choose a simulator, and Isaac with ``--device cpu``, since Isaac Sim needs the GPU).
 5. Creates ``runs/<time>_<name>_s<seed>_<commit>[-dirty][-smoke]/`` with the resolved
@@ -140,6 +145,27 @@ def pick_free_gpus(gpus: list[Gpu], count: int) -> list[Gpu]:
     return free[:count]
 
 
+def pin_gpus(gpus: list[Gpu], wanted: str, count: int) -> list[Gpu]:
+    """``--gpu 2`` (or ``2,3``): exactly those GPUs, each of which must be free."""
+    try:
+        indices = [int(x) for x in wanted.split(",") if x.strip()]
+    except ValueError as e:
+        raise Refused(f"--gpu {wanted!r}: expected GPU indices like 2 or 2,3") from e
+    if len(indices) != count:
+        raise Refused(f"--gpu {wanted}: the config asks for {count} GPU(s)")
+    by_index = {g.index: g for g in gpus}
+    chosen = []
+    for i in indices:
+        g = by_index.get(i)
+        if g is None:
+            raise Refused(f"--gpu {i}: no such GPU", EXIT_NO_GPU)
+        if not g.free:
+            raise Refused(f"--gpu {i}: busy ({g.memory_used_mib} MiB used, "
+                          f"{g.utilisation_pct}% util, {g.busy_processes} processes)", EXIT_NO_GPU)
+        chosen.append(g)
+    return chosen
+
+
 # ---------------------------------------------------------------- config and rules
 
 
@@ -173,6 +199,32 @@ def apply_sim(cfg: dict[str, Any], sim: str | None, device: str) -> None:
     cfg["params"]["sim"] = sim
 
 
+def apply_overrides(cfg: dict[str, Any], overrides: list[str]) -> list[str]:
+    """``--set``: ``params.a.b=VALUE`` or ``seed=N``, the value parsed as YAML. Only params and
+    the seed can change, so the hour and GPU rules always read the committed config."""
+    applied = []
+    for item in overrides:
+        key, sep, raw = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise Refused(f"--set {item!r}: expected KEY=VALUE")
+        value = yaml.safe_load(raw) if raw.strip() else None
+        if key == "seed":
+            cfg["seed"] = int(value)
+        elif key.startswith("params.") and len(key) > len("params."):
+            node = cfg["params"]
+            *parents, leaf = key.split(".")[1:]
+            for name in parents:
+                if not isinstance(node.get(name), dict):
+                    node[name] = {}
+                node = node[name]
+            node[leaf] = value
+        else:
+            raise Refused(f"--set {key}: only params.* and seed can be overridden")
+        applied.append(f"{key}={raw.strip()}")
+    return applied
+
+
 def check_rules(cfg: dict[str, Any], *, device: str, smoke: bool, approved: bool) -> None:
     gpus = int(cfg["gpus"]) if device == "cuda" else 0
     if smoke and gpus > 1:
@@ -200,6 +252,22 @@ def timeout_seconds(cfg: dict[str, Any], smoke: bool) -> float:
 # ---------------------------------------------------------------- git and run folder
 
 
+# Real runs append to it, so a tree dirty only there still runs the committed code.
+APPEND_ONLY_PATHS = ("experiments/LOG.md",)
+
+
+def is_dirty(porcelain: str) -> bool:
+    """True when ``git status --porcelain`` shows anything but appended log lines."""
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        status, path = line[:2], line[3:].strip()
+        if status.strip() == "M" and path in APPEND_ONLY_PATHS:
+            continue
+        return True
+    return False
+
+
 def git_state(repo: Path = REPO_ROOT) -> tuple[str, bool]:
     try:
         commit = subprocess.run(
@@ -210,7 +278,7 @@ def git_state(repo: Path = REPO_ROOT) -> tuple[str, bool]:
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return "nogit", True
-    return commit, bool(status.strip())
+    return commit, is_dirty(status)
 
 
 def make_run_dir(runs_root: Path, cfg: dict[str, Any], commit: str, dirty: bool, smoke: bool,
@@ -278,7 +346,7 @@ def format_headline(headline: dict[str, Any] | None) -> str:
 
 def append_log_line(log_path: Path, *, when: dt.datetime, run_dir: Path, commit: str,
                     dirty: bool, config_path: Path, device: str, summary: dict[str, Any],
-                    sim: str | None = None) -> None:
+                    sim: str | None = None, overrides: list[str] | None = None) -> None:
     def cell(text: str) -> str:
         return str(text).replace("|", "/").replace("\n", " ")
 
@@ -290,7 +358,8 @@ def append_log_line(log_path: Path, *, when: dt.datetime, run_dir: Path, commit:
         when.strftime("%Y-%m-%d %H:%M"),
         f"`{run_dir.name}`",
         f"`{commit[:7]}`" + (" (dirty)" if dirty else ""),
-        f"`{config_path.as_posix()}`" + (f" --sim {sim}" if sim else ""),
+        f"`{config_path.as_posix()}`" + (f" --sim {sim}" if sim else "")
+        + "".join(f" --set {o}" for o in overrides or []),
         device,
         status.upper() if status != "ok" else "ok",
         result,
@@ -307,6 +376,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
     p.add_argument("--sim", choices=SIMS, default=None,
                    help="simulator backend, overriding the config's params.sim")
+    p.add_argument("--gpu", default=None,
+                   help="pin to these GPU indices (comma list, one per config gpus) if free")
+    p.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE",
+                   help="override params.KEY (dotted) or seed, value parsed as YAML; repeatable")
     p.add_argument("--approved", action="store_true",
                    help="Zain has agreed to a run over 1 hour or on more than 1 GPU")
     p.add_argument("--allow-dirty", action="store_true",
@@ -323,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = resolve_config(load_yaml(args.config), args.smoke)
         apply_sim(cfg, args.sim, args.device)
+        overrides = apply_overrides(cfg, args.overrides)
         check_rules(cfg, device=args.device, smoke=args.smoke, approved=args.approved)
         commit, dirty = git_state()
         if dirty and not args.smoke and not args.allow_dirty:
@@ -332,7 +406,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         env = dict(os.environ)
         if args.device == "cuda":
-            chosen = pick_free_gpus(query_gpus(args.nvidia_smi), int(cfg["gpus"]))
+            gpus = query_gpus(args.nvidia_smi)
+            chosen = (pin_gpus(gpus, args.gpu, int(cfg["gpus"])) if args.gpu is not None
+                      else pick_free_gpus(gpus, int(cfg["gpus"])))
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g.index) for g in chosen)
         else:
             env["CUDA_VISIBLE_DEVICES"] = ""
@@ -353,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         "smoke": args.smoke,
         "device": args.device,
         "cuda_visible_devices": env["CUDA_VISIBLE_DEVICES"],
+        "overrides": overrides,
         "started_utc": started.isoformat(timespec="seconds"),
         "python": sys.version.split()[0],
     }
@@ -388,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.smoke:
         append_log_line(args.log, when=started, run_dir=run_dir, commit=commit, dirty=dirty,
                         config_path=args.config, device=args.device, summary=summary,
-                        sim=args.sim)
+                        sim=args.sim, overrides=overrides)
     print(f"launch: {status} in {duration} s -> {run_dir / 'summary.json'}", flush=True)
     return EXIT_OK if status == "ok" else EXIT_FAILED
 

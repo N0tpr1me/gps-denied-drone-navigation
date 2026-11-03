@@ -225,3 +225,44 @@ def test_isaac_needs_cuda(tmp_path, dirs):
     cfg = write_config(tmp_path, params={"mode": "ok", "sim": "torch"})
     assert run(cfg, dirs, "--device", "cpu", "--smoke", "--sim", "isaac") == launch.EXIT_REFUSED
     assert not dirs["runs"].exists()
+
+
+# ---------------------------------------------------------------- --gpu, --set, LOG.md lines
+
+
+def test_gpu_pins_the_named_gpu_only_when_free(tmp_path, dirs):
+    cfg = write_config(tmp_path)
+    smi = fake_nvidia_smi(tmp_path, GPU_ONE_BUSY)
+    assert run(cfg, dirs, "--device", "cuda", "--nvidia-smi", smi, "--smoke", "--gpu", "0") == 3
+    assert not dirs["runs"].exists()
+    assert run(cfg, dirs, "--device", "cuda", "--nvidia-smi", smi, "--smoke", "--gpu", "1") == 0
+    resolved = yaml.safe_load((only_run_dir(dirs) / "config.yaml").read_text())
+    assert resolved["_run"]["cuda_visible_devices"] == "1"
+    assert run(cfg, dirs, "--device", "cuda", "--nvidia-smi", smi, "--smoke", "--gpu", "7") == 3
+    assert run(cfg, dirs, "--device", "cuda", "--nvidia-smi", smi, "--smoke", "--gpu", "0,1") == 2
+
+
+def test_set_overrides_params_and_seed_and_shows_in_the_log(tmp_path, dirs, monkeypatch):
+    monkeypatch.setattr(launch, "git_state", lambda: ("abc1234def", False))
+    cfg = write_config(tmp_path, params={"mode": "ok", "env": {"a": 1, "b": 2}})
+    assert run(cfg, dirs, "--device", "cpu", "--set", "params.env.a=[1, 2]",
+               "--set", "params.new.deep=null", "--set", "seed=11") == 0
+    run_dir = only_run_dir(dirs)
+    assert "_s11_" in run_dir.name
+    resolved = yaml.safe_load((run_dir / "config.yaml").read_text())
+    assert resolved["params"]["env"] == {"a": [1, 2], "b": 2}
+    assert resolved["params"]["new"] == {"deep": None} and resolved["seed"] == 11
+    assert resolved["_run"]["overrides"] == ["params.env.a=[1, 2]", "params.new.deep=null",
+                                            "seed=11"]
+    assert "--set params.env.a=[1, 2]" in dirs["log"].read_text().splitlines()[-1]
+    # Only params and the seed: the hour and GPU rules always read the committed config.
+    assert run(cfg, dirs, "--device", "cpu", "--smoke", "--set", "expected_hours=0.1") == 2
+    assert run(cfg, dirs, "--device", "cpu", "--smoke", "--set", "nonsense") == 2
+
+
+def test_appended_log_lines_do_not_make_the_tree_dirty():
+    assert not launch.is_dirty("")
+    assert not launch.is_dirty(" M experiments/LOG.md\n")
+    assert launch.is_dirty(" M experiments/LOG.md\n M training/launch.py\n")
+    assert launch.is_dirty("?? experiments/LOG.md\n")
+    assert launch.is_dirty("A  experiments/LOG.md\n")

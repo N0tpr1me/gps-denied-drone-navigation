@@ -85,6 +85,14 @@ safe. `--no-isaac` skips the 25 GB Isaac Lab pull.
 If the Isaac Lab pull says "unauthorized", make a free NVIDIA NGC account and run
 `docker login nvcr.io` (user `$oauthtoken`, password your NGC API key), then re-run.
 
+## 3b. Then: the first week's queue
+
+`docs/gpu-server-plan.md` is what runs next, in order: `python -m training.queue
+training/queues/server_week1.yaml --dry-run` prints the plan for the GPUs it finds,
+`--smoke` runs every job's smoke version in a few minutes, and the plain command runs the
+queue, every free GPU busy and the SITL flights on the other cores. The page lists the few
+jobs that need Zain's yes (`--approved`) and the go/no-go check for each result.
+
 ## 4. Running the benchmark on the server
 
 The same commands as on the Mac, plus `--jobs auto`:
