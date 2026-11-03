@@ -1638,5 +1638,8 @@ v22's 0.195 → 0.243 m in Gazebo above, and the small height error EKF2 actuall
 the barometer says the height source is not what moved it. That leaves the other thing that
 changed at once, the image (Mac arm64 and the OSRF Gazebo base before, cloud x86_64 and
 PX4's Gazebo base now): one v22 batch on the cloud image with vision height would settle
-it, when the Gazebo flights move to the GPU server. The next candidate still trains with
-`height_source: baro` so that it sees the benchmark's height behaviour (Proposed row).
+it, when the Gazebo flights move to the GPU server. Since 2026-11-03 (Decided, Zain) the
+`gz_x500_sitl` airframe fuses on the barometer, so the release check, training and Route
+Follow see the benchmark's height behaviour; the next candidate trains on it. The Gate 1
+configs keep their own vision-height fusion block (`gate1_x500_ekf_baro_v22.yaml` is the
+barometer variant), so the Gate 1 verdicts above are unchanged.

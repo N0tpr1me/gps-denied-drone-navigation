@@ -134,3 +134,6 @@ against -47 %, stress 13/13) and a little without one (check ratio 0.95; Gate 1 
 header stays v22's (`HAS_WALL_RANGE` false), and v24 needs a Gazebo re-fly with
 `--rangefinder` on the GPU server, beating v22 there, before it can be. To fly it, generate
 the header from it (`sim2real/px4/README.md`); the module then reads the range on its own.
+The numbers above are on vision height, which `gz_x500_sitl` fused until 2026-11-03; the
+check now runs on barometer height (`docs/gazebo_check.md` "Policies judged"), where the
+server's `v24_check_range` job re-scores v24 against v22 before the Gazebo re-fly.
