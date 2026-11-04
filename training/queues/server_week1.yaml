@@ -99,6 +99,26 @@ jobs:
     enabled: false
     why: "only if v22 loses to tuned PX4 at 10 or 12 m/s in Gazebo (gz_wind12_*): v22 continued on 6 to 12 m/s winds"
 
+  # ---------------------------------------------------------------- GPU lane 2b: surface passes
+  # The 5 m passes along the wall (docs/surface-passes.md): v22 continued on a moving hold
+  # point, two parts under the hour each, then judged Gate 1 style against the PD and v22.
+  - id: hold_pass
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass.yaml
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "surface passes, 4096 drones, 2 parts of 1200 iterations from v22; beat the PD on passes in training's eval"
+
+  - id: hold_pass_gate
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_pass.yaml
+    set:
+      params.policies.pass: "{run:hold_pass}/policy.onnx"
+    after: [hold_pass]
+    hours: 0.6
+    why: "Gate 1 style on 7 pass cells (held-out seeds): go/no-go is a PASS against the PD and a lower p95 than v22 in every cell"
+
   # ---------------------------------------------------------------- GPU lane 3: the v24 pre-checks, re-run on the server
   - id: v24_check_range
     gpu: true
