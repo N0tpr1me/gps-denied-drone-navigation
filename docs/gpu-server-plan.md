@@ -20,11 +20,9 @@ AMD Threadripper Pro. Nothing below depends on the exact count: the queue fills 
 | 10 to 12 m/s wind (`docs/market-research.md` row 15) | Gazebo cells at datasheet winds, 16 flights per controller; the cloud flies one or two at a time |
 | Bigger Gazebo batches, Isaac-trained policies, seed sweeps | Each needs a few GPU-hours or tens of CPU-cores for an hour; the Mac and the cloud each managed one such job a day |
 
-Not on the server, and not in the queue: the 5 m surface passes. They are in the product's
-Decided row but not in the env yet (nothing in `envs/structure_hold` moves the hold point
-along the wall), so they need a week of env, reward and yardstick work in the cloud first;
-`docs/market-research.md` row 12 sizes it at 3 to 6 weeks. The training that follows will be
-the same shape as `route_pipes` below and slots into the queue file when it exists.
+The 5 m surface passes (`docs/surface-passes.md`) joined the queue on 2026-11-04: the env,
+the PD yardstick and a Gate 1 style scorer were built in the cloud, and the training is the
+same shape as `route_pipes` below (`hold_pass`, then `hold_pass_gate`).
 
 ## How the queue works
 
@@ -74,6 +72,7 @@ drones. The first smoke runs on the server (`--smoke`, the `env_steps_per_s` lin
 | 3 | `isaac_parity`: `training/isaac_parity.sh` | GPU 0 | 45 min | `docs/isaac-lab.md` steps 3 to 9 in one container: repo tests in Isaac's Python with no Isaac skips, `parity: PASS`, v22 recipe smoke on both backends with steps/s, v22 scored on Isaac within the mock's 0.20 to 0.21 m p95 and under 1 % crashes. **Go/no-go for M3.** A GPU without RT cores or a parity FAIL stops the Isaac lane; the decided fallback is the mock on the GPU, which the other lanes already use |
 | 4 | `route_pipes`, `route_pipes_s4`, `route_pipes_s5` | GPU 1, 2, 3 | 3 x 45 min each | Route Follow from scratch on the mix of worlds weighted to pipes (70 % tunnels, radius 0.8 to 2.0 m) with the estimate's jumps and dropouts five times the tunnel defaults, 4096 drones, three seeds because PPO moves more between seeds than between recipes. Each part's `summary.json` compares the policy with both PD yardsticks on the pipes (`pipe_nominal`) |
 | 5 | `hold_wind_check`: `eval/configs/gazebo_check_wind12.yaml` | first free GPU | 30 min | v22 and v24 in the mock at 8, 10 and 12 m/s into the wall, with and without the near-wall flow terms, v22 the reference. A table for v22 and a pass/fail for v24 at high wind. Decides whether `hold_wind_finetune` (below, off) is worth switching on before the Gazebo cells even fly |
+| 5b | `hold_pass`: `training/configs/structure_hold_ppo_pass.yaml`, chained twice | first free GPU | 2 x 45 min | v22 continued on surface passes (70 % of episodes: 3 to 6 m along or up the wall at 0.2 to 1 m/s, up to three raster legs; 30 % plain holds), 4096 drones, same 21 inputs. Each part's `summary.json` compares the policy with the PD on 0.5 m/s passes |
 | 6 | `v24_check_range`: `eval/configs/gazebo_check_v24_range.yaml` | first free GPU | 45 min | The pre-re-fly gate for v24 on the server's own numbers; must pass against v22 as it did on the cloud (p95 ratio 0.77, 1.5 cm lift, `docs/wall-range.md`); those numbers were on vision height and the check fuses on the barometer since 2026-11-03, so expect close, not identical, numbers, and the lift rule is soft (under 5 cm passes) since the same day. A different answer means the GPU build differs from the CPU one, which `v22_eval_mock_gpu` then pins down |
 | 7 | `v22_eval_mock_gpu`: `structure_hold_eval_v22.yaml` | first free GPU | 10 min | v22 scored on the mock on the GPU: p95 0.211 / 0.206 / 0.202 m, crash 0 / 0.4 / 0 %, the same numbers as the cloud CPU to a few mm, or the torch build is suspect. Also the reference Isaac's step 9 is held to |
 
@@ -105,6 +104,7 @@ the wind evidence are all in `experiments/LOG.md`.
 | --- | --- | --- | --- |
 | `isaac_train_v22`: v22's recipe on Isaac Lab (`--set params.sim=isaac`) | GPU 0 | 45 min | After `isaac_parity` passes, automatically. The M3 training; the policy then takes `gazebo_check_v24_range.yaml`'s place in a copy of that config and a Gazebo re-fly like any candidate (`gz_isaac_policy`, off until then) |
 | `route_pipes_stress`: the 13-cell stress table with the three pipe policies | first free GPU | 25 min | After the three chains finish, automatically. **Go/no-go for the pipes work:** the best seed has fewer narrow-pipe crashes than v0's 11 % and still beats both PD yardsticks on every cell; then it is the Route Follow candidate for Gazebo tunnel worlds (not built yet) |
+| `hold_pass_gate`: `eval/configs/gate1_x500_ekf_pass.yaml` with the pass policy | first free GPU | 35 min | After `hold_pass`, automatically. **Go/no-go for passes:** PASS against the PD on the 7 held-out pass cells and a lower p95 than v22 (scored beside it) in every cell; then the module work (a path generator, `docs/surface-passes.md` "Not done yet") and Gazebo pass cells against tuned PX4 |
 | `hold_wind_finetune`: `structure_hold_ppo_v26_wind.yaml` | first free GPU | 50 min | By hand, `enabled: true`, only if v22 loses at 10 or 12 m/s in Gazebo. v22 continued on 6 to 12 m/s winds blowing within 60 degrees of the wall, same 21 inputs so the module header takes it unchanged; then the usual check and re-fly |
 | `gz_isaac_policy` | CPU | ~1 h | By hand, after `isaac_train_v22` passes its mock check: `gz_v24_image` and `gz_v24_refly` with its run folder |
 
@@ -120,7 +120,8 @@ the wind evidence are all in `experiments/LOG.md`.
   mock score is seed luck; today nobody knows.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
-- The 5 m surface passes once the env has them (see above).
+- If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
+  same moving setpoint, the pass's real yardstick (`docs/surface-passes.md`).
 
 ## What needs Zain's yes, as one batch
 
@@ -149,6 +150,7 @@ v24 release, if its re-fly wins, is a separate decision card.
 | `gz_v22_baseline` | 40 % or more below tuned, 0 crashes | A regression on main since the Mac batches; bisect before any new policy flies |
 | `gz_v24_refly` vs `gz_v22_range` | v24 tighter on mean p95 and worst toward the wall, 0 crashes | v24 parked; the lift rule stands as the gate |
 | `route_pipes_stress` | Best seed: narrow-pipe crashes under 11 %, beats both PDs on all 13 cells | More jumps in training did not help; next try is a rangefinder-weighted reward, not more iterations |
+| `hold_pass_gate` | PASS against the PD on the pass cells, lower p95 than v22 in every cell | v22 as it is stays the pass controller to beat; look at the start and stop of each pass (a pass-velocity input is the next idea) |
 | `gz_wind12_v22` | Holds at 10 and 12 m/s with 0 crashes, tighter than tuned | Switch on `hold_wind_finetune` |
 
 ## Where the numbers go
