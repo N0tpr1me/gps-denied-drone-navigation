@@ -200,6 +200,21 @@ def test_smoke_runs_every_job_once_without_chains_or_logging(tmp_path):
     assert s["nosmoke"]["status"] == "skipped" and s["off"]["status"] == "skipped"
 
 
+def test_smoke_keeps_the_smoke_blocks_own_sizes(tmp_path):
+    cfg_path = tmp_path / "sized.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "name": "sized", "entrypoint": "training.tests.fake_entry", "seed": 3,
+        "expected_hours": 0.01, "gpus": 1, "params": {"mode": "ok", "num_envs": 128},
+        "smoke": {"num_envs": 8},
+    }))
+    job = queue.Job(id="big", launch=str(cfg_path),
+                    set={"params.num_envs": 2048, "params.only": ["a"]})
+    kw = dict(part=1, device="cpu", gpu=None, approved=False, resume=None)
+    assert "params.num_envs=2048" in queue.launch_command(job, smoke=False, **kw)
+    smoke = queue.launch_command(job, smoke=True, **kw)
+    assert "params.num_envs=2048" not in smoke and "params.only=[a]" in smoke
+
+
 def test_approval_gates_long_jobs(tmp_path):
     path = write_queue(tmp_path, [{"id": "long", "cmd": "true", "hours": 3.0}])
     assert run(path, tmp_path, "--device", "cpu") == 0
