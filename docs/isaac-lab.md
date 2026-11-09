@@ -350,8 +350,8 @@ both fixed here:
 (step 5) start the app, then about 100 s in PhysX reports `Fetching GPU Narrowphase failed!
 700` (CUDA illegal address), cannot recreate its CUDA context, and the run hangs with the
 GPU idle. Kit also warns that the IOMMU is enabled and the CPU governor is `powersave`;
-NVIDIA's Isaac Sim requirements list an enabled IOMMU as a known cause of GPU faults, and
-changing it is the admin's call (BIOS / kernel parameter), not ours. Next steps: run the
+Kit flags the IOMMU as a possible cause of GPU problems (not confirmed as the cause here),
+and changing it is the admin's call (BIOS / kernel parameter), not ours. Next steps: run the
 contract tests one at a time to find the first scene that crashes, try
 `SimulationCfg(device="cpu")` with GPU dynamics off explicitly, and ask the admin about
 the IOMMU. M3 stays open; the decided fallback (the mock on the GPU) is unaffected.
