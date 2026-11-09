@@ -1,3 +1,6 @@
+# PARKED (docs/baro-successor.md "Is it still needed?"): ready to run, but do not start it
+# unless Zain asks; the looser barometer holds it was written for were a scoring offset.
+#
 # v22's successor on barometer height (docs/baro-successor.md): v22 continued in the mock on
 # the height source the benchmark flies (EKF2_HGT_REF 0), two seeds on the 2 GPUs, then each
 # judged against v22 in the Gazebo-like check. Runs on its own or beside the other queues; it
@@ -41,7 +44,7 @@ jobs:
     set: {params.candidates.baro_s0: "{run:baro_s0}/policy.onnx"}
     after: [baro_s0]
     hours: 0.8
-    why: "baro_s0 against v22 on barometer height, 11 cells; go/no-go: beats v22 with every rule passed (p95 lower, lift, ring, fast ring, crashes, the three seed replays, re-engage, calm_clean and wind4_baro_rough within 0.02 m)"
+    why: "baro_s0 against v22 on barometer height, 10 cells; go/no-go: beats v22 with every rule passed (p95 lower, lift, ring, fast ring, crashes, the three seed replays, re-engage, calm_clean within 0.02 m)"
 
   - id: baro_check_s1
     gpu: true

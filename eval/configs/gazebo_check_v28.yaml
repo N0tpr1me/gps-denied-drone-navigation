@@ -6,18 +6,17 @@
 #   python -m training.launch --config eval/configs/gazebo_check_v28.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/gazebo_check_v28.yaml --device cuda \
 #       --set params.candidates.baro_s0=runs/<run>/policy.onnx
-# Two things differ from gazebo_check_v24.yaml. The barometer height is stated in base_env
-# (the gz_x500_sitl preset has it since 2026-11-03; stated so the preset cannot move this
-# check). And one cell is added, wind4_baro_rough: the barometer wandering four times as fast
-# as the two Gazebo hovers it was fitted on showed, kept out of the pooled cells so v22's
-# pooled numbers stay comparable with its earlier runs (0.176 m, docs/baseline.md).
+# One thing differs from gazebo_check_v24.yaml's cells and rules: the barometer height is
+# stated in base_env (the gz_x500_sitl preset has it since 2026-11-03; stated so the preset
+# cannot move this check). The barometer's walk and noise stay at their fit: the cloud's 48
+# barometer flights matched it (docs/baro-successor.md), so no rougher-barometer cell.
 # A candidate goes to the 8-seed cloud Gazebo re-fly against tuned PX4 only if it beats v22
 # here; nothing is released on this score (docs/gazebo_check.md, CLAUDE.md "Releasing a
 # policy").
 name: gazebo_check_v28
 entrypoint: eval.gazebo_check
 seed: 7001  # unused: the check's seeds are params.seeds
-expected_hours: 0.8  # two controllers (v22 and one candidate per queue job), 11 cells
+expected_hours: 0.8  # two controllers (v22 and one candidate per queue job), 10 cells
 gpus: 1
 params:
   controllers:
@@ -99,19 +98,6 @@ params:
       label: "8 m/s into the wall, vio_default"
       env: {disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
                           turb_sigma: 1.0}}
-    # The barometer wandering faster than its fit: 0.02 m/sqrt(s) (the fit: 0.002 to 0.007,
-    # default 0.005) and 0.05 m noise per sample (0.02), about 0.15 m of height error by the
-    # end of a 60 s hold, the size of the vertical drift v22's Gazebo holds showed (0.19 m,
-    # docs/baseline.md "What changed"). The fit is two tuned-PX4 hovers on one seed, and the
-    # benchmark's holds loosened on the barometer where the mock's did not, so a candidate
-    # trained on the fitted barometer must not lose to v22 on a rougher one. Not pooled; its
-    # p95 may be at most clean_p95_slack_m above v22's (wind4_baro_rough_p95_ok).
-    - name: wind4_baro_rough
-      label: "4 m/s, vio_default, the barometer wandering 4x its fit"
-      rough: false
-      env:
-        fusion: {baro_walk_m_per_sqrt_s: 0.02, baro_noise_m: 0.05}
-        disturbance: {mean_speed: 4.0, gust_speed: [1.0, 3.0], turb_sigma: 0.5}
     # Gazebo seeds 1 to 3 on vio_at_engage, replayed: the bridge's corruptor run offline with
     # the flight's seed (sim2real/estimate_bridge, engaged 28 s after its first sample) gives the whole
     # fault stream of the hold, the same for every controller on that seed: the position
