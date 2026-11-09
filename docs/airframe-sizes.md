@@ -3,9 +3,10 @@
 Item 4 of the GPU server plan for client needs: does one policy hold on drones of very
 different sizes, after an airframe fit (`docs/airframe-fit.md`) and the drone's own PX4
 autotune, without a retrain? In the mock, the released policy v22 already does on a 300 g
-quad and on the x500 with up to a 35 % payload: 41 to 53 % tighter than the cascaded PD with
+quad and on the x500 with up to a 35 % payload: 42 to 60 % tighter than the cascaded PD with
 no crashes (cloud CPU, 2026-11-09). It breaks at a 40 % payload, where the x500's hover sits
-at the module's 0.9 thrust clamp. The GPU server trains v27 on a wide airframe spread and
+at the module's 0.9 thrust clamp. A 25 % payload hover flown in Gazebo in the cloud confirmed
+the payload model (thrust 0.835 against 0.836 predicted). The GPU server trains v27 on a wide airframe spread and
 flies the payloads in Gazebo against tuned PX4 (`training/queues/airframe_sizes.yaml`).
 
 ## The airframes
@@ -17,9 +18,9 @@ differs.
 | Airframe | Mass | Thrust / weight | Hover command | Rate loop | Rotor lag | Wind push per kg | Where the numbers come from |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `gz_x500_sitl` | 2.06 kg | 1.69 | 0.73 | tuned x500 | 19 ms | 1.0 | x500 SDF, PX4 4001_gz_x500, `px4_tuned_v1.params` (`envs/structure_hold/airframes.py`) |
-| x500 + 25 % payload | 2.58 kg | 1.35 | 0.84 | same gains | 19 ms | 0.80 | `airframe_rand` mass x1.25, max thrust unchanged, inertia +7 % |
-| x500 + 35 % payload | 2.79 kg | 1.25 | 0.88 | same gains | 19 ms | 0.74 | mass x1.35, inertia +10 % |
-| x500 + 50 % payload | 3.10 kg | 1.13 | 0.93 | same gains | 19 ms | 0.67 | mass x1.5, inertia +15 % |
+| x500 + 25 % payload | 2.58 kg | 1.35 | 0.84 | same gains | 19 ms | 0.80 | `airframe_rand` mass x1.25, max thrust unchanged, inertia +7 %, hover estimate -4 % |
+| x500 + 35 % payload | 2.79 kg | 1.25 | 0.88 | same gains | 19 ms | 0.74 | mass x1.35, inertia +10 %, hover estimate -9 % |
+| x500 + 50 % payload | 3.10 kg | 1.13 | 0.93 | same gains | 19 ms | 0.67 | mass x1.5, inertia +15 %, hover estimate -14 % |
 | `small_300g` | 0.285 kg | 2.60 | 0.55 | the x500's loop gain | 12 ms | 1.58 | ModalAI Starling 2 datasheet and forum (below); the rest scaled |
 
 **The 300 g class.** ModalAI's Starling 2 (the VOXL 2 Mini size, a common inspection
@@ -38,6 +39,13 @@ closed-loop rise time (`MC_AT_RISE_TIME`) on any airframe. So the preset scales 
 rate gains to keep the x500's loop gain (rate P times torque per unit over inertia); a roll
 step reaches 63 % in 60 ms on both (`test_small_300g_rate_loop_answers_like_the_x500s`).
 
+**PX4's hover estimate stops at 0.8.** The 25 % payload hover in Gazebo (run
+`20261109-164535_sitl_wind_wall1m_calm_0ms_payload25_cd2d28b`, stock PX4, calm) commanded a
+median thrust of 0.835, against 0.836 predicted and about 0.73 without a payload, but PX4
+v1.17's hover thrust estimate stayed at 0.80, the top of `MPC_THR_HOVER`'s range. The module
+maps the policy's thrust through that estimate, so on a heavy x500 its hover reference reads
+low: by 4, 9 and 14 % at 25, 35 and 50 %. The payload cells carry that as a hover-thrust error.
+
 **Why thrust needs nothing.** The module maps the policy's thrust through the drone's own
 hover thrust (`thrust_n / (MASS_KG g) x hover_thrust`), so the policy asks for thrust as a
 share of weight. A policy trained on the x500 flies the others through that mapping
@@ -49,15 +57,16 @@ times weight, and never above a normalised 0.9.
 `eval/configs/airframe_sizes.yaml`: v22 against the cascaded PD on the same episodes, 3 seeds
 x 512 episodes per cell, wind 0 to 8 m/s drawn per episode (Gate 1's gust schedule and
 estimate), hold 1 to 2 m. Runs `20261109-160318_airframe_sizes_s7101_e3e006e` and
-`20261109-161617_airframe_sizes_s7101_b8120f0` (the 35 and 40 % cells; `experiments/LOG.md`).
+`20261109-164704_airframe_sizes_s7101_aeae6b1` (the payload cells with the hover estimate's
+cap; an earlier run without the cap, `20261109-161617`, gave the same edge; `experiments/LOG.md`).
 p95 is the 95th-percentile hold error on the true position.
 
 | Cell | v22 p95 | PD p95 | v22 vs PD | v22 crash | PD crash |
 | --- | --- | --- | --- | --- | --- |
 | x500 | 0.180 m | 0.320 m | -44 % | 0.0 % | 1.1 % |
-| x500 + 25 % payload | 0.178 m | 0.313 m | -43 % | 0.0 % | 1.0 % |
-| x500 + 35 % payload | 0.181 m | 0.307 m | -41 % | 0.0 % | 1.2 % |
-| x500 + 40 % payload | 0.432 m | 0.320 m | +35 % | 2.7 % | 1.2 % |
+| x500 + 25 % payload | 0.177 m | 0.352 m | -50 % | 0.0 % | 1.1 % |
+| x500 + 35 % payload | 0.187 m | 0.461 m | -60 % | 0.0 % | 1.1 % |
+| x500 + 40 % payload | 0.662 m | 0.854 m | -23 % | 5.8 % | 2.8 % |
 | x500 + 50 % payload | 1.56 m | 1.54 m | (both sink) | 100 % | 100 % |
 | 300 g class | 0.218 m | 0.379 m | -42 % | 0.0 % | 0.7 % |
 | 300 g class, 8 m/s | 0.259 m | 0.481 m | -46 % | 0.0 % | 0.8 % |
@@ -68,11 +77,11 @@ What it says:
 - **Size is not the problem.** v22 never trained on anything like a 300 g quad, and holds it
   4 cm looser than the x500 (0.218 against 0.180 m), mostly from the harder wind per
   kilogram (0.259 m at 8 m/s); the PD loses 6 cm there.
-- **Payload is limited by thrust headroom, not by the policy.** Up to 35 % the hold does not
-  move. At 40 % the x500's hover command (0.89) sits just under the module's 0.9 clamp, so
-  there is no thrust left to climb out of a gust and v22 sags (the PD, which commands thrust
-  differently, holds a little longer). At 50 % the hover needs 0.93: neither can hover and
-  both sink. The Gazebo x500 has a low thrust/weight (1.69); a real X500 V2 or a partner's
+- **Payload is limited by thrust headroom, not by the policy.** Up to 35 % v22's hold does
+  not move (0.18 to 0.19 m), while the low hover estimate costs the PD 3 to 14 cm. At 40 %
+  the x500's hover command (0.89) sits just under the module's 0.9 clamp, so there is no
+  thrust left to climb out of a gust: both sag and crash more (v22 5.8 %). At 50 % the hover
+  needs 0.93: neither can hover and both sink. The Gazebo x500 has a low thrust/weight (1.69); a real X500 V2 or a partner's
   drone has more. The rule for the datasheet: **hover thrust at or below 0.88 normalised
   (thrust/weight 1.25 or more)**. That is a property of the 0.9 clamp, not of the policy;
   lifting the clamp is a module change with its own safety review, not part of this work.
