@@ -123,6 +123,133 @@ What it says:
 - The mock says nothing yet about tuned PX4, whose position loop is looser again; the Gazebo
   batches (`gz_heading_tuned`, `gz_heading_v22`) are the comparison that counts.
 
+## v22 and tuned PX4 in Gazebo (2026-11-09, cloud)
+
+The queue's three CPU-lane jobs (`gz_heading_tuned`, `gz_heading_v22`, `gz_heading_v22_range`),
+flown in a cloud container one flight at a time (`--jobs 1`, 16-flight batches in seed halves,
+pooled with `run_baseline --pool`), 80 flights. Gazebo's real-time factor, sampled every 15 s,
+was 0.97 to 1.00 over 465 samples (mean 1.00; one sample at each of 12 flight starts, before
+the simulation runs, left out). The stock runner's own finer sampling caught two tuned drift
+flights dipping to 0.61 and 0.84; both were flown again at 1.00 and the re-flies count. Wind
+into the wall, 1 m, 8 seeds per cell, `px4_tuned_v2.params` with `vision_yaw.params` over it.
+Yardstick: tuned PX4 in Position mode on the same profile. "Held" is a full 60 s scored hold
+with no wall contact. The heading error is what EKF2 really had (EKF2's heading minus Gazebo's,
+from each ulog).
+
+| Batch | Held | Not held | p95 of the holds (mean / worst) | Heading error in the holds |
+| --- | --- | --- | --- | --- |
+| tuned, drift to 30 deg, 4 m/s | 3 of 8 | 5 wall contact | 0.59 / 0.63 m | 0 up to 18 to 22 deg |
+| **v22**, drift to 30 deg, 4 m/s | **8 of 8** | 0 | 0.23 / 0.32 m | 0 up to 29 to 30 deg |
+| tuned, 30 deg from takeoff, 4 m/s | 3 of 8 | 5 wall contact | 0.61 / 0.68 m | 14 deg mean |
+| tuned, 30 deg from takeoff, 8 m/s | 3 of 8 | 5 wall contact | 0.53 / 0.59 m | 14 deg mean |
+| **v22**, 30 deg from takeoff, 4 m/s | 5 of 8 | 2 out of control before engage, 1 watchdog trip | 0.32 / 0.50 m | 22 deg mean |
+| **v22**, 30 deg from takeoff, 8 m/s | 4 of 8 | 3 out of control before engage, 1 watchdog trip | 0.48 / 0.95 m | 22 deg mean |
+| v22 + rangefinder, 30 deg, 4 m/s | 5 of 8 | 2 out of control before engage, 1 watchdog trip | 0.42 / 0.70 m | 22 deg mean |
+| v22 + rangefinder, 30 deg, 8 m/s | 5 of 8 | 2 out of control before engage, 1 watchdog trip | 0.35 / 0.59 m | 22 deg mean |
+| tuned, no error (control) | 8 of 8 | 0 | 0.24 / 0.36 m | 0 |
+| **v22**, no error (control) | 8 of 8 | 0 | 0.23 / 0.34 m | 0 |
+
+What it says:
+
+- **The drift batch is the clean comparison, and v22 wins it.** Both controllers start on the
+  true heading and the error grows during the hold. v22 held all 8 flights at 0.23 m p95, the
+  same as its no-error control, while EKF2's heading went 29 to 30 deg wrong. Tuned PX4 hit the
+  wall in 5 of 8, and its three holds were 0.59 m against 0.24 m in its control.
+- **The 30 deg batches say less about v22 than their counts suggest**, because the hold runner
+  takes off and hovers in Position mode on the same wrong heading before it engages, and stock
+  PX4 is already circling by then. At engage the vehicle was moving at 0.6 to 6.0 m/s; in the
+  control and drift batches it is 0.02 to 0.08 m/s. Over the 32 v22 flights (the rangefinder
+  made no difference, so both batches together):
+  - 19 held. In 17 the vehicle was at 0.6 to 1.7 m/s at engage and v22 caught it. In 2 stock
+    PX4 had already carried it 2 to 4 m off and down to about 0.8 m height, and v22 held it
+    there, which is a full hold by the scorer but not the hold that was asked for.
+  - 9 were out of control before Structure Hold could do anything: 2 crashed before the
+    engage, and 7 were moving at 3.4 to 6.0 m/s when it came and the module handed back
+    within half a second.
+  - 4 are v22's own: engaged at 1.4 to 1.9 m/s, v22 tilted 34 to 36 deg to stop the vehicle and
+    the watchdog (`SH_WD_POS_ERR` or `SH_WD_TILT`) tripped 1.7 to 2.8 s later. Four other
+    flights engaged in that speed range and held, so the speed alone does not decide it.
+  - No flight touched the wall while Structure Hold was flying. After a handback the vehicle
+    is back with stock PX4 on the same wrong heading; one of those went on past the wall and
+    another came within 0.1 m of it.
+  - By seed against tuned PX4, without the rangefinder: of the 10 flights tuned PX4 crashed,
+    v22 held 4; of the 6 it held, v22 held 5 and lost one to a watchdog trip (8 m/s, seed 5).
+    With the rangefinder: 4 of the 10, and all 6.
+- **The rangefinder changes nothing here**: 10 of 16 held against 9 of 16, the same failure
+  kinds, holds within the seed spread. No hold drifted toward the wall, so the wall guard had
+  nothing to do.
+- **Gazebo's EKF2 does not keep a steady 30 deg.** While the bridge kept sending a vision yaw
+  30 deg off, EKF2's heading error over the holds averaged 22 deg in v22's flights and 14 deg
+  in tuned PX4's surviving ones, moving between about 0 and 30. The vision positions and
+  velocities arrive in the true frame and disagree with the turned heading whenever the
+  vehicle accelerates, which is the likely reason; a vehicle that moves more would then be
+  corrected more, as tuned PX4's was. This was looked at by hand in one flight only (EKF2's
+  heading stayed put while the vehicle yawed 20 deg, and its corrected yaw rate was about
+  2 deg/s off Gazebo's), so take the explanation as a guess. Either way these batches are
+  milder than the mock's `head_off30` cell, where the error is fixed and v22 crashed every
+  episode. Whether a compass-fused EKF2 next to real steel behaves like this is not shown.
+- So the mock's verdict (v22 more fragile than a loose loop) did not show up in Gazebo at the
+  error sizes EKF2 reached, and it is untested for a steady 30 deg and above, which Gazebo
+  did not produce. The server's heading candidates (`heading_check`) are still worth their GPU
+  hour, and a candidate flies these same batches (`gz_heading_candidate`) before any release.
+- The two controls agree (0.23 and 0.24 m): taking the heading from the vision yaw changes
+  neither controller by itself. They are not comparable to the `vio_at_*` benchmark, since the
+  field profiles turn the VIO's jumps and dropouts off.
+
+Two things these flights point at, neither done here: the 30 deg comparison would be fairer
+with the offset switched on at engage instead of at takeoff (a profile change), and the module
+has no check on how fast the vehicle is moving when it is asked to engage.
+
+Runs: `experiments/LOG.md` (2026-11-09, heading batches). Run folders stay in the cloud
+container (`runs/` is not committed).
+
+## Candidates trained in the cloud (2026-11-09)
+
+The GPU server was full, so `heading_s0` and `heading_s1` ran in the cloud container on 4 CPU
+cores with `structure_hold_ppo_heading_cloud.yaml` (the same recipe on 1024 drones, about
+25 min each), then `gazebo_check_heading_candidates.yaml` judged them against v22 (32 min).
+A third try, `heading_s1b`, continued `heading_s1` 400 iterations with the wrong heading on
+35 % of episodes instead of 70 %, to win back v22's tight hold on a true heading. Runs in
+`experiments/LOG.md`; yardstick v22 (the PD's numbers are in the table above).
+
+| Cell | v22 crash / p95 | `heading_s0` | `heading_s1` | `heading_s1b` |
+| --- | --- | --- | --- | --- |
+| `calm_clean` | 0 % / 0.055 m | 0 % / 0.067 m | 0 % / 0.081 m | 0 % / 0.068 m |
+| `head_none` (true heading) | 0 % / 0.173 m | 0 % / 0.231 m | 0 % / 0.237 m | 0 % / 0.193 m |
+| `head_off15` | 2.3 % / 0.186 m | 0 % / 0.236 m | 0 % / 0.242 m | 0 % / 0.195 m |
+| `head_off30` | 100 % / 1.12 m | 1.6 % / 0.228 m | 0 % / 0.243 m | 0 % / 0.198 m |
+| `head_off45` | 100 % / 1.20 m | 50.8 % / 0.482 m | 28.9 % / 0.314 m | 46.1 % / 0.434 m |
+| `head_drift` | 76.6 % / 0.581 m | 0.8 % / 0.233 m | 0 % / 0.251 m | 0 % / 0.197 m |
+| `head_steps` | 50.8 % / 0.400 m | 11.8 % / 0.252 m | 3.2 % / 0.273 m | 5.5 % / 0.206 m |
+| `head_off30_wind8` | 93.0 % / 0.943 m | 1.6 % / 0.218 m | 0.8 % / 0.226 m | 0 % / 0.192 m |
+| Verdict against v22 | reference | fails `head_none` slack | fails both true-heading cells | fails the fast ring |
+
+**No candidate passes, so none goes to Gazebo yet.** Training on a wrong heading works in
+the mock: every candidate holds through a fixed 30 degrees and the drift with almost no
+crashes, where v22 hits the wall. The price is paid when the compass is right. `heading_s0`
+and `heading_s1` hold about 35 % looser on a true heading (0.23 against 0.17 m), outside the
+check's 2 cm slack. `heading_s1b` wins most of that back (0.193 m, inside the slack) but works
+its rate commands harder: its 2.2 to 6 Hz roll and pitch rate content is 0.022 rad/s against
+v22's 0.018 pooled over the heading cells (0.022 against 0.015 on `head_none`, 0.014 against
+0.009 in calm air), just over the check's 25 % limit, and a fast ring is what made v18 ring in
+Gazebo (`docs/gazebo_check.md`). It is the trade the phase margin predicts: a loop that
+tolerates a turned frame gives up some tightness or some smoothness.
+
+Read with the Gazebo flights above, the case for a heading-trained release is weaker than the
+mock alone made it. In Gazebo v22 as released held all 8 drift flights at its no-error p95
+while EKF2's heading went 29 to 30 degrees wrong; the mock's `head_drift` cell, the same
+1 deg/s drift to 30 degrees, loses 77 % of v22's episodes. Why the mock is harsher is not
+known. The Gazebo drift spends about 10 s at 30 degrees against the mock's 20 s, but about
+three quarters of the mock's crashes come within those first 10 s, so the timing does not
+explain it. Until that gap is understood the mock's heading cells overstate the danger to v22,
+and the candidates buy robustness Gazebo has not shown v22 to lack, at a cost on the true
+heading that is certain. Nothing is released or flown from this.
+
+If a steady 30 degrees turns out to be a real case (the engage-time offset profile suggested
+above, or a partner's flight near steel), `heading_s1b` is the starting point: continue it
+with a heavier `action_band` weight to bring the fast ring back under the limit (one sub-hour
+part), then fly it on the heading batches.
+
 ## Server runs (`training/queues/heading_error.yaml`)
 
 | Job | What | Hours | Go / no-go |
@@ -139,8 +266,9 @@ At most two GPUs at once and every job under an hour, so nothing here needs a se
 ## What is not done
 
 - No module change. A heading check in the module (EKF2's heading against the rangefinder's
-  wall angle, or a yaw innovation trip) would be the classical answer; it waits until Gazebo
-  shows how far v22 and tuned PX4 go wrong.
+  wall angle, or a yaw innovation trip) would be the classical answer. In Gazebo (above) v22
+  held through a drift to 30 deg where tuned PX4 hit the wall, so it has not moved up; a
+  steady 30 deg and above is still open.
 - The compass itself is not simulated in Gazebo (the reasons above). A partner's flight next to
   real steel is the check that the vision-yaw stand-in moved EKF2 the way a compass does.
 - Steps of the compass are in the mock only.

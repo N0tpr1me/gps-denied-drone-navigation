@@ -38,6 +38,13 @@ seed meets the same failure at the same moment:
     The random draws come from the profile's seed (``FieldFaultInjector(seed=...)``); the
     rangefinder's from their own stream, so ``verify_trace``, which replays the estimate
     only, still matches.
+``runaway``
+    The VIO locks onto something that moves (rotor-blown dust grains, the docs/vio-render.md
+    finding: Basalt in heavy dust tracked the drifting grains and ran away by kilometres
+    without reporting a tracking loss). Its velocity error grows at ``accel_mps2`` along
+    ``direction`` for ``duration_s`` and the position integrates it, so the position and the
+    velocity it reports agree with each other and disagree with the IMU. After the window
+    the position error is held, as for ``drift``.
 
 Faults apply only once the bridge's anchor is set (``start``: from the first sample) and are
 timed from it, so they do not depend on how long PX4 took to take off. The corruptor runs
@@ -52,8 +59,9 @@ from typing import Any
 
 import numpy as np
 
-FIELD_FAULT_KINDS = ("reset_origin", "restart", "silence", "freeze", "drift", "degrade")
-_NEEDS_DURATION = ("restart", "silence", "freeze", "drift", "degrade")
+FIELD_FAULT_KINDS = ("reset_origin", "restart", "silence", "freeze", "drift", "degrade",
+                     "runaway")
+_NEEDS_DURATION = ("restart", "silence", "freeze", "drift", "degrade", "runaway")
 _DEGRADE_KEYS = ("ramp_s", "noise_m", "vel_noise_mps", "walk_mps", "loss_hz", "loss_s",
                  "range_noise_m", "range_loss_frac", "range_short_frac")
 _ESTIMATE_STREAM, _RANGE_STREAM = 0xD0, 0xD1  # degrade draws: separate streams per seed
@@ -65,6 +73,7 @@ class FieldFault:
     at_s: float  # seconds after the bridge's fault anchor
     duration_s: float = 0.0  # silence / freeze / drift length; restart: the gap before the snap
     rate_mps: float = 0.0  # drift speed
+    accel_mps2: float = 0.0  # runaway: how fast the VIO's velocity error grows
     direction: tuple[float, float, float] = (1.0, 0.0, 0.0)  # drift direction, ENU
     axes: str = "xyz"  # reset_origin / restart: the axes that snap back to the origin
     signal: bool = True  # reset_origin / restart: bump ODOMETRY reset_counter
@@ -91,6 +100,10 @@ class FieldFault:
             raise ValueError(f"{self.kind} needs duration_s > 0")
         if self.kind == "drift" and not self.rate_mps > 0:
             raise ValueError("drift needs rate_mps > 0")
+        if self.kind == "runaway" and not self.accel_mps2 > 0:
+            raise ValueError("runaway needs accel_mps2 > 0")
+        if self.kind != "runaway" and self.accel_mps2:
+            raise ValueError("accel_mps2 applies to runaway only")
         if len(self.direction) != 3 or not np.linalg.norm(self.direction) > 0:
             raise ValueError("direction must be a nonzero ENU 3-vector")
         if not self.axes or set(self.axes) - set("xyz"):
@@ -134,8 +147,8 @@ class FieldFault:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FieldFault:
         d = dict(d)
-        known = {"kind", "at_s", "duration_s", "rate_mps", "direction", "axes", "signal",
-                 *_DEGRADE_KEYS}
+        known = {"kind", "at_s", "duration_s", "rate_mps", "accel_mps2", "direction", "axes",
+                 "signal", *_DEGRADE_KEYS}
         unknown = set(d) - known
         if unknown:
             raise ValueError(f"unknown field fault keys: {sorted(unknown)}")
@@ -149,6 +162,8 @@ class FieldFault:
              "axes": self.axes, "signal": self.signal}
         if self.kind == "degrade":  # old profiles stay as they were
             d.update({k: getattr(self, k) for k in _DEGRADE_KEYS})
+        if self.kind == "runaway":
+            d["accel_mps2"] = self.accel_mps2
         return d
 
 
@@ -201,6 +216,13 @@ class FieldFaultInjector:
                 d = np.asarray(f.direction, dtype=np.float64)
                 pos = pos + d / np.linalg.norm(d) * f.rate_mps * min(t_rel - f.at_s,
                                                                      f.duration_s)
+            if f.kind == "runaway" and t_rel >= f.at_s:
+                d = np.asarray(f.direction, dtype=np.float64)
+                d = d / np.linalg.norm(d)
+                tau = min(t_rel - f.at_s, f.duration_s)
+                pos = pos + d * 0.5 * f.accel_mps2 * tau * tau
+                if f.active(t_rel):
+                    vel = vel + d * f.accel_mps2 * tau
             if f.kind == "degrade":
                 sev = f.severity(t_rel)
                 if sev > 0:
