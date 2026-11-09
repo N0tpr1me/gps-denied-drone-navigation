@@ -22,7 +22,7 @@ Observation (``num_obs`` = 23), everything the onboard module can know:
 | slice | what | units |
 | --- | --- | --- |
 | 0:3 | estimated position minus hold point, structure frame, clipped | m |
-| 3:6 | estimated velocity, structure frame | m/s |
+| 3:6 | estimated velocity minus the hold point's (0 unless on a pass), structure frame | m/s |
 | 6:9 | gravity direction in the body frame (attitude) | unit |
 | 9:11 | body x axis (heading) in the structure frame, x and y components | unit |
 | 11:14 | body rates / max_rate | - |
@@ -32,6 +32,12 @@ Observation (``num_obs`` = 23), everything the onboard module can know:
 | 20 | time since engage (episode start or re-engage) / ``engage_obs_cap_s``, capped at 1 | - |
 | 21 | wall range error: the hold point's wall distance minus the measured one, clipped | m |
 | 22 | wall range usable (1 while a fresh forward range reading counts, else 0) | - |
+
+With ``cfg.heading_error`` on (``envs/estimate/heading.py``), what the module knows of its own
+heading is off by ``delta``: rows 0:6 are written in the structure frame the module latched
+from that heading at engage (turned by ``delta`` then), and rows 9:11 come from the estimated
+attitude in that frame (turned by how far ``delta`` has moved since). ``believed_quat`` is
+that attitude, for controllers that steer the thrust axis with it (``baseline.py``).
 
 Policies up to v21 read the first 20 (``NUM_OBS_V1``); ``policy.json`` says how many a
 policy reads, and ``training/policy_io.py`` feeds it that many. The engage time is there
@@ -50,6 +56,12 @@ one torch generator (estimate corruption) and a second NumPy generator for the a
 constructor's ``seed``. The airframe draws having their own generator means a stressed
 airframe flies exactly the episodes the nominal one does.
 
+Surface passes (``cfg.surface_pass``, off by default, ``envs/structure_hold/passes.py``): the
+hold point moves along the wall at a fixed standoff. Position error, velocity input, reward and
+termination are all taken against the moving point, so a plain hold is a pass of length 0.
+``hold_vel`` is the hold point's velocity; ``step_hold`` the hold point that went with
+``step_pos``.
+
 ``term_reason`` holds, per env, why its last episode ended (``TERM_REASONS``), so a scorer can
 tell crashes apart after the env has already reset.
 """
@@ -65,10 +77,17 @@ import torch
 from envs.disturbance import sample_params
 from envs.disturbance import torch_adapter as wind
 from envs.estimate.ekf import TorchFusion
-from envs.estimate.torch_adapter import TorchEstimateCorruptor
+from envs.estimate.torch_adapter import TorchEstimateCorruptor, TorchHeadingError
 from envs.sims import QuadState, RatePid, make_sim
-from envs.sims.torch_quad import GRAVITY, quat_from_yaw, quat_rotate, quat_rotate_inverse
+from envs.sims.torch_quad import (
+    GRAVITY,
+    quat_from_yaw,
+    quat_mul,
+    quat_rotate,
+    quat_rotate_inverse,
+)
 from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.passes import PassPaths
 
 OBS = {
     "pos_err": slice(0, 3),
@@ -136,6 +155,11 @@ class StructureHoldEnv:
         # EKF2-like fusion of the corrupted fix with the IMU (cfg.fusion, off by default).
         self.fusion = (TorchFusion(cfg.fusion, n, cfg.dt, seed, dev, dt) if cfg.fusion.enabled
                        else None)
+        # Heading error (cfg.heading_error, off by default): the estimator's yaw minus the true
+        # yaw, and its value at the last engage, where the module latched its structure frame.
+        self.heading_err = (TorchHeadingError(cfg.heading_error, n, cfg.dt, seed, dev, dt)
+                            if cfg.heading_error.active else None)
+        self.heading_latch = torch.zeros(n, dtype=dt, device=dev)
         self.vision_offset = torch.tensor([0.0, 0.0, -cfg.vision_offset_down_m], dtype=dt,
                                           device=dev)
         self.wall_normal = torch.tensor(WALL_NORMAL_TOWARD, dtype=dt, device=dev)
@@ -218,6 +242,13 @@ class StructureHoldEnv:
         self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
         self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
         self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
+        # Surface passes (cfg.surface_pass): the paths, the hold point's velocity, and the
+        # pass's own clock (rsl_rl's random episode phase moves episode_time, and a pass must
+        # still start from its beginning). step_hold is the hold point step_pos went with.
+        self.passes = PassPaths(cfg.surface_pass, n, seed, dev, dt)
+        self.hold_vel = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.pass_time = torch.zeros(n, dtype=dt, device=dev)
+        self.step_hold = torch.zeros(n, 3, dtype=dt, device=dev)
         self.reset()
 
     # ------------------------------------------------------------ state helpers
@@ -226,6 +257,22 @@ class StructureHoldEnv:
     def state(self) -> QuadState:
         """The true state (for scoring and tests), not what the policy sees."""
         return self.sim.state
+
+    @property
+    def believed_quat(self) -> torch.Tensor:
+        """The attitude the module believes it has, in the structure frame it latched at
+        engage: the true one turned by how far the heading error has moved since. The true
+        attitude when there is no heading error."""
+        q = self.sim.state.quat
+        if self.heading_err is None:
+            return q
+        return quat_mul(quat_from_yaw(self.heading_err.delta - self.heading_latch), q)
+
+    def to_latched(self, v: torch.Tensor) -> torch.Tensor:
+        """World vectors (N, 3) in the structure frame the module latched at engage."""
+        if self.heading_err is None:
+            return v
+        return quat_rotate_inverse(quat_from_yaw(self.heading_latch), v)
 
     def clearance(self, pos: torch.Tensor | None = None) -> torch.Tensor:
         """Distance from the wall along its normal, positive on the free-air side, (N,)."""
@@ -317,6 +364,9 @@ class StructureHoldEnv:
         self.estimator.reset(self.sim.state.pos, self.sim.state.vel, env_ids)
         if self.fusion is not None:
             self.fusion.reset(env_ids, self.sim.state.pos[env_ids], self.sim.state.vel[env_ids])
+        if self.heading_err is not None:
+            self.heading_err.reset(env_ids)
+            self.heading_latch[env_ids] = self.heading_err.delta[env_ids]
 
         # Wind: wall_normal here is the disturbance model's convention (into free air).
         deck = {}
@@ -350,6 +400,10 @@ class StructureHoldEnv:
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
         self.range_ref[env_ids] = self.clearance(self.hold_point[env_ids])
+        self.hold_vel[env_ids] = 0.0
+        self.pass_time[env_ids] = 0.0
+        if cfg.surface_pass.active:
+            self.passes.draw(env_ids)
         if cfg.range.active:
             self._reset_range(env_ids)
 
@@ -548,6 +602,9 @@ class StructureHoldEnv:
         self.episode_step += 1
         self.episode_time += cfg.dt
         self.engage_time += cfg.dt
+        self.pass_time += cfg.dt
+        if cfg.surface_pass.active:
+            self._move_hold_point()
 
         # What the estimator reports.
         finite = state.finite()
@@ -566,6 +623,8 @@ class StructureHoldEnv:
             self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
                                                                     ~est.stale, true_pos=state.pos)
         self.estimate_stale, self.estimate_age = est.stale, est.age
+        if self.heading_err is not None:
+            self.heading_err.step()
 
         # Termination on the TRUE state.
         err = state.pos - self.hold_point
@@ -592,7 +651,9 @@ class StructureHoldEnv:
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward
         toward = (err @ self.wall_normal).clamp(0.0, 1.0)
-        approach = ((state.vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
+        # Speed is charged relative to the hold point's: on a pass, keeping up is not a cost.
+        rel_vel = state.vel - self.hold_vel
+        approach = ((rel_vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
             0.0, 1.0)
         d_action = actions - self.last_action
         rates = actions[:, :3]
@@ -614,7 +675,7 @@ class StructureHoldEnv:
             - w.toward_wall * toward
             - w.toward_wall_vel * approach
             - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
-            - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
+            - speed_w * rel_vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
@@ -629,6 +690,7 @@ class StructureHoldEnv:
         self.episode_reward += self.reward_buf
         self.last_action = actions
         self.step_pos = state.pos.clone()
+        self.step_hold = self.hold_point.clone()
 
         extras: dict[str, Any] = {"time_outs": self.time_out_buf, "observations": {}}
         done_ids = self.done_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -641,11 +703,19 @@ class StructureHoldEnv:
             }
             extras["episode"] = ep
             self.reset_envs(done_ids)
-        self.reengaged = self._reengage(~self.done_buf)
+        # A pass is flown from one engage; re-engages are for plain holds.
+        self.reengaged = self._reengage(~self.done_buf & ~self.passes.active)
         if cfg.range.active:
             self._update_range()
         self._observe()
         return self.obs_buf, self.reward_buf, self.done_buf, extras
+
+    def _move_hold_point(self) -> None:
+        """Put the pass envs' hold point where their path is now, and its velocity."""
+        offset, vel = self.passes.at(self.pass_time)
+        on = self.passes.active[:, None]
+        self.hold_point = torch.where(on, self.base_hold + offset, self.hold_point)
+        self.hold_vel = torch.where(on, vel, torch.zeros_like(vel))
 
     def _reengage(self, eligible: torch.Tensor) -> torch.Tensor:
         """Mid-episode re-engages (``cfg.reengage_rate_hz``), for envs in ``eligible`` at
@@ -676,6 +746,8 @@ class StructureHoldEnv:
         self.range_ref[ids] = self.clearance(hold)
         self.last_action[ids] = 0.0
         self.engage_time[ids] = 0.0
+        if self.heading_err is not None:  # the module latches its frame again
+            self.heading_latch[ids] = self.heading_err.delta[ids]
         self.reengage_count += int(ids.numel())
         return mask
 
@@ -685,11 +757,11 @@ class StructureHoldEnv:
         down = torch.tensor([0.0, 0.0, -1.0], dtype=self.dtype, device=self.device).expand(n, 3)
         fwd = torch.tensor([1.0, 0.0, 0.0], dtype=self.dtype, device=self.device).expand(n, 3)
         o = self.obs_buf
-        o[:, OBS["pos_err"]] = (self.estimate_pos - self.hold_point).clamp(
+        o[:, OBS["pos_err"]] = self.to_latched(self.estimate_pos - self.hold_point).clamp(
             -cfg.obs_pos_clip_m, cfg.obs_pos_clip_m)
-        o[:, OBS["vel"]] = self.estimate_vel
+        o[:, OBS["vel"]] = self.to_latched(self.estimate_vel - self.hold_vel)
         o[:, OBS["gravity_body"]] = quat_rotate_inverse(state.quat, down)
-        o[:, OBS["heading"]] = quat_rotate(state.quat, fwd)[:, :2]
+        o[:, OBS["heading"]] = quat_rotate(self.believed_quat, fwd)[:, :2]
         rates = state.ang_vel
         pid = self.rate_pid
         if pid.gyro_alpha < 1.0:

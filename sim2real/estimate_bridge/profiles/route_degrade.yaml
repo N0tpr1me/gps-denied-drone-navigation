@@ -1,0 +1,17 @@
+# Route Follow in Gazebo, dust or fog in the tunnel (docs/field-faults.md "degrade"): the
+# tunnel estimate of route_vio with its random jumps and dropouts off, and 20 s of degraded
+# VIO starting 8 s into the route (noisier, walking off at 0.1 m/sqrt(s), losing tracking for
+# 0.5 s about every 4 s), ramped in over 5 s. The same fault spoils any rangefinder the bridge
+# sends; the Mission baseline flies without one.
+name: route_degrade
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {bias_walk_std_m_per_sqrt_s: 0.02, bias_max_m: 0.5, jump_rate_hz: 0.0,
+           dropout_rate_hz: 0.0}
+field_faults:
+  - {kind: degrade, at_s: 8.0, duration_s: 20.0, ramp_s: 5.0, noise_m: 0.05,
+     vel_noise_mps: 0.2, walk_mps: 0.1, loss_hz: 0.25, loss_s: 0.5,
+     range_noise_m: 0.05, range_loss_frac: 0.2, range_short_frac: 0.1}

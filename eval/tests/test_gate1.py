@@ -118,7 +118,30 @@ def test_a_policy_from_another_airframe_flies_through_the_module_thrust_mapping(
     torch.testing.assert_close(seen[-1], torch.tensor([-0.5, 0.0]))  # its own action
 
 
-@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml"])
+def test_fly_scores_a_pass_against_the_moving_hold_point():
+    """A surface pass: error to where the hold point is now, plus standoff and completion."""
+    rows = {}
+    for prob in (0.0, 1.0):
+        cfg = StructureHoldConfig.from_dict({
+            "episode_length_s": 4.0, "disturbance": {"mean_speed": 0.0, "num_gusts": 0},
+            "surface_pass": {"prob": prob, "length_m": 1.0, "speed_mps": 1.0, "start_s": 0.5}})
+        env = StructureHoldEnv(cfg, 4, seed=9001)
+        rows[prob] = gate1.fly(env, CascadedPd(env))
+    hold, moving = rows[0.0], rows[1.0]
+    assert all(r["pass"] and r["pass_done"] and not r["crash"] for r in moving)
+    assert not any(r["pass"] or "pass_done" in r for r in hold)
+    assert all(0 <= r["standoff_p95_m"] <= r["p95_m"] for r in moving)
+    # Scored against the moving point, the 1 m pass adds little to the same episodes' hold
+    # (against the start point it would add most of a metre).
+    gap = np.mean([r["p95_m"] for r in moving]) - np.mean([r["p95_m"] for r in hold])
+    assert 0 <= gap < 0.1
+    d = gate1.describe(moving, np.zeros((2, 4), dtype=int))
+    assert d["pass_done_rate"] == 1.0 and np.isfinite(d["standoff_p95_m_mean"])
+    assert np.isnan(gate1.describe(hold, np.zeros((2, 4), dtype=int))["pass_done_rate"])
+
+
+@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml",
+                                    "gate1_x500_ekf_pass.yaml"])
 def test_smoke_run_writes_report(tmp_path, config):
     run_dir = tmp_path / "run"
     out = subprocess.run(
@@ -129,4 +152,22 @@ def test_smoke_run_writes_report(tmp_path, config):
     (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
     report = json.loads((run_dir / "report.json").read_text())
     assert report["cells"] and "verdict" in report
+    if config == "gate1_x500_ekf_pass.yaml":
+        assert report["gate_controller"] == "v22"
+
+
+def test_a_candidate_by_path_is_judged(tmp_path):
+    """``policies`` adds a controller by path and is judged by default (the queue's way)."""
+    out = subprocess.run(
+        [sys.executable, "-m", "training.launch", "--config",
+         "eval/configs/gate1_x500_ekf_pass.yaml", "--smoke", "--device", "cpu",
+         "--runs-dir", str(tmp_path), "--quiet",
+         "--set", "params.policies.cand=training/policies/structure_hold_v19.onnx",
+         "--set", "params.cells=[{name: c, env: {hold_distance: 1.0}}]"],
+        cwd=REPO, capture_output=True, text=True, timeout=600)
+    assert out.returncode == 0, out.stdout + out.stderr
+    (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
+    report = json.loads((run_dir / "report.json").read_text())
+    assert report["gate_controller"] == "cand"
+    assert [c["name"] for c in report["controllers"]] == ["v22", "cand", "pd"]
     assert "| Cell |" in (run_dir / "report.md").read_text()

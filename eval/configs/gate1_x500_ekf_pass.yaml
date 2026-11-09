@@ -1,0 +1,93 @@
+# Surface passes, Gate 1 style (docs/surface-passes.md): the hold point moves 5 m along the
+# wall at a fixed standoff (envs/structure_hold/config.py SurfacePass), on the held-out seeds,
+# the x500 through the EKF2-like fusion on barometer height, the standard estimate corruption,
+# and the PD yardstick on the same episodes. The rules are Gate 1's (docs/gate1.md): the
+# judged policy's 3-D p95 at least 30 % below the PD's in the headline cell, significantly
+# tighter in every cell, no significantly more crashes, pooled crashes under 5 %. Reported
+# beside it: the standoff p95 (the wall-normal error alone, the camera's distance to the
+# surface) and the share of passes flown to the end.
+#
+# Judged: the first of `params.policies` when a candidate is added there (the server queue's
+# `hold_pass_gate` adds the pass-trained policy by run folder), else v22, the released policy,
+# which never trained on a moving hold point.
+#   python -m training.launch --config eval/configs/gate1_x500_ekf_pass.yaml --device cpu
+#   python -m training.launch --config eval/configs/gate1_x500_ekf_pass.yaml --smoke --device cpu
+name: gate1_x500_ekf_pass
+entrypoint: eval.gate1
+seed: 9001  # unused: the protocol seeds are params.seeds
+expected_hours: 0.8  # v22 and the PD: 21 min on 4 CPU cores; each candidate adds about 10
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released 2026-10-31
+  policies: {}  # {name: onnx}: candidates, judged in place of v22 (the first one)
+  seeds: [9001, 9002, 9003]  # held out: eval.gate1.RESERVED_SEEDS, refused by training
+  num_envs: 256
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 25.0  # a 0.5 m/s pass ends by 15 s; the rest is the hold at its end
+    # EKF2-like fusion on barometer height, as gz_x500_sitl has it since 2026-11-03.
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true, height_source: baro}
+    # The standard estimate corruption, stated in full (as gate1_x500_ekf_baro_v22.yaml).
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+    # Every episode a pass: 5 m along the wall, either way, after a 2 to 4 s settle.
+    surface_pass:
+      prob: 1.0
+      length_m: 5.0
+      speed_mps: 0.5
+      accel_mps2: 0.5
+      start_s: [2.0, 4.0]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  cells:
+    - {name: p05_w0_d1, label: "0.5 m/s pass, 0 m/s wind, 1 m",
+       env: {disturbance: {mean_speed: 0.0}, hold_distance: 1.0}}
+    - {name: p05_w4_d1, label: "0.5 m/s pass, 4 m/s wind, 1 m",
+       env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0}}
+    - {name: p05_w8_d1, label: "0.5 m/s pass, 8 m/s wind, 1 m", headline: true,
+       env: {disturbance: {mean_speed: 8.0}, hold_distance: 1.0}}
+    - {name: p05_w8_d2, label: "0.5 m/s pass, 8 m/s wind, 2 m",
+       env: {disturbance: {mean_speed: 8.0}, hold_distance: 2.0}}
+    - {name: p10_w4_d1, label: "1 m/s pass, 4 m/s wind, 1 m",
+       env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0, surface_pass: {speed_mps: 1.0}}}
+    - {name: up05_w4_d1, label: "0.5 m/s pass up the wall, 4 m/s wind, 1 m",
+       env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0,
+             surface_pass: {vertical_prob: 1.0}}}
+    - {name: raster2_w4_d1, label: "2-leg raster, 1 m row step, 4 m/s wind, 1 m",
+       env: {disturbance: {mean_speed: 4.0}, hold_distance: 1.0, episode_length_s: 36.0,
+             surface_pass: {legs: 2, row_step_m: 1.0}}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9001]
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 4.0
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true, height_source: baro}
+    surface_pass: {prob: 1.0, speed_mps: 1.0, start_s: 0.5, length_m: 2.0}

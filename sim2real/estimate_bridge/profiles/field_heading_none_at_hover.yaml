@@ -1,0 +1,14 @@
+# Heading-error profile (docs/heading-error.md): vio_default's delay, noise and bias walk, its
+# random jumps and dropouts off, and EKF2's heading taken from the vision stream's attitude
+# (sim2real/estimate_bridge/vision_yaw.py, vision_yaw.params) with NO error: the control for the
+# field_heading_* set, so a change from vio_at_* that comes from the heading source itself
+# shows here and not in the error profiles.
+# This copy is for the stock PX4 runner (keyed to the hover height); the _at_engage twin differs only in its anchor.
+name: field_heading_none_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null   # the stock runner fills it from the scenario
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+vision_yaw: {offset_deg: 0.0}

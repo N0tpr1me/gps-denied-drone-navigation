@@ -1,0 +1,10 @@
+# Route Follow in Gazebo, high drift: route_vio with the drift walk and cap doubled (0.04
+# m/sqrt(s), 1 m), the mock's "high drift" stress cell (docs/route-follow.md). In a 1.8 m pipe
+# a 1 m drift is wider than the gap between the props and the wall.
+name: route_drift
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {bias_walk_std_m_per_sqrt_s: 0.04, bias_max_m: 1.0}
