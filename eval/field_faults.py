@@ -78,7 +78,8 @@ def score_run(run: Path, window_s: float = WINDOW_S) -> dict[str, Any]:
     runner = "hold" if "_sitl_hold_" in run.name or (run / "hold_summary.json").exists() \
         else "stock"
     row: dict[str, Any] = {"run": run.name, "runner": runner, "profile": profile.name,
-                           "faults": [f.kind for f in faults], "gps_on": profile.gps is not None,
+                           "faults": [f.kind for f in faults],
+                           "gps_on": profile.gps is not None and profile.gps.fused,
                            "seed": profile.seed, "scenario": scenario.name}
     anchor_t = verify.get("anchor_t")
     if anchor_t is None:

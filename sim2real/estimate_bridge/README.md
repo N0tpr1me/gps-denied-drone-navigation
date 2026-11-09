@@ -10,7 +10,8 @@ run_bridge.py      the in-container process: gz pose/info -> bridge -> MAVLink O
 config.py          estimate profiles (profiles/clean.yaml, profiles/vio_default.yaml)
 field_faults.py    scripted field failures on top of the corruptor (docs/field-faults.md)
 gps.py             a scripted GPS/RTK receiver beside the vision stream, with its own faults
-                   (HIL_GPS; profiles with a `gps` block fly with GPS on, gps_on.params)
+                   (HIL_GPS; profiles with a `gps` block fly with GPS on, gps_on.params;
+                   `fused: false` logs it without fusing it, gps_logged.params)
 params.py          QGC .params reader -> PX4_PARAM_* environment for the container
 ekf2_ev.params     EKF2 on vision, GPS off (loaded at PX4 start, before EKF2 runs)
 heartbeat.py       PX4 HEARTBEAT custom_mode -> is Structure Hold flying (for the fault anchor)
@@ -75,7 +76,10 @@ anchor's height; `null` lets the runner fill it from the scenario), `bias_from_a
 (false; true holds the bias walk at zero until the anchor), `field_faults` (scripted
 estimate failures, `field_faults.py`), `gps` (a scripted GPS receiver the bridge sends as
 HIL_GPS, `gps.py`; the runners then lay `gps_on.params` over the PX4 set so EKF2 fuses it
-beside the vision stream, and the pass line expects GPS used instead of never used) and
+beside the vision stream, and the pass line expects GPS used instead of never used; with
+`fused: false` they lay `gps_logged.params` instead, EKF2 never fuses it and it is logged at
+its full rate as the RTK truth an outdoor flight is scored on, `rtk_truth_*` profiles,
+`docs/rtk-truth.md`) and
 `gps_faults` (its RTK float, jump, glitch and loss faults, timed from the anchor).
 
 Fault anchor. With `start` the fault clock runs from the bridge's first sample, so where a

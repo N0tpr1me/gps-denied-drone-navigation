@@ -1,0 +1,12 @@
+# rtk_truth_at_engage with the fix dropping to RTK float for 15 s, 20 s into the hold, the
+# solution sitting 0.8 m toward the wall meanwhile (as field_rtk_float, but the receiver is
+# only logged). Nothing changes for the drone; the scorer must leave those 15 s out and say
+# so, not score a drone that seems to jump 0.8 m.
+name: rtk_truth_float_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+gps: {rate_hz: 10.0, fix: rtk_fixed, fused: false}
+gps_faults:
+  - {kind: gps_float, at_s: 20.0, duration_s: 15.0, offset_m: 0.8, direction: [1.0, 0.0, 0.0]}

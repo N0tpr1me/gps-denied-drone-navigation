@@ -47,7 +47,8 @@ TRIP_TEXT = {
 }
 NAV_TEXT = {0: "Manual mode", 1: "Altitude mode", 2: "Position mode", 4: "Hold mode", 18: "Land",
             24: "Structure Land", 25: "Structure Hover", 23: "Structure Hold"}
-ALIGN_WARN_M = 0.05  # an EKF-to-mocap fit worse than this makes the hold point suspect
+ALIGN_WARN_M = 0.05  # an EKF-to-truth fit worse than this makes the hold point suspect
+COVERAGE_WARN = 0.95  # RTK truth: a hold with a fixed solution for less of its time is listed
 
 
 def _num(x: Any) -> float:
@@ -111,10 +112,23 @@ def summarise(result: dict[str, Any]) -> dict[str, Any]:
                 held = r["window_s"][1] - r["window_s"][0]
                 events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']} ({r['file']}): "
                               f"hold ended after {held:.0f} s, {why}; handed to {nxt}.")
+            rtk = r.get("truth") == "rtk"
             if _num(r.get("align_rms_m")) > ALIGN_WARN_M:
-                events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']}: the EKF-to-mocap "
+                events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']}: the EKF-to-"
+                              f"{'RTK' if rtk else 'mocap'} "
                               f"fit is off by {r['align_rms_m']:.2f} m RMS; its hold point is "
                               "uncertain by about that much.")
+            if rtk and _num(r.get("truth_coverage")) < COVERAGE_WARN:
+                events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']}: RTK fixed for "
+                              f"{100 * r['truth_coverage']:.0f} % of the hold; the rest of "
+                              "that hold is not scored.")
+            if rtk and r.get("truth_independent") is False:
+                events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']}: the drone's "
+                              "estimator fused GPS, so the RTK truth is not independent of "
+                              "its estimate on this hold.")
+            elif rtk and r.get("truth_independent") is None:
+                events.append(f"{NAMES[c]}, {r['scenario']} run {r['seed']}: could not check "
+                              "whether GPS was fused (the log has no estimator flags).")
     for ab in result.get("aborted", []):
         who = NAMES.get(ab.get("controller"), ab.get("controller"))
         events.append(f"Not flown or aborted: {ab.get('file')} ({who}, {ab.get('case')} run "
@@ -122,7 +136,21 @@ def summarise(result: dict[str, Any]) -> dict[str, Any]:
     for e in result.get("errors", []):
         events.append(f"Not scored: {e.get('file')}: {e.get('error')}.")
     return {"per": per, "change": change, "cases": cases, "events": events,
-            "cases_compared": len(changes)}
+            "cases_compared": len(changes), "rtk": rtk_summary(result)}
+
+
+def rtk_summary(result: dict[str, Any]) -> dict[str, Any] | None:
+    """How the RTK truth held up over the scored holds; None when the truth was not RTK."""
+    rows = [r for bt in result.get("batches", {}).values() for r in bt.get("rows", [])
+            if r.get("truth") == "rtk"]
+    if not rows:
+        return None
+    cover = [_num(r.get("truth_coverage")) for r in rows]
+    return {"n": len(rows), "coverage_mean": statistics.fmean(cover),
+            "coverage_worst": min(cover), "source": rows[0].get("position_source"),
+            "rate_hz": _num(rows[0].get("rtk_rate_hz")),
+            "fused": sum(r.get("truth_independent") is False for r in rows),
+            "unchecked": sum(r.get("truth_independent") is None for r in rows)}
 
 
 def headline(sm: dict[str, Any]) -> str:
@@ -221,6 +249,8 @@ td.n{text-align:right}th.n{text-align:right}
 .chart .tick{fill:var(--muted);font-size:10px}.chart .label{fill:var(--text-2);font-size:11px}
 .chart .dot{stroke:var(--surface);stroke-width:1.5}
 .legend{color:var(--text-2);font-size:11px;margin:2px 0 0}
+.warn{border-left:3px solid var(--bad);background:var(--surface-2);padding:6px 10px;
+margin:10px 0;border-radius:0 6px 6px 0}.warn b{color:var(--bad)}
 ul{margin:0;padding-left:18px}li{margin:2px 0}
 .setup{display:grid;grid-template-columns:repeat(2,1fr);gap:2px 16px;color:var(--text-2);
 font-size:11.5px}.setup b{color:var(--text);font-weight:600}
@@ -280,10 +310,21 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
     events = "".join(f"<li>{e(t)}</li>" for t in sm["events"]) or \
         "<li>Every hold ran its full length; nothing was aborted or left unscored.</li>"
     wall = s.get("wall") or {}
+    rtk = sm["rtk"]
+    if rtk:
+        fused = (f"fused by the estimator on {rtk['fused']} of {rtk['n']} holds"
+                 if rtk["fused"] else "logged and not fused")
+        truth_row = (f"RTK GPS, fixed solutions only, {fused} "
+                     f"({rtk['source']}, {fmt(rtk['rate_hz'], 0)} Hz)")
+        wall_row = (f"surveyed with RTK ({len(wall.get('survey') or [])} points)" if wall
+                    else "not given (no wall metrics)")
+    else:
+        truth_row = s.get("truth", "mocap")
+        wall_row = "measured" if wall else "not given (no wall metrics)"
     setup = [
         ("Drone", s.get("drone")), ("Site", s.get("site")), ("Pilot", s.get("pilot")),
         ("Firmware", s.get("firmware")), ("Policy", s.get("policy")),
-        ("Position source", s.get("vio")), ("Truth", s.get("truth", "mocap")),
+        ("Position source", s.get("vio")), ("Truth", truth_row),
         ("Tuned PX4", f"{s.get('tuned_px4_params', 'n/a')}, "
                       f"{'Position' if s.get('baseline_mode') == 'position' else 'Hold'} mode"),
         ("Structure Hold params", s.get("structure_hold_params")),
@@ -291,16 +332,34 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
                  "not scored"),
         ("Contact", f"closer than {fmt(s.get('contact_radius_m'), 2)} m to the wall"
          if s.get("contact_radius_m") else "default prop reach"),
-        ("Wall", "measured" if wall else "not given (no wall metrics)"),
+        ("Wall", wall_row),
     ]
     setup_html = "".join(f"<div><b>{e(k)}:</b> {e(str(v if v is not None else 'n/a'))}</div>"
                          for k, v in setup)
-    truth = ("real flights, scored on motion-capture truth" if s.get("truth", "mocap") == "mocap"
-             else f"scored on {s.get('truth')} truth")
     mocap = s.get("truth", "mocap") == "mocap"
-    truth_src = "from motion capture" if mocap else f"from {s.get('truth')}"
-    carried = (", carried into the mocap frame by fitting the drone's estimate to mocap over "
-               "the take-off" if mocap else "")
+    warn = ""
+    if rtk:
+        truth = (f"scored on RTK GPS truth (fixed for "
+                 f"{100 * rtk['coverage_mean']:.0f} % of the scored hold time, worst hold "
+                 f"{100 * rtk['coverage_worst']:.0f} %)")
+        truth_src = ("from the RTK receiver, fixed solutions only (float and unfixed samples "
+                     "are left out, with the time they cover)")
+        carried = (", carried into the RTK frame by fitting the drone's estimate to RTK over "
+                   "the take-off")
+        if rtk["fused"]:
+            warn = (f'<p class="warn"><b>Truth not independent.</b> The drone\'s estimator '
+                    f"fused GPS on {rtk['fused']} of {rtk['n']} scored holds. On those the "
+                    "RTK truth and the drone's own estimate share a receiver: a wrong "
+                    "solution is in both and does not show, and the moments it loses its "
+                    "fix, when the estimate suffers most, are the moments left out of the "
+                    "score. Read their hold error as a best case. They are listed under "
+                    "Handbacks and exceptions.</p>")
+    else:
+        truth = ("real flights, scored on motion-capture truth" if mocap
+                 else f"scored on {s.get('truth')} truth")
+        truth_src = "from motion capture" if mocap else f"from {s.get('truth')}"
+        carried = (", carried into the mocap frame by fitting the drone's estimate to mocap "
+                   "over the take-off" if mocap else "")
     title = f"Structure Hold vs tuned PX4 on {s.get('drone', 'a partner drone')}"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -309,7 +368,7 @@ def render(result: dict[str, Any], commit: str = "unknown", generated: str | Non
 <body><main>
 <h1>{e(title)}</h1>
 <p class="sub">{e(str(s.get('site', '')))} · {e(str(s.get('date', '')))} · {e(truth)}</p>
-<p class="head">{e(headline(sm))}</p>
+{warn}<p class="head">{e(headline(sm))}</p>
 <div class="tiles">{''.join(tiles)}</div>
 <h2>Per case</h2>
 <table><thead><tr><th>Case</th><th>Controller</th><th class="n">Holds</th>
