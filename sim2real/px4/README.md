@@ -336,7 +336,8 @@ install gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
 venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structurehold`
 uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946,952 B,
 about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
-in. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+in. With the VIO runaway trip and the EKF2 cut (2026-11-09) `px4_fmu-v6x_structurehold` is at
+99.27 % (1,951,816 B, about 14 KB spare). The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it
