@@ -176,7 +176,6 @@ public:
 		if (_counter_seen && reset_counter != _counter) {
 			restart();
 			_runaway = false;  // the VIO says it restarted
-			_anchor_ok = false;
 		}
 
 		_counter = reset_counter;
@@ -208,23 +207,6 @@ public:
 
 	bool runaway() const { return _runaway; }
 
-	/** After a runaway: the vehicle's velocity, NED, from the last good VIO velocity (3 s or
-	 * more before the trip) carried on by the IMU integral. It drifts with EKF2's tilt
-	 * error (the part of the runaway EKF2 took into its attitude before the trip, and any
-	 * since), so it is for damping a coast, not for holding a position. False otherwise. */
-	bool deadReckoned(float v[3]) const
-	{
-		if (!_runaway || !_anchor_ok) {
-			return false;
-		}
-
-		for (int i = 0; i < 3; i++) {
-			v[i] = _v_imu[i] + _anchor[i];
-		}
-
-		return true;
-	}
-
 	/** The latest change in the VIO's velocity error over the window, m/s (0 until a
 	 * window is full). */
 	float disagreement() const { return _disagreement; }
@@ -233,7 +215,6 @@ public:
 	{
 		restart();
 		_runaway = false;
-		_anchor_ok = false;
 		_counter_seen = false;
 		_imu_t = 0;
 		_v_imu[0] = _v_imu[1] = _v_imu[2] = 0.f;
@@ -282,14 +263,8 @@ private:
 						  + (e[2] - o[2]) * (e[2] - o[2]));
 		_over = (_limit > 0.f && _disagreement > _limit) ? _over + 1 : 0;
 
-		if (_over >= TRIP_SLOTS && !_runaway) {
+		if (_over >= TRIP_SLOTS) {
 			_runaway = true;
-			// The oldest slot in the window is from before the runaway: from there on the
-			// IMU integral, not the VIO, says how fast the vehicle goes (deadReckoned()).
-			_anchor[0] = o[0];
-			_anchor[1] = o[1];
-			_anchor[2] = o[2];
-			_anchor_ok = true;
 		}
 	}
 
@@ -307,8 +282,6 @@ private:
 	int _over{0};
 	float _disagreement{0.f};
 	bool _runaway{false};
-	float _anchor[3] {0.f, 0.f, 0.f};  // fix minus IMU integral, from before the runaway
-	bool _anchor_ok{false};
 	uint8_t _counter{0};
 	bool _counter_seen{false};
 };

@@ -1306,17 +1306,7 @@ void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
 	}
 
 	const float a_n = _range_hover.step(wall, _range.timestamp_us, CONTROL_INTERVAL * 1e-6f);
-	float a_t = _range_hover.alongWall();
-	float v_dr[3];
-
-	// After a VIO runaway nothing measures the motion along the wall, and the vehicle keeps
-	// the speed it picked up chasing the runaway (Gazebo: 1.6 to 2.6 m/s, 22 to 32 m in 25 s).
-	// Damp it on the IMU's velocity since the last good VIO velocity (RunawayFix).
-	if (fixRunaway() && _runaway_fix.deadReckoned(v_dr)) {
-		const float v_t = -v_dr[0] * ny + v_dr[1] * nx;
-		a_t += math::constrain(-RUNAWAY_DAMP_PER_S * v_t, -RUNAWAY_DAMP_MAX, RUNAWAY_DAMP_MAX);
-	}
-
+	const float a_t = _range_hover.alongWall();
 	publishAccelerationSetpoint(a_n * nx - a_t * ny, a_n * ny + a_t * nx);
 
 	// Status: the measured distance and the reference it holds.
