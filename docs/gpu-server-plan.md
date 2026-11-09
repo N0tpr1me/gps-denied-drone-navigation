@@ -104,7 +104,7 @@ the wind evidence are all in `experiments/LOG.md`.
 | Job | Lane | Time | Runs when |
 | --- | --- | --- | --- |
 | `isaac_train_v22`: v22's recipe on Isaac Lab (`--set params.sim=isaac`) | GPU 0 | 45 min | After `isaac_parity` passes, automatically. The M3 training; the policy then takes `gazebo_check_v24_range.yaml`'s place in a copy of that config and a Gazebo re-fly like any candidate (`gz_isaac_policy`, off until then) |
-| `route_pipes_stress`: the 13-cell stress table with the three pipe policies | first free GPU | 25 min | After the three chains finish, automatically. **Go/no-go for the pipes work:** the best seed has fewer narrow-pipe crashes than v0's 11 % and still beats both PD yardsticks on every cell; then it is the Route Follow candidate for Gazebo tunnel worlds (not built yet) |
+| `route_pipes_stress`: the 13-cell stress table with the three pipe policies | first free GPU | 25 min | After the three chains finish, automatically. **Go/no-go for the pipes work:** the best seed has fewer narrow-pipe crashes than v0's 11 % and still beats both PD yardsticks on every cell; then it is the Route Follow candidate for the Gazebo route worlds (`sim2real/route_follow/`) |
 | `hold_wind_finetune`: `structure_hold_ppo_v26_wind.yaml` | first free GPU | 50 min | By hand, `enabled: true`, only if v22 loses at 10 or 12 m/s in Gazebo. v22 continued on 6 to 12 m/s winds blowing within 60 degrees of the wall, same 21 inputs so the module header takes it unchanged; then the usual check and re-fly |
 | `gz_isaac_policy` | CPU | ~1 h | By hand, after `isaac_train_v22` passes its mock check: `gz_v24_image` and `gz_v24_refly` with its run folder |
 
@@ -121,6 +121,16 @@ the wind evidence are all in `experiments/LOG.md`.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - The 5 m surface passes once the env has them (see above).
+
+### Route Follow toward a real test (its own queue, any time)
+
+`training/queues/route_gazebo.yaml` (GPU plan item 7, `docs/route-follow.md` "Degraded
+sensors" and "Gazebo") runs beside week 1 and needs none of its results: two seeds of the
+pipes recipe with dust-spoiled rangefinders and a degraded VIO (`route_degraded`,
+`route_degraded_s7`, 3 x 45 min chains on 2 GPUs), their 17-cell stress table, and on the CPU
+lane stock PX4 Mission mode through the four Gazebo route worlds (`gz_route_clean` first as
+the plumbing go/no-go, then 8 seeds each on `route_vio`, `route_drift`, `route_degrade`).
+Run it with `--max-gpus 2`; `--dry-run --gpus 2` shows the plan.
 
 ## Week 2: the evidence buyers ask for (approved 2026-11-09)
 
@@ -145,11 +155,11 @@ python -m training.queue training/queues/server_week2.yaml --max-gpus 2
 | 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
 | 5. deck and pier undersides | about 4 | holds under a surface, the pier scenario the kit does not fly yet | own thread |
 | 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | own thread |
-| 7. Route Follow on the GPU | about 5 | the v2 recipe at full batch, so the second capability has a server number | own thread |
+| 7. Route Follow on the GPU | about 5 | the pipes recipe with degraded sensors and stock PX4 Mission mode through the Gazebo route worlds, so the second capability has a server number | `training/queues/route_gazebo.yaml` (above) |
 | 8. a real VIO in the loop | about 10, over 1 h | Basalt on EuRoC frames feeding the estimate instead of the model; needs Zain's yes per run and Isaac parity first | own thread |
 
-Items 4 to 8 need an environment or a world change before they can be queued; each is its
-own thread and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
+Items 4 to 6 and 8 need an environment or a world change before they can be queued; each is
+its own thread and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
 safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
 version for Zain to re-sign, not an edit in place.
 

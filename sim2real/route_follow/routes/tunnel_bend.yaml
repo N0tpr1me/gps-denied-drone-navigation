@@ -1,0 +1,18 @@
+# A round tunnel (culvert, service tunnel) 3 m across with an S-bend: 45 degrees left, 90
+# right, 45 left, at 1 m/s. The mock's plain tunnel set, made fixed.
+name: tunnel_bend
+seed: 1
+kind: tunnel
+radius_m: 1.5
+waypoints:   # ENU m from the take-off point; z is the centreline, on the floor's centre
+  - [0.0, 0.0, 1.5]
+  - [10.0, 0.0, 1.5]
+  - [14.95, 4.95, 1.5]
+  - [20.61, -0.71, 1.5]
+  - [28.61, -0.71, 1.5]
+speed_mps: 1.0
+accel_mps2: 0.5
+end_hold_s: 5.0
+draft: along
+disturbance:   # the mock's tunnel air (draft 0 to 3 m/s, gusts to 2 m/s), gusts in the route
+  gust_start: [32.0, 70.0]

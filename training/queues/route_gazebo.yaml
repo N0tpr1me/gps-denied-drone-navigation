@@ -1,0 +1,90 @@
+# Route Follow toward a real test (GPU plan item 7, https://claude.ai/artifact/PA1TxZrviJ4z8t22WNxUkm;
+# docs/route-follow.md "Gazebo"): the degraded-sensor training on 2 GPUs, its stress table, and
+# stock PX4 Mission mode flown through the Gazebo route worlds as the SITL baseline, on the CPU
+# lane. Runs on its own or beside week 1; nothing here needs week 1's results (the pipes policy
+# joins the stress table by hand, see route_degraded_stress).
+#
+#   python -m training.queue training/queues/route_gazebo.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/route_gazebo.yaml --smoke
+#   python -m training.queue training/queues/route_gazebo.yaml --max-gpus 2
+#
+# Every run is under 1 h and 1 GPU; the two trainings are chains of three sub-1 h parts (the
+# project rule allows checkpointed chains), so nothing here needs --approved.
+name: route_gazebo
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL
+  # First the plumbing: a perfect estimate, 4 routes x 2 seeds. Go/no-go for the rest of the
+  # lane: every flight takes off, flies the mission to its last waypoint and lands, the estimate
+  # and wind traces verify, EKF2 fuses vision with GPS off. A failure here is the harness, not
+  # PX4: fix it before reading any baseline number.
+  - id: gz_route_clean
+    cmd: >
+      python -m sim2real.route_follow.run_mission --label mission_clean --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --profile route_clean --seeds 1 2
+    smoke_cmd: >
+      python -m sim2real.route_follow.run_mission --label smoke --dry-run
+      --params eval/baselines/px4_tuned_v2.params --profile route_clean
+    hours: 0.15
+    why: "8 flights on a perfect estimate: the harness works and stock PX4's floor per route"
+
+  - id: gz_route_mission
+    cmd: >
+      python -m sim2real.route_follow.run_mission --label tuned_mission --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --profile route_vio --seeds 1 2 3 4 5 6 7 8
+    smoke_cmd: >
+      python -m sim2real.route_follow.run_mission --label smoke --dry-run
+      --params eval/baselines/px4_tuned_v2.params --profile route_vio
+    after: [gz_route_clean]
+    hours: 0.4
+    why: "THE baseline: tuned PX4 Mission mode, 4 routes x 8 seeds on the tunnel VIO; cross-track p95, clearance, crashes per route"
+
+  - id: gz_route_drift
+    cmd: >
+      python -m sim2real.route_follow.run_mission --label tuned_mission_drift --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --profile route_drift --seeds 1 2 3 4 5 6 7 8
+    smoke_cmd: >
+      python -m sim2real.route_follow.run_mission --label smoke --dry-run
+      --params eval/baselines/px4_tuned_v2.params --profile route_drift
+    after: [gz_route_mission]
+    hours: 0.4
+    why: "the same 32 flights with the drift doubled (the mock's drift_high cell)"
+
+  - id: gz_route_degrade
+    cmd: >
+      python -m sim2real.route_follow.run_mission --label tuned_mission_dust --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --profile route_degrade --seeds 1 2 3 4 5 6 7 8
+    smoke_cmd: >
+      python -m sim2real.route_follow.run_mission --label smoke --dry-run
+      --params eval/baselines/px4_tuned_v2.params --profile route_degrade
+    after: [gz_route_mission]
+    hours: 0.4
+    why: "dust or fog for 20 s of each route (degraded VIO), 32 flights"
+
+  # ---------------------------------------------------------------- GPU lanes: degraded sensors
+  - id: route_degraded
+    gpu: true
+    launch: training/configs/route_follow_ppo_degraded.yaml
+    chain: 3
+    hours: 2.4
+    why: "the pipes recipe with dust-spoiled rangefinders and a degraded VIO, seed 6, 3 parts of 1500 iterations"
+
+  - id: route_degraded_s7
+    gpu: true
+    launch: training/configs/route_follow_ppo_degraded.yaml
+    set: {seed: 7}
+    chain: 3
+    hours: 2.4
+    why: "route_degraded, seed 7"
+
+  - id: route_degraded_stress
+    gpu: true
+    launch: eval/configs/route_follow_stress_degraded.yaml
+    set:
+      params.policies.degraded_s6: "{run:route_degraded}/policy.onnx"
+      params.policies.degraded_s7: "{run:route_degraded_s7}/policy.onnx"
+    after: [route_degraded, route_degraded_s7]
+    hours: 0.55
+    why: "17 cells (week 1's 13 plus dust and degraded VIO, open and in pipes) with v2 and both seeds; add --set params.policies.pipes=<week 1 route_pipes run>/policy.onnx when re-run by hand. Go/no-go: the best seed beats both PDs on every cell and crashes less than v2 in pipe_dust"
