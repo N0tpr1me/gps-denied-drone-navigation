@@ -13,6 +13,7 @@ NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
 RIG = ["wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
        "wall1m_wind_8ms_flow", "wall1m_lee_8ms_flow"]
 NAMES += [f"rig_{n}" for n in RIG]
+BRIDGE = ["deck_corner_8ms_flow", "deck_open_8ms_flow", "pier_lee_8ms_flow"]
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -89,3 +90,46 @@ def test_unknown_keys_are_rejected():
         Scenario.from_dict({"name": "x", "wind": {}})
     with pytest.raises(ValueError, match="wall"):
         Scenario.from_dict({"name": "x", "wall": {"normal_toward": [0, 0, 0]}})
+
+
+def test_old_scenarios_fly_wall_slab_without_a_second_surface():
+    sc = load_scenario("wall1m_wind_8ms")
+    assert sc.world == "wall_slab" and sc.surface2_normal_toward is None
+    assert not sample_scenario(sc).has_surface2[0]
+
+
+@pytest.mark.parametrize("name", BRIDGE)
+def test_bridge_scenarios_load_in_their_worlds(name):
+    sc = load_scenario(name)
+    assert sc.name == name and sc.world in ("bridge_deck", "bridge_pier")
+    # 1 m from the abutment or pier face, or 6 m out under the deck alone.
+    assert sc.wall_clearance in (1.0, 6.0)
+    p = sample_scenario(sc)
+    assert p.has_wall[0]
+    if sc.world == "bridge_deck":
+        # The deck 1.5 m over the 2.5 m hold, and the crosswind sheds from its edges.
+        assert p.has_surface2[0]
+        assert sc.surface2_point[2] - sc.hover.altitude == pytest.approx(1.5)
+        assert p.surface2_shed_amp[0] > 0
+    else:
+        assert not p.has_surface2[0] and p.shed_amp[0] > 0  # the pier's wake
+
+
+def test_deck_shedding_follows_the_wind_across_the_deck():
+    # deck_open: the wind blows across the deck, all of it drives the shedding; the same
+    # wind along the bridge's axis would shed nothing.
+    sc = load_scenario("deck_open_8ms_flow")
+    across = sample_scenario(sc).surface2_shed_amp[0]
+    along = sample_scenario(replace(sc, wind_heading_deg=0.0)).surface2_shed_amp[0]
+    assert across > 0 and along == pytest.approx(0.0, abs=1e-9)
+
+
+def test_scenario_world_and_surface2_are_checked():
+    base = {"name": "x", "spawn": {"x": -1.0}}
+    with pytest.raises(ValueError, match="unknown world"):
+        Scenario.from_dict({**base, "world": "no_such_world"})
+    with pytest.raises(ValueError, match="surface2 needs"):
+        Scenario.from_dict({**base, "surface2": {"point": [0, 0, 4]}})
+    with pytest.raises(ValueError, match="non-zero"):
+        Scenario.from_dict({**base, "surface2": {"point": [0, 0, 4],
+                                                 "normal_toward": [0, 0, 0]}})

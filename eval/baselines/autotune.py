@@ -29,7 +29,7 @@ from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.params import FLOAT, read_params, to_environment
 from sim2real.estimate_bridge.run_estimate import DEFAULT_PARAMS
 from sim2real.gazebo.params_io import write_params
-from sim2real.gazebo.run_scenario import DEFAULT_IMAGE, WORLD, git_commit
+from sim2real.gazebo.run_scenario import DEFAULT_IMAGE, git_commit
 from sim2real.gazebo.scenario import load_scenario, sample_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     cmd = ["docker", "run", "--rm", "--name", "px4-sitl-autotune",
            "--entrypoint", "/repo/sim2real/docker/entrypoint.sh",
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
-           "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={sc.spawn.px4_pose()}",
+           "-e", f"PX4_GZ_WORLD={sc.world}", "-e", f"PX4_GZ_MODEL_POSE={sc.spawn.px4_pose()}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
            "-e", "STRUCTURE_HOLD_WIND_TRACE=/out/wind_trace.csv",
            "-e", "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml"]
