@@ -137,3 +137,17 @@ def test_route_profiles(name: str) -> None:
         assert prof.fault_anchor == "altitude"
         assert prof.fault_anchor_alt_m == pytest.approx(1.2)
         assert prof.estimate.bias_max_m >= 0.5  # at least the mock's tunnel drift
+
+
+def test_drifted_end_is_not_a_crash() -> None:
+    """Finishing the mission 0.6 m off the last waypoint (the estimate drifted) is not
+    completed, but not a crash either; a mission PX4 never finished is a crash."""
+    rw = load_route_world("tunnel_bend")
+    w = rw.walls
+    t = np.arange(0.0, w.duration + 5.0, 0.02)
+    pos = w.point_at(w.target_s(t))
+    pos[:, 1] += np.clip(t / t[-1], 0, 1) * 0.6
+    m = score_route(t, pos, rw, (0.0, float(t[-1])), mission_finished=True)
+    assert not m["completed"] and not m["crash"] and not m["contact"]
+    m = score_route(t, pos, rw, (0.0, float(t[-1])), mission_finished=False)
+    assert m["crash"]

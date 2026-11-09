@@ -14,7 +14,10 @@ measurement the mock makes:
 - ``min_clearance_m`` and ``contact``: closest approach to any wall, floor or ceiling, and
   whether it came inside ``--contact-radius-m`` (0.40 m, the x500, as the mock's configs);
 - ``completed``: the mission reached its last item and the vehicle ended within 0.5 m of the
-  last waypoint, with no contact; ``crash``: a contact, or a flight that never finished;
+  last waypoint (truth), with no contact; ``crash``: a contact, or a mission PX4 never
+  finished (a failsafe or a timeout), as the mock counts contacts and lost targets. Ending
+  more than 0.5 m off the last waypoint because the estimate drifted is "not completed", not
+  a crash, as in the mock;
 - ``time_s`` against ``planned_s``: how long PX4 took to reach the last waypoint, against the
   mock target's speed plan.
 
@@ -154,7 +157,7 @@ def score_route(t: np.ndarray, pos: np.ndarray, rw: RouteWorld, window: tuple[fl
         "planned_s": w.duration,
         "mission_finished": bool(mission_finished),
         "completed": completed,
-        "crash": contact or not completed,
+        "crash": contact or not mission_finished,
     }
 
 
@@ -329,6 +332,34 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
             f"| {status} | {result} | {{vs}} |")
 
 
+def rescore(batch_dir: Path, contact_radius_m: float) -> dict[str, Any]:
+    """Score every flight of a batch again from its ulog (after a change to the scoring)
+    and rewrite the batch's ``batch.json``, ``table.md`` and ``log_lines.md``."""
+    batch = json.loads((batch_dir / "batch.json").read_text())
+    rows, lines = [], []
+    for old in batch["rows"]:
+        out = REPO_ROOT / old["run"]
+        report = json.loads((out / "route_summary.json").read_text())
+        rw = load_route_world(old["route"])  # the walls; the wind seed plays no part here
+        if (out / "flight.ulg").exists():
+            scored = score_flight(out, rw, contact_radius_m)
+            report["metrics"] = scored["metrics"]
+            (out / "route_summary.json").write_text(json.dumps(report, indent=2) + "\n")
+        row = row_of(report)
+        rows.append(row)
+        stamp = out.name.split("_", 1)[0]
+        when = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[9:11]}:{stamp[11:13]}"
+        lines.append((row, when))
+    batch["rows"] = rows
+    batch["aggregate"] = aggregate(rows)
+    (batch_dir / "batch.json").write_text(json.dumps(batch, indent=2) + "\n")
+    (batch_dir / "table.md").write_text(table(batch))
+    (batch_dir / "log_lines.md").write_text(
+        "\n".join(log_line(r, batch, w) for r, w in lines) + "\n")
+    print(table(batch))
+    return batch
+
+
 def run_batch(args: argparse.Namespace) -> dict[str, Any]:
     commit = git_commit()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -389,8 +420,10 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--label", required=True, help="name of the batch, e.g. tuned_mission")
-    ap.add_argument("--params", type=Path, required=True, help="PX4 .params file")
+    ap.add_argument("--label", help="name of the batch, e.g. tuned_mission")
+    ap.add_argument("--params", type=Path, help="PX4 .params file")
+    ap.add_argument("--rescore", type=Path, metavar="BATCH_DIR",
+                    help="score a flown batch again from its ulogs and exit")
     ap.add_argument("--routes", nargs="+", default=None,
                     help=f"route worlds (default: all of {route_world_names()})")
     ap.add_argument("--seeds", nargs="+", type=int, default=[1, 2, 3])
@@ -405,6 +438,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="build every route's world and mission and print the plan; no Docker")
     args = ap.parse_args(argv)
+    if args.rescore:
+        rescore(args.rescore, args.contact_radius_m)
+        return 0
+    if not args.label or not args.params:
+        ap.error("--label and --params are required unless --rescore is given")
     args.routes = args.routes or route_world_names()
     worlds = [load_route_world(name) for name in args.routes]  # fail before any flight
     load_profile(args.profile)
