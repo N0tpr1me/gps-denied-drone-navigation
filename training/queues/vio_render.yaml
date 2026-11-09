@@ -4,7 +4,7 @@
 #
 #   python -m training.queue training/queues/vio_render.yaml --dry-run --gpus 2
 #   python -m training.queue training/queues/vio_render.yaml --smoke
-#   python -m training.queue training/queues/vio_render.yaml
+#   python -m training.queue training/queues/vio_render.yaml --max-gpus 2
 #
 # Nothing starts until the Isaac Lab parity check (server_week1's isaac_parity) has passed:
 # isaac_ok fails otherwise, and every render waits on it.
