@@ -11,6 +11,9 @@
 # A policy trained on the x500 flies the others through the module's own thrust mapping
 # (eval.gate1.ModuleThrustScale), as the module would. The 50 % payload hovers at a
 # normalised thrust of 0.93, above the module's 0.9 clamp: that cell measures the edge.
+# PX4 v1.17's hover thrust estimate stops at 0.8 (MPC_THR_HOVER's top; the 25 % Gazebo hover
+# commanded 0.835 with the estimate at 0.80), so the module's hover reference reads low on a
+# heavy x500: hover_thrust_error -4, -9 and -14 % in the payload cells.
 #   python -m training.launch --config eval/configs/airframe_sizes.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/airframe_sizes.yaml --device cpu
 #   ... --set params.policies.v27=runs/<run>/policy.onnx   # add a candidate (the queue does)
@@ -64,14 +67,17 @@ params:
     - {name: x500, label: "x500 2.06 kg, 0-8 m/s", headline: true}
     - name: x500_payload25
       label: "x500 + 25 % payload, 0-8 m/s"
-      env: {airframe_rand: {mass_scale: 1.25, thrust_to_weight_scale: 0.8, inertia_scale: 1.07}}
+      env: {airframe_rand: {mass_scale: 1.25, thrust_to_weight_scale: 0.8, inertia_scale: 1.07,
+                            hover_thrust_error: -0.043}}
     - name: x500_payload35
       label: "x500 + 35 % payload, 0-8 m/s (hover at 0.88, near the clamp)"
-      env: {airframe_rand: {mass_scale: 1.35, thrust_to_weight_scale: 0.7407, inertia_scale: 1.10}}
+      env: {airframe_rand: {mass_scale: 1.35, thrust_to_weight_scale: 0.7407, inertia_scale: 1.10,
+                            hover_thrust_error: -0.086}}
     - name: x500_payload50
       label: "x500 + 50 % payload, 0-8 m/s (hover above the 0.9 clamp)"
       envelope: false
-      env: {airframe_rand: {mass_scale: 1.5, thrust_to_weight_scale: 0.6667, inertia_scale: 1.15}}
+      env: {airframe_rand: {mass_scale: 1.5, thrust_to_weight_scale: 0.6667, inertia_scale: 1.15,
+                            hover_thrust_error: -0.142}}
     - name: small_300g
       label: "300 g class, 0-8 m/s"
       env: {airframe: small_300g, contact_radius_m: 0.18}  # 0.115 m arms + 0.06 m props
