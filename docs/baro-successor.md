@@ -8,12 +8,13 @@ candidate trained on the barometer to win that back. This page is that candidate
 is still needed, what already covers it, the recipe, the check and the server queue.
 
 Status (2026-11-09): configs and queue written and smoke-tested on CPU. **Parked: not sent
-to the server**, for the reason in the next section. Nothing is trained, and nothing here is
+to the server**, for the two reasons in the next section. Nothing is trained, and nothing here is
 released on a mock score (CLAUDE.md "Releasing a policy").
 
 ## Is it still needed?
 
-Probably not, for the reason it was asked for.
+Probably not: the loss it was asked to win back is not there, and the retraining it
+would do has in effect been done.
 
 While this was being written the cloud benchmark thread split its 48 barometer flights into
 horizontal and vertical error and compared EKF2's height with Gazebo's true height (its
@@ -39,18 +40,31 @@ the mock v22 holds a little tighter on the barometer than on vision height (roug
 0.176 m against 0.196 m, `docs/baseline.md` "The mock fusion on barometer height"), and the
 cloud flights found the fitted barometer walk (0.005 m/sqrt(s)) matches what EKF2 does.
 
-What is left of the case for running it:
+**It has also been run once already, in effect.** The seed-repeatability job of week 2
+(`docs/gazebo_check.md` "Seed repeatability", the same day) retrained v22's own recipe on
+seeds 1 to 3, and since `gz_x500_sitl` fuses on the barometer those three trained on
+barometer height. In the check they hold 6 to 10 % tighter than v22 with no crashes, the
+seeds differ from each other by about 5 %, and one of the three passes every rule. That is
+the answer this queue would give: v22 never trained on the barometer's behaviour (no height
+resets, no frozen height), and a policy that did holds a centimetre or two tighter in the
+mock. This queue continues v22 instead of retraining it from v19 and uses four times the
+drones, so its numbers would differ in detail, not in kind.
 
-- It is the control for the other v22 continuations (next section): the only candidate that
-  changes the height source and nothing else.
-- v22 never trained on the barometer's behaviour (no height resets, no frozen height), so a
-  continuation might hold a little tighter in the mock. v22's own row on the check
-  (`experiments/LOG.md`, run `20261109-200353_gazebo_check_v28`: pooled rough p95 0.176 m) is
-  the number to beat.
+What a 6 to 10 % gain in the mock is worth:
 
-Neither is worth shared GPU time ahead of the queues that answer open questions, so the
-queue stays ready and is run only if Zain asks for it, or as the control when an airframe,
-bridge or heading candidate beats v22 and the question "was it the barometer?" comes up.
+- It is at the edge of one seed's luck, which is why the recipe now needs three seeds
+  (CLAUDE.md "Releasing a policy") and why this queue has three.
+- Earlier candidates kept from none to half of their check gain in Gazebo
+  (`docs/gazebo_check.md`), so expect a centimetre or less on a 0.20 m hold there. An 8-seed
+  re-fly cannot tell that from Gazebo's own scatter between two flights of one seed.
+- v24, the rangefinder candidate, is outside the luck band against v22 (ratio 0.77 on the
+  server) and is already in line for the cloud re-fly. It is the successor worth a re-fly.
+
+So the queue stays ready and is run only if Zain asks for it, or as the control when an
+airframe, bridge or heading candidate beats v22 and the question "was it the barometer?"
+comes up. v22's own row on this check is in `experiments/LOG.md` (run
+`20261109-200353_gazebo_check_v28`: pooled rough p95 0.176 m, the same as in the
+seed-repeatability check).
 
 ## Does it need its own candidate line?
 
@@ -78,7 +92,7 @@ warmed up 200 iterations), the same 21 inputs, reward, estimate fault rates and 
 randomisation, so the released module header could take the result unchanged. The height
 source is stated in the config (`env.fusion: {height_source: baro}`) rather than left to the
 airframe preset. GPU-sized as the other continuations: 4096 drones, 800 iterations, one part
-under 1 h. Two seeds, because PPO moved more between seeds than between recipes on v23 to v25.
+under 1 h. Three seeds: a margin inside about 10 % is within one seed's luck.
 
 `training/configs/structure_hold_ppo_v28_baro_range.yaml` is the same step for v24 (its
 recipe, its 23 inputs, from its ONNX).
@@ -102,28 +116,30 @@ python -m training.queue training/queues/baro_successor.yaml --max-gpus 2
 
 | Job | What | Hours |
 | --- | --- | --- |
-| `baro_s0`, `baro_s1` | the recipe, seeds 0 and 1, one GPU each | 0.9 each |
-| `baro_check_s0`, `baro_check_s1` | each candidate against v22 in the check, one GPU each | 0.8 each |
+| `baro_s0`, `baro_s1`, `baro_s2` | the recipe, seeds 0 to 2, one GPU each | 0.9 each |
+| `baro_check_s0` to `_s2` | each candidate against v22 in the check, one GPU each | 0.8 each |
 | `gz_baro_candidate` (off) | a note: the re-fly is the cloud's | – |
-| `baro_range_*` (off) | the same for v24: two trainings, each judged against v24 with and without a rangefinder | 0.9 and 0.8 each |
+| `baro_range_*` (off) | the same for v24: three trainings, each judged against v24 with and without a rangefinder | 0.9 and 0.8 each |
 
 Every job is under 1 h on one GPU and at most two GPUs are busy at once, so nothing needs a
-separate yes. About 3.4 GPU-hours, done about 1.7 h after the start on two free GPUs.
+separate yes. About 5.1 GPU-hours, done about 2.6 h after the start on two free GPUs.
 
-**Go/no-go:** a candidate goes on only if its check says it beats v22 with every rule
-passed: pooled p95 lower, lift, ring and fast ring not higher, no more crashes, the three
-seed replays no worse, the re-engage clean, `calm_clean` within 0.02 m. If both pass, the one
-with the lower pooled p95 goes on.
+**Go/no-go:** a seed passes if its check says it beats v22 with every rule passed: pooled
+p95 lower, lift, ring and fast ring not higher, no more crashes, the three seed replays no
+worse, the re-engage clean, `calm_clean` within 0.02 m. The recipe goes on only if at least
+two of the three seeds pass; a rule one seed fails alone is a watch item, not a verdict
+(`docs/gazebo_check.md` "Seed repeatability"). The seed with the lowest pooled p95 among
+those that pass is the one to fly.
 
 ## After the check, if it is run
 
-- **A candidate beats v22:** it flies the benchmark in the cloud (Gazebo flies there,
+- **The recipe passes:** the chosen seed flies the benchmark in the cloud (Gazebo flies there,
   `docs/gpu-server.md`): export its header and build an image as `server_week1`'s
   `gz_v24_image`, then three scenarios on seeds 1 to 8 with the hold runner on
   `px4_tuned_v2.params`, one flight at a time, against the cloud's tuned PX4 and v22 batches
   on the same image, scored with the frame offset taken out. It is released only if Gazebo
   confirms it, and that is Zain's decision; then the steps in CLAUDE.md "Releasing a policy".
-- **Neither does:** v22 stays and the result goes in `docs/gazebo_check.md` "Policies judged".
+- **It does not:** v22 stays and the result goes in `docs/gazebo_check.md` "Policies judged".
 - **v24 is released first:** switch the `baro_range_*` jobs on (`enabled: true`) and run the
   queue again; it skips what already finished.
 

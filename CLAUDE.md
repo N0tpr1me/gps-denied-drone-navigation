@@ -237,11 +237,12 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   passes the check and none is flown.
 - Barometer-height successor (2026-11-09, `docs/baro-successor.md`): v28 is v22's recipe on
   the barometer with nothing else moved (`structure_hold_ppo_v28_baro.yaml`, check
-  `gazebo_check_v28.yaml`, queue `training/queues/baro_successor.yaml`). Ready but parked,
-  not trained: the cloud's height split found v22's looser Gazebo holds on the barometer
-  were a constant offset between EKF2's height and the truth that the scorer counted, not
-  the policy, so there is nothing for retraining to win back. Run it only as the control
-  for the other v22 continuations, which all train on the barometer too.
+  `gazebo_check_v28.yaml`, queue `training/queues/baro_successor.yaml`, three seeds). Ready
+  but parked, not trained: the cloud's height split found v22's looser Gazebo holds on the
+  barometer were a constant offset between EKF2's height and the truth that the scorer
+  counted, not the policy; and the seed-repeatability retrains of v22's recipe, which
+  trained on the barometer, came out 6 to 10 % tighter in the check, at the edge of seed
+  luck. The successor worth a Gazebo re-fly is v24; the queue's v24 arm is switched off.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU

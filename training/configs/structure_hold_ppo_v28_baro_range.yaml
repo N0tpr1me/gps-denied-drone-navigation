@@ -1,7 +1,7 @@
 # The barometer step for the rangefinder line: v24 (the wall-range candidate, 23 inputs,
 # docs/wall-range.md) continued on barometer height, as structure_hold_ppo_v28_baro.yaml
 # continues v22. Trained only if the cloud Gazebo re-fly releases v24 (queue
-# training/queues/baro_successor.yaml, jobs baro_range_s0 and baro_range_s1: off until
+# training/queues/baro_successor.yaml, jobs baro_range_s0 to baro_range_s2: off until
 # then), because the barometer step should start from whichever policy is the release.
 # v24's recipe with nothing else moved (structure_hold_ppo_v24.yaml: the rangefinder in half
 # the episodes, the spike gate on), from v24's ONNX with a fresh critic warmed up 200
