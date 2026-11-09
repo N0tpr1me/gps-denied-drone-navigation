@@ -1,0 +1,86 @@
+# The Route Follow stress table with degraded sensors (GPU plan item 7, training/queues/
+# route_gazebo.yaml job "route_degraded_stress"): route_follow_stress_server.yaml's 13 cells
+# plus four for dust and a degraded VIO, in the open mix and in narrow pipes. The queue sets
+# params.policies.degraded_s6 / _s7 to the route_follow_ppo_degraded chains' last policy.onnx
+# and pipes to route_pipes' (week 1), so the degraded recipe is judged beside v2 and the pipes
+# policy on every cell, and both PD yardsticks fly every cell as always.
+#   python -m training.launch --config eval/configs/route_follow_stress_degraded.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/route_follow_stress_degraded.yaml --device cuda \
+#       --set params.policies.degraded_s6=runs/<part 3>/policy.onnx
+name: route_follow_stress_degraded
+entrypoint: eval.route_follow
+seed: 7500
+expected_hours: 0.55
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  policies:  # pipes, degraded_s6, degraded_s7: set by the queue (header)
+    v2: training/policies/route_follow_v2.onnx
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  sets:
+    - name: nominal  # the tunnel defaults: drift walk 0.02 m/sqrt(s), cap 0.5 m
+      env: {}
+    - name: perfect_estimate  # no delay, noise, drift, jumps or dropouts: the ceiling
+      env:
+        estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0,
+                   vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0,
+                   jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+    - name: drift_low  # Structure Hold's outdoor VIO level: walk 0.01, cap 0.3 m
+      env: {estimate: {bias_walk_std_m_per_sqrt_s: 0.01, bias_max_m: 0.3}}
+    - name: drift_high  # walk 0.04, cap 1.0 m: a badly drifting VIO
+      env: {estimate: {bias_walk_std_m_per_sqrt_s: 0.04, bias_max_m: 1.0}}
+    - name: dropouts  # about one 1 to 3 s loss of the estimate every 10 s
+      env: {estimate: {dropout_rate_hz: 0.1, dropout_min_s: 1.0, dropout_max_s: 3.0}}
+    - name: jumps  # about one 0.2 to 1 m jump every 10 s (VIO resets)
+      env: {estimate: {jump_rate_hz: 0.1, jump_min_m: 0.2, jump_max_m: 1.0}}
+    - name: late  # the estimate 0.2 to 0.4 s old
+      env: {estimate: {delay_min_s: 0.2, delay_max_s: 0.4}}
+    - name: strong_draft  # 3 to 6 m/s along the tunnel, gusts to 4 m/s
+      env: {disturbance: {mean_speed: [3.0, 6.0], gust_speed: [0.0, 4.0]}}
+    - name: fast  # cruise 1.5 to 2.5 m/s (trained up to 1.5)
+      env: {route: {speed_mps: [1.5, 2.5]}}
+    - name: bad_rangefinders  # 10 % of readings are random outliers
+      env: {ranges: {present_prob: 0.7, outlier_prob: 0.1}}
+    - name: pipe_perfect_estimate  # narrow pipes, 0.8 to 1.1 m radius
+      env:
+        route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}
+        estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0,
+                   vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0,
+                   jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+    - name: pipe_drift_low
+      env:
+        route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}
+        estimate: {bias_walk_std_m_per_sqrt_s: 0.01, bias_max_m: 0.3}
+    - name: pipe_nominal
+      env: {route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}}
+    # Degraded sensors (route_follow_ppo_degraded.yaml): dust on every rangefinder (a fifth of
+    # the readings lost, a tenth short), and the VIO noisier and drifting further, as in dust,
+    # spray or low light (docs/field-faults.md "degrade", held for the whole route).
+    - name: dust
+      env: {ranges: {present_prob: 0.7, outlier_prob: 0.01, dust_prob: 1.0}}
+    - name: degraded_vio
+      env:
+        estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.15,
+                   bias_walk_std_m_per_sqrt_s: 0.03, bias_max_m: 0.7}
+    - name: pipe_dust
+      env:
+        route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}
+        ranges: {present_prob: 0.7, outlier_prob: 0.01, dust_prob: 1.0}
+    - name: pipe_dust_degraded_vio  # both at once in a pipe: the worst case
+      env:
+        route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}
+        ranges: {present_prob: 0.7, outlier_prob: 0.01, dust_prob: 1.0}
+        estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.15,
+                   bias_walk_std_m_per_sqrt_s: 0.03, bias_max_m: 0.7}
+smoke:
+  num_envs: 8
+  policies: {}
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40

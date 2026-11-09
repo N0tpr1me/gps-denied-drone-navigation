@@ -103,7 +103,7 @@ the wind evidence are all in `experiments/LOG.md`.
 | Job | Lane | Time | Runs when |
 | --- | --- | --- | --- |
 | `isaac_train_v22`: v22's recipe on Isaac Lab (`--set params.sim=isaac`) | GPU 0 | 45 min | After `isaac_parity` passes, automatically. The M3 training; the policy then takes `gazebo_check_v24_range.yaml`'s place in a copy of that config and a Gazebo re-fly like any candidate (`gz_isaac_policy`, off until then) |
-| `route_pipes_stress`: the 13-cell stress table with the three pipe policies | first free GPU | 25 min | After the three chains finish, automatically. **Go/no-go for the pipes work:** the best seed has fewer narrow-pipe crashes than v0's 11 % and still beats both PD yardsticks on every cell; then it is the Route Follow candidate for Gazebo tunnel worlds (not built yet) |
+| `route_pipes_stress`: the 13-cell stress table with the three pipe policies | first free GPU | 25 min | After the three chains finish, automatically. **Go/no-go for the pipes work:** the best seed has fewer narrow-pipe crashes than v0's 11 % and still beats both PD yardsticks on every cell; then it is the Route Follow candidate for the Gazebo route worlds (`sim2real/route_follow/`) |
 | `hold_pass_gate`: `eval/configs/gate1_x500_ekf_pass.yaml` with the pass policy | first free GPU | 35 min | After `hold_pass`, automatically. **Go/no-go for passes:** PASS against the PD on the 7 held-out pass cells and a lower p95 than v22 (scored beside it) in every cell; then the module work (a path generator, `docs/surface-passes.md` "Not done yet") and Gazebo pass cells against tuned PX4 |
 | `hold_wind_finetune`: `structure_hold_ppo_v26_wind.yaml` | first free GPU | 50 min | By hand, `enabled: true`, only if v22 loses at 10 or 12 m/s in Gazebo. v22 continued on 6 to 12 m/s winds blowing within 60 degrees of the wall, same 21 inputs so the module header takes it unchanged; then the usual check and re-fly |
 | `gz_isaac_policy` | CPU | ~1 h | By hand, after `isaac_train_v22` passes its mock check: `gz_v24_image` and `gz_v24_refly` with its run folder |
@@ -122,6 +122,16 @@ the wind evidence are all in `experiments/LOG.md`.
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
   same moving setpoint, the pass's real yardstick (`docs/surface-passes.md`).
+
+### Route Follow toward a real test (its own queue, any time)
+
+`training/queues/route_gazebo.yaml` (GPU plan item 7, `docs/route-follow.md` "Degraded
+sensors" and "Gazebo") runs beside week 1 and needs none of its results: two seeds of the
+pipes recipe with dust-spoiled rangefinders and a degraded VIO (`route_degraded`,
+`route_degraded_s7`, 3 x 45 min chains on 2 GPUs), their 17-cell stress table, and on the CPU
+lane stock PX4 Mission mode through the four Gazebo route worlds (`gz_route_clean` first as
+the plumbing go/no-go, then 8 seeds each on `route_vio`, `route_drift`, `route_degrade`).
+Run it with `--max-gpus 2`; `--dry-run --gpus 2` shows the plan.
 
 ## What needs Zain's yes, as one batch
 

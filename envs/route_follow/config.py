@@ -137,14 +137,28 @@ class RouteRanges:
     noise_std_m: float = 0.01
     noise_frac: float = 0.005
     outlier_prob: float = 0.0
+    # Dust, fog or spray in the tunnel (docs/field-faults.md "degrade", the same three
+    # effects on a rangefinder): per reading, no return at all with ``dust_loss_prob`` (the
+    # usable flag drops), and a short return off the dust with ``dust_short_prob``, at a
+    # draw from ``dust_short_frac`` of the true distance. Each episode is dusty with
+    # ``dust_prob``; off by default.
+    dust_prob: float = 0.0
+    dust_loss_prob: float = 0.2
+    dust_short_prob: float = 0.1
+    dust_short_frac: tuple[float, float] = (0.2, 0.9)
     min_m: float = 0.1
     max_m: float = 8.0
     obs_max_m: float = 4.0
     trace_iters: int = 40  # sphere-tracing steps per beam (envs/route_follow/geometry.py)
 
     def __post_init__(self) -> None:
-        if not 0.0 <= self.present_prob <= 1.0 or not 0.0 <= self.outlier_prob <= 1.0:
-            raise ValueError("present_prob and outlier_prob must be in [0, 1]")
+        _pairs(self)
+        for name in ("present_prob", "outlier_prob", "dust_prob", "dust_loss_prob",
+                     "dust_short_prob"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if not 0.0 < self.dust_short_frac[0] and self.dust_short_frac[1] <= 1.0:
+            raise ValueError("dust_short_frac must lie in (0, 1]")
         if self.rate_hz <= 0 or not 0 < self.min_m < self.max_m or self.obs_max_m <= 0:
             raise ValueError("need rate_hz > 0, 0 < min_m < max_m and obs_max_m > 0")
         if self.trace_iters < 1:
