@@ -232,6 +232,9 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   where tuned PX4 hit the wall in 5 of 8. EKF2 did not keep a 30 deg vision-yaw offset
   (14 to 22 deg mean), so Gazebo is milder than the mock's fixed error, and the 30 deg-from-
   takeoff batches are muddied by stock PX4 circling before the engage.
+  Candidates trained on a wrong heading in the mock (`structure_hold_ppo_heading_cloud.yaml`)
+  hold a fixed 30 deg with ~0 crashes but lose true-heading tightness or smoothness; none
+  passes the check and none is flown.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
