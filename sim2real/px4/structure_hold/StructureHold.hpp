@@ -105,6 +105,10 @@ public:
 	static constexpr hrt_abstime LIVE_INTERVAL = 200_ms;    // the live array; MAVLink streams it at its own rate
 	static constexpr uint16_t LIVE_ARRAY_ID = 0x5348;       // "SH": tells our array from another module's
 	static constexpr hrt_abstime HANDBACK_RETRY = 300_ms;  // then Position, Hold, Land
+	// Structure Hover on the range alone after a VIO runaway: damping of the along-wall
+	// speed on the IMU's dead-reckoned velocity (1/s), and its cap (m/s^2).
+	static constexpr float RUNAWAY_DAMP_PER_S = 0.6f;
+	static constexpr float RUNAWAY_DAMP_MAX = 1.5f;
 	// Structure Hover on the range alone (SH_HB_RANGE): no usable reading for this long
 	// trips it, and the estimate must be back and fresh for this long to leave it.
 	static constexpr hrt_abstime RANGE_HOVER_LOST = 500_ms;

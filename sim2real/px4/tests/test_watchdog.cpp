@@ -113,6 +113,16 @@ static void testRunawayFix()
 		flyRunaway(g, 8.f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
 		CHECK(g.runaway());
 		CHECK(g.disagreement() > 0.8f);
+		// Dead-reckoned from before the runaway: the true velocity, not the VIO's.
+		{
+			const float v_true = 0.4f * std::sin(3.14159265f * 7.99f);
+			float v[3];
+			CHECK(g.deadReckoned(v));
+			CHECK(std::fabs(v[0] - v_true) < 0.1f && std::fabs(v[1] + v_true) < 0.1f
+			      && std::fabs(v[2] - 0.5f * v_true) < 0.1f);
+			float none[3];
+			CHECK(!f.deadReckoned(none));
+		}
 		flyRunaway(g, 10.f, [](float) { return 1.5f; }, 0.05f, 0.f, 9'000'000);  // stopped accelerating
 		CHECK(g.runaway());
 		CHECK(g.disagreement() < 0.5f);
