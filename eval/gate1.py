@@ -25,7 +25,9 @@ against PD: paired bootstrap 95 % intervals of the p95 ratio and of the crash-ra
 difference. The verdicts follow ``docs/gate1.md``; ``rules`` in the config sets them.
 
 Inputs (``params``): ``controllers`` (list of ``{name, policy, fallback, yaw_guard}``; the PD
-yardstick is always added as ``pd``), ``gate_controller`` (the one judged), ``seeds``,
+yardstick is always added as ``pd``), ``policies`` (``{name: onnx}``, more controllers by
+path alone), ``gate_controller`` (the one judged; default the first of ``policies``, else the
+first controller), ``seeds``,
 ``num_envs`` (episodes per cell and seed), ``base_env`` (a ``StructureHoldConfig`` mapping
 applied to every cell), ``cells`` (list of ``{name, env, envelope, headline}``; ``env`` is
 merged over ``base_env``), ``bootstrap`` (resamples), ``rules``.
@@ -90,6 +92,11 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
     pos = np.empty((steps + 1, n, 3), dtype=np.float32)
     act = np.empty((steps, n, 4), dtype=np.float32)
     pos[0] = env.state.pos.cpu().numpy()
+    # The hold point per step: a surface pass moves it (cfg.surface_pass); a hold keeps it.
+    sp = np.empty((steps + 1, n, 3), dtype=np.float32)
+    sp[0] = hold
+    passing = env.passes.active.cpu().numpy().copy()
+    pass_end = env.passes.end_s.cpu().numpy().copy()
     alive = torch.ones(n, dtype=torch.bool, device=env.device)
     end = np.full(n, steps, dtype=np.int64)
     reason = np.full(n, TIMEOUT, dtype=np.int64)
@@ -110,7 +117,9 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
         # is already the next episode's for the envs that ended); an ended episode then
         # keeps its last point.
         p = env.step_pos.cpu().numpy()
-        pos[k + 1] = np.where(alive.cpu().numpy()[:, None], p, pos[k])
+        live = alive.cpu().numpy()[:, None]
+        pos[k + 1] = np.where(live, p, pos[k])
+        sp[k + 1] = np.where(live, env.step_hold.cpu().numpy(), sp[k])
         newly = (alive & done).cpu().numpy()
         if newly.any():
             end[newly] = k + 1
@@ -129,9 +138,18 @@ def fly(env: StructureHoldEnv, controller: Callable[[torch.Tensor], torch.Tensor
             "env": i, "length_s": float(length * env.dt), "crash": bool(reason[i] != TIMEOUT),
             "reason": TERM_REASONS[int(reason[i])], "hold_distance_m": float(-hold[i, 0]),
             "heading_err_deg": math.degrees(float(yaw_err[i])), "mass_scale": float(mass[i]),
+            "pass": bool(passing[i]),
         }
+        if passing[i]:
+            # Done only if the episode outlived the path: a crash or a short cell cuts it.
+            row["pass_done"] = bool(length * env.dt >= pass_end[i])
         if length >= 2:
-            trace = Trace(t=t, pos=pos[: length + 1, i].astype(np.float64), pos_sp=hold[i],
+            # The standoff: the error along the wall normal alone, the inspection number on a
+            # pass (the camera's distance to the surface), reported beside the 3-D p95.
+            row["standoff_p95_m"] = float(np.percentile(
+                np.abs(pos[1: length + 1, i, 0] - sp[1: length + 1, i, 0]), 95))
+            trace = Trace(t=t, pos=pos[: length + 1, i].astype(np.float64),
+                          pos_sp=sp[: length + 1, i].astype(np.float64),
                           cmd_t=t[:-1], rates_cmd=act[:length, i, :3] * cfg.max_rate_rad_s,
                           thrust_cmd=0.5 * (act[:length, i, 3] + 1.0))
             m = compute_metrics(trace, surface, gusts=[g for g in gusts[i] if g[0] < t[-1]],
@@ -246,6 +264,10 @@ def describe(rows: list[dict[str, Any]], idx: np.ndarray) -> dict[str, Any]:
         "worst_toward_surface_m": float(np.nanmax(worst)),
         "contact_rate": sum(1 for r in rows if r["reason"] == "contact") / n,
         "heading_err_deg_mean": float(np.mean([r["heading_err_deg"] for r in rows])),
+        "standoff_p95_m_mean": _mean_of(rows, "standoff_p95_m"),
+        # Surface passes: the share of pass episodes that flew the whole path.
+        "pass_done_rate": (float(np.mean([r["pass_done"] for r in rows if "pass_done" in r]))
+                           if any("pass_done" in r for r in rows) else math.nan),
         # Reported, not judged: a limit cycle in the commands shows up here, not in p95.
         "rate_roughness_rad_s2_mean": _mean_of(rows, "rate_roughness_rad_s2"),
         "thrust_roughness_1_s_mean": _mean_of(rows, "thrust_roughness_1_s"),
@@ -300,11 +322,19 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
     seeds = [int(s) for s in p.get("seeds", HELD_OUT_SEEDS)]
     num_envs = int(p.get("num_envs", 1024))
     rules = {**DEFAULT_RULES, **(p.get("rules") or {})}
-    specs = [dict(c) for c in p["controllers"]] + [{"name": "pd", "policy": None}]
+    # ``policies`` ({name: onnx}) adds controllers by path alone, so a queue job can point
+    # one at another job's run folder (training/queue.py ``{run:ID}``).
+    specs = ([dict(c) for c in p.get("controllers") or []]
+             + [{"name": k, "policy": v} for k, v in (p.get("policies") or {}).items()]
+             + [{"name": "pd", "policy": None}])
     names = [s["name"] for s in specs]
     if len(set(names)) != len(names):
         raise ValueError(f"controller names must be unique: {names}")
-    gate = str(p.get("gate_controller", specs[0]["name"]))
+    # Judged: the one named, else the first of ``policies`` (the candidates), else the first
+    # controller. A queue job that adds a candidate by path is judged on it without also
+    # renaming the judged controller, which its smoke run (no candidate) could not find.
+    first = next(iter(p.get("policies") or {}), specs[0]["name"])
+    gate = str(p.get("gate_controller") or first)
     if gate not in names or gate == "pd":
         raise ValueError(f"gate_controller {gate!r} must be one of the policies {names[:-1]}")
     factories = {s["name"]: make_factory(s, device) for s in specs}
@@ -405,16 +435,17 @@ def markdown(report: dict[str, Any]) -> str:
         f"Seeds {report['seeds']}, {report['num_envs']} episodes per cell and seed; "
         f"judged: `{gate}`. Intervals are 95 %.",
         "",
-        "| Cell | Controller | p95 (m) | Crash | Worst toward wall (m) | Heading (deg) "
-        "| Roughness, rates (rad/s2) / thrust (1/s) |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Cell | Controller | p95 (m) | Standoff p95 (m) | Crash | Worst toward wall (m) "
+        "| Heading (deg) | Roughness, rates (rad/s2) / thrust (1/s) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for c in report["cells"]:
         for name in names:
             d = c["controllers"][name]
             lines.append(
                 f"| {c['label']} | {name} | {d['p95_m_mean']:.3f} "
-                f"[{d['p95_ci'][0]:.3f}, {d['p95_ci'][1]:.3f}] | {d['crash_rate']:.1%} "
+                f"[{d['p95_ci'][0]:.3f}, {d['p95_ci'][1]:.3f}] | "
+                f"{d.get('standoff_p95_m_mean', math.nan):.3f} | {d['crash_rate']:.1%} "
                 f"[{d['crash_ci'][0]:.1%}, {d['crash_ci'][1]:.1%}] | "
                 f"{d['worst_toward_surface_m']:.2f} | {d['heading_err_deg_mean']:.1f} | "
                 f"{d.get('rate_roughness_rad_s2_mean', math.nan):.0f} / "

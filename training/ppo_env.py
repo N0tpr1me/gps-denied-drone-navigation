@@ -29,7 +29,9 @@ from tensordict import TensorDict
 from envs.sims.torch_quad import GRAVITY
 from envs.structure_hold.env import NUM_OBS, StructureHoldEnv
 
-PRIVILEGED_OBS = 12  # true pos error (3), true vel (3), wind / weight (3), estimate error (3)
+# True pos error (3), true velocity minus the hold point's (3), wind / weight (3), estimate
+# error (3).
+PRIVILEGED_OBS = 12
 
 
 class ObsHistory:
@@ -136,7 +138,7 @@ class StructureHoldVecEnv:
         return torch.cat(
             [
                 state.pos - e.hold_point,
-                state.vel,
+                state.vel - e.hold_vel,  # relative to the hold point's (a surface pass)
                 e.wind_force / self._weight,
                 e.estimate_pos - state.pos,
             ],

@@ -22,7 +22,7 @@ Observation (``num_obs`` = 23), everything the onboard module can know:
 | slice | what | units |
 | --- | --- | --- |
 | 0:3 | estimated position minus hold point, structure frame, clipped | m |
-| 3:6 | estimated velocity, structure frame | m/s |
+| 3:6 | estimated velocity minus the hold point's (0 unless on a pass), structure frame | m/s |
 | 6:9 | gravity direction in the body frame (attitude) | unit |
 | 9:11 | body x axis (heading) in the structure frame, x and y components | unit |
 | 11:14 | body rates / max_rate | - |
@@ -56,6 +56,12 @@ one torch generator (estimate corruption) and a second NumPy generator for the a
 constructor's ``seed``. The airframe draws having their own generator means a stressed
 airframe flies exactly the episodes the nominal one does.
 
+Surface passes (``cfg.surface_pass``, off by default, ``envs/structure_hold/passes.py``): the
+hold point moves along the wall at a fixed standoff. Position error, velocity input, reward and
+termination are all taken against the moving point, so a plain hold is a pass of length 0.
+``hold_vel`` is the hold point's velocity; ``step_hold`` the hold point that went with
+``step_pos``.
+
 ``term_reason`` holds, per env, why its last episode ended (``TERM_REASONS``), so a scorer can
 tell crashes apart after the env has already reset.
 """
@@ -81,6 +87,7 @@ from envs.sims.torch_quad import (
     quat_rotate_inverse,
 )
 from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.passes import PassPaths
 
 OBS = {
     "pos_err": slice(0, 3),
@@ -230,6 +237,13 @@ class StructureHoldEnv:
         self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
         self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
         self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
+        # Surface passes (cfg.surface_pass): the paths, the hold point's velocity, and the
+        # pass's own clock (rsl_rl's random episode phase moves episode_time, and a pass must
+        # still start from its beginning). step_hold is the hold point step_pos went with.
+        self.passes = PassPaths(cfg.surface_pass, n, seed, dev, dt)
+        self.hold_vel = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.pass_time = torch.zeros(n, dtype=dt, device=dev)
+        self.step_hold = torch.zeros(n, 3, dtype=dt, device=dev)
         self.reset()
 
     # ------------------------------------------------------------ state helpers
@@ -365,6 +379,10 @@ class StructureHoldEnv:
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
         self.range_ref[env_ids] = self.clearance(self.hold_point[env_ids])
+        self.hold_vel[env_ids] = 0.0
+        self.pass_time[env_ids] = 0.0
+        if cfg.surface_pass.active:
+            self.passes.draw(env_ids)
         if cfg.range.active:
             self._reset_range(env_ids)
 
@@ -563,6 +581,9 @@ class StructureHoldEnv:
         self.episode_step += 1
         self.episode_time += cfg.dt
         self.engage_time += cfg.dt
+        self.pass_time += cfg.dt
+        if cfg.surface_pass.active:
+            self._move_hold_point()
 
         # What the estimator reports.
         finite = state.finite()
@@ -608,7 +629,9 @@ class StructureHoldEnv:
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward
         toward = (err @ self.wall_normal).clamp(0.0, 1.0)
-        approach = ((state.vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
+        # Speed is charged relative to the hold point's: on a pass, keeping up is not a cost.
+        rel_vel = state.vel - self.hold_vel
+        approach = ((rel_vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
             0.0, 1.0)
         d_action = actions - self.last_action
         rates = actions[:, :3]
@@ -630,7 +653,7 @@ class StructureHoldEnv:
             - w.toward_wall * toward
             - w.toward_wall_vel * approach
             - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
-            - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
+            - speed_w * rel_vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
@@ -645,6 +668,7 @@ class StructureHoldEnv:
         self.episode_reward += self.reward_buf
         self.last_action = actions
         self.step_pos = state.pos.clone()
+        self.step_hold = self.hold_point.clone()
 
         extras: dict[str, Any] = {"time_outs": self.time_out_buf, "observations": {}}
         done_ids = self.done_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -657,11 +681,19 @@ class StructureHoldEnv:
             }
             extras["episode"] = ep
             self.reset_envs(done_ids)
-        self.reengaged = self._reengage(~self.done_buf)
+        # A pass is flown from one engage; re-engages are for plain holds.
+        self.reengaged = self._reengage(~self.done_buf & ~self.passes.active)
         if cfg.range.active:
             self._update_range()
         self._observe()
         return self.obs_buf, self.reward_buf, self.done_buf, extras
+
+    def _move_hold_point(self) -> None:
+        """Put the pass envs' hold point where their path is now, and its velocity."""
+        offset, vel = self.passes.at(self.pass_time)
+        on = self.passes.active[:, None]
+        self.hold_point = torch.where(on, self.base_hold + offset, self.hold_point)
+        self.hold_vel = torch.where(on, vel, torch.zeros_like(vel))
 
     def _reengage(self, eligible: torch.Tensor) -> torch.Tensor:
         """Mid-episode re-engages (``cfg.reengage_rate_hz``), for envs in ``eligible`` at
@@ -704,7 +736,7 @@ class StructureHoldEnv:
         o = self.obs_buf
         o[:, OBS["pos_err"]] = self.to_latched(self.estimate_pos - self.hold_point).clamp(
             -cfg.obs_pos_clip_m, cfg.obs_pos_clip_m)
-        o[:, OBS["vel"]] = self.to_latched(self.estimate_vel)
+        o[:, OBS["vel"]] = self.to_latched(self.estimate_vel - self.hold_vel)
         o[:, OBS["gravity_body"]] = quat_rotate_inverse(state.quat, down)
         o[:, OBS["heading"]] = quat_rotate(self.believed_quat, fwd)[:, :2]
         rates = state.ang_vel
