@@ -1,0 +1,56 @@
+# Real VIO in Isaac Sim fog, dust and low light (docs/vio-render.md; GPU plan item 8,
+# approved by Zain with runs over 1 h allowed, at most 2 GPUs). Isaac renders the hold
+# flights on up to two cards; Basalt and the fit then run on the CPU lane.
+#
+#   python -m training.queue training/queues/vio_render.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/vio_render.yaml --smoke
+#   python -m training.queue training/queues/vio_render.yaml --max-gpus 2
+#
+# Nothing starts until the Isaac Lab parity check (server_week1's isaac_parity) has passed:
+# isaac_ok fails otherwise, and every render waits on it.
+name: vio_render
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  - id: isaac_ok
+    cmd: >
+      python -c "import json, sys; s = json.load(open('runs/queue_server_week1/state.json'));
+      ok = s.get('isaac_parity', {}).get('status') == 'ok';
+      print('isaac_parity:', s.get('isaac_parity', {}).get('status')); sys.exit(0 if ok else 1)"
+    smoke_cmd: "true"
+    hours: 0.01
+    why: "gate: the Isaac Lab parity check (training/isaac_parity.sh) passed in server_week1"
+
+  # Seeds 1 and 2 side by side (two GPUs, the most allowed), seed 3 after seed 1.
+  - id: isaac_render_s1
+    gpu: true
+    cmd: bash eval/vio_render/isaac_render.sh --gpu {gpu} --set "params.seeds=[1]"
+    smoke_cmd: bash eval/vio_render/isaac_render.sh --help > /dev/null
+    after: [isaac_ok]
+    hours: 0.9
+    why: "Isaac Sim renders of seed 1's hold flight under all 11 conditions (images kept)"
+
+  - id: isaac_render_s2
+    gpu: true
+    cmd: bash eval/vio_render/isaac_render.sh --gpu {gpu} --set "params.seeds=[2]"
+    smoke_cmd: bash eval/vio_render/isaac_render.sh --help > /dev/null
+    after: [isaac_ok]
+    hours: 0.9
+    why: "seed 2"
+
+  - id: isaac_render_s3
+    gpu: true
+    cmd: bash eval/vio_render/isaac_render.sh --gpu {gpu} --set "params.seeds=[3]"
+    smoke_cmd: bash eval/vio_render/isaac_render.sh --help > /dev/null
+    after: [isaac_render_s1]
+    hours: 0.9
+    why: "seed 3, after seed 1 so no more than two cards are ever used"
+
+  - id: isaac_vio
+    launch: eval/configs/vio_render_pool.yaml
+    set:
+      params.from_run: "{run:isaac_render_s1},{run:isaac_render_s2},{run:isaac_render_s3}"
+    after: [isaac_render_s1, isaac_render_s2, isaac_render_s3]
+    hours: 0.3
+    why: "Basalt on the Isaac renders and the fit per condition; compare with the cloud's NumPy-renderer run (docs/vio-render.md)"
