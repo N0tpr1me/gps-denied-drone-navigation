@@ -40,6 +40,8 @@ LIFT_M = 0.2             # truth height above its first sample that counts as of
 GROUND_SPAN_S = (3.0, 0.5)  # the offset is the mean from 3 s to 0.5 s before lift-off
 FIELDS = ("p95_m", "h_p95_m", "v_p95_m", "ground_offset_m", "v_p95_no_offset_m",
           "p95_no_offset_m")
+SMOOTH_S = 5.0           # "slow" drift of the height estimate: the range of its 5 s mean
+EST_FIELDS = ("est_mean_m", "est_std_m", "est_drift_m", "est_from_ground_m")
 
 
 def ground_offset(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
@@ -52,6 +54,27 @@ def ground_offset(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
     t_lift = float(t[lifted[0]])
     m = (t >= t_lift - span_s[0]) & (t <= t_lift - span_s[1]) & np.isfinite(up_est)
     return float(np.mean(up_est[m] - up_truth[m])) if m.any() else math.nan
+
+
+def height_estimate_error(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
+                          window: tuple[float, float], offset_m: float,
+                          smooth_s: float = SMOOTH_S) -> dict[str, float]:
+    """EKF2's height minus the true height over the scored window: its mean, its spread, how
+    far its ``smooth_s`` running mean travels (the slow drift a controller follows without
+    seeing it) and how far the mean sits from the offset on the ground (what the estimate
+    did after lift-off). This is the error a retrained policy cannot remove: it holds the
+    estimate, and the estimate is what moved."""
+    tg = np.arange(window[0], window[1], GRID_DT_S)
+    e = np.interp(tg, t, up_est) - np.interp(tg, t, up_truth)
+    n = max(1, int(round(smooth_s / GRID_DT_S)))
+    slow = np.convolve(e, np.ones(n) / n, mode="valid") if e.size >= n else e
+    return {
+        "est_mean_m": float(e.mean()),
+        "est_std_m": float(e.std()),
+        "est_drift_m": float(slow.max() - slow.min()),
+        "est_from_ground_m": float(e.mean() - offset_m) if math.isfinite(offset_m)
+        else math.nan,
+    }
 
 
 def split_error(err: np.ndarray, offset_m: float) -> dict[str, float]:
@@ -99,7 +122,10 @@ def flight_split(run: Path) -> dict[str, float]:
     te = seconds(est)
     eo = np.argsort(te)
     up_est = np.interp(t, te[eo], ned_to_enu(est["x"], est["y"], est["z"])[eo, 2])
-    return split_error(pos - sp, ground_offset(t, up_truth, up_est))
+    offset = ground_offset(t, up_truth, up_est)
+    return {**split_error(pos - sp, offset),
+            **height_estimate_error(t, up_truth, up_est, (float(window[0]), float(window[1])),
+                                    offset)}
 
 
 def batch_split(batch_file: Path) -> dict[str, Any]:
@@ -132,6 +158,17 @@ def table(split: dict[str, Any], per_seed: bool) -> str:
             f"| {mean['v_p95_m']:.3f} | {mean['ground_offset_m']:+.3f} "
             f"({np.nanmin(off):+.3f} to {np.nanmax(off):+.3f}) "
             f"| {mean['v_p95_no_offset_m']:.3f} | {mean['p95_no_offset_m']:.3f} |")
+    lines += ["", "EKF2 height minus true height over the scored hold, mean over seeds; m", "",
+              "| scenario | mean | std within a hold | slow drift (range of the "
+              f"{SMOOTH_S:.0f} s mean), mean (worst) | mean minus the offset on the ground |",
+              "|---|---|---|---|---|"]
+    for sc in scenarios:
+        rows = [r for r in split["rows"] if r["scenario"] == sc]
+        mean = {k: float(np.nanmean([r[k] for r in rows])) for k in EST_FIELDS}
+        lines.append(
+            f"| {sc} | {mean['est_mean_m']:+.3f} | {mean['est_std_m']:.3f} "
+            f"| {mean['est_drift_m']:.3f} ({max(r['est_drift_m'] for r in rows):.3f}) "
+            f"| {mean['est_from_ground_m']:+.3f} |")
     if per_seed:
         lines += ["", "| scenario | seed | p95 as scored | horizontal p95 | vertical p95 "
                   "| height offset on the ground | vertical p95, offset out | p95, offset out |",

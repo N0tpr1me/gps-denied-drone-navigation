@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from eval.height_split import ground_offset, split_error
+from eval.height_split import ground_offset, height_estimate_error, split_error
 
 
 def climb(t: np.ndarray, lift_at: float = 10.0, height: float = 2.5) -> np.ndarray:
@@ -56,3 +56,18 @@ def test_without_an_offset_the_corrected_numbers_are_nan_not_a_guess():
     s = split_error(np.full((10, 3), 0.1), math.nan)
     assert math.isnan(s["v_p95_no_offset_m"]) and math.isnan(s["p95_no_offset_m"])
     assert s["v_p95_m"] == pytest.approx(0.1)
+
+
+def test_height_estimate_error_separates_the_offset_from_what_happened_in_the_air():
+    t = np.arange(0.0, 80.0, 0.01)
+    up = climb(t)
+    # 0.3 m on the ground, then the estimate walks up another 0.2 m between 30 and 50 s.
+    est = up + 0.3 + np.clip((t - 30.0) / 20.0, 0.0, 1.0) * 0.2
+    e = height_estimate_error(t, up, est, (20.0, 70.0), 0.3)
+    assert e["est_drift_m"] == pytest.approx(0.2, abs=0.03)
+    assert e["est_from_ground_m"] == pytest.approx(e["est_mean_m"] - 0.3)
+    assert 0.3 < e["est_mean_m"] < 0.5
+    still = height_estimate_error(t, up, up + 0.3, (20.0, 70.0), 0.3)
+    assert still["est_drift_m"] == pytest.approx(0.0, abs=1e-9)
+    assert still["est_std_m"] == pytest.approx(0.0, abs=1e-9)
+    assert still["est_from_ground_m"] == pytest.approx(0.0, abs=1e-9)
