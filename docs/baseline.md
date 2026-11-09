@@ -1643,3 +1643,275 @@ it, when the Gazebo flights move to the GPU server. Since 2026-11-03 (Decided, Z
 Follow see the benchmark's height behaviour; the next candidate trains on it. The Gate 1
 configs keep their own vision-height fusion block (`gate1_x500_ekf_baro_v22.yaml` is the
 barometer variant), so the Gate 1 verdicts above are unchanged.
+
+## What moved tuned PX4 from 0.43 to 0.51 m (2026-11-09)
+
+The table above (flown 2026-11-01/02) has tuned PX4 at 0.424 / 0.443 / 0.433 m. On
+2026-11-09 the GPU server and then the cloud flew the same protocol on current main and got
+about 0.51 m. This section is the answer, from 184 Gazebo flights flown that day in the
+cloud container, one at a time.
+
+**Short answer.** Nothing flies differently. On barometer height EKF2's height already
+reads a few decimetres off zero while the drone still sits on the ground, before the
+motors start. The scorer compares the true position with the setpoint, and the setpoint
+lives in EKF2's frame, so that constant offset is counted as hold error for the whole
+flight, for tuned PX4 and for Structure Hold alike. The benchmark's `EKF2_HGT_REF` went
+from 1 to 0 on 2026-11-02 (PR #136; 1 is GPS height in PX4 v1.17 and fell back to the
+barometer). Both are barometer height in flight, but they start the height differently:
+with 1 the offset on the ground averages about zero, with 0 it averages +0.17 to +0.24 m.
+That is the whole 0.43 to 0.51. With the offset taken out, tuned PX4 scores 0.41 m on
+either setting and v22 0.20 m, and the true flight paths of paired flights agree to a
+centimetre.
+
+It is not the image (v22 on vision height on the cloud image scores the Mac's number), not
+machine load (every flight ran at real time) and not a tuning gap (below).
+
+### Flights
+
+All in the Claude cloud container (Linux x86_64, 4 CPUs, Docker), image built by
+`sim2real/docker/cloud_build.sh` at `9924b83` (PX4 v1.17.0, v22 compiled in; the module and
+world are the same at `dd744fa` and `7c8c3e0`, the commits the later batches carry), `--jobs 1`,
+seeds 1 to 8, in sub-hour halves pooled with `--pool`. Stock runner on `vio_at_hover`,
+hold runner on `vio_at_engage`, as in the sections above.
+
+| Label | What | Params | Scenarios | Batches (`runs/20261109-..._px4_baseline_<label>_...`) |
+|---|---|---|---|---|
+| `tuned_v2_cloud` | tuned PX4, `EKF2_HGT_REF` 0 | `px4_tuned_v2.params` | calm, 4, 8 m/s | `164116`, `170256` |
+| `v22_cloud` | v22, `EKF2_HGT_REF` 0 | `px4_tuned_v2.params` | calm, 4, 8 m/s | `173135`, `175659` |
+| `tuned_v2_hgt1_cloud` | tuned PX4, `EKF2_HGT_REF` 1 | `px4_tuned_v2_hgt1.params` | calm, 4, 8 m/s | `213759`, `215909` |
+| `v22_hgt1_cloud` | v22, `EKF2_HGT_REF` 1 | `px4_tuned_v2_hgt1.params` | calm, 4, 8 m/s | @@V22H1_BATCHES@@ |
+| `v22_vision_cloud` | v22 on vision height | `px4_tuned_v1.params` | 4 m/s | `182210` |
+| `tuned_v2_wind12` | tuned PX4 at datasheet wind | `px4_tuned_v2.params` | 10, 12 m/s | `184057`, `185511` |
+| `v22_wind12` | v22, `--rangefinder` | `px4_tuned_v2.params` | 10, 12 m/s | `190923`, `192618` |
+| `v22_range_cloud` | v22, `--rangefinder` | `px4_tuned_v2.params` | calm, 4, 8 m/s | `194317`, `200836` |
+| `v24_range_cloud` | v24, `--rangefinder`, image `structure-hold/px4-sitl:v24` | `px4_tuned_v2.params` | calm, 4, 8 m/s | `204705`, `211226` |
+
+`px4_tuned_v2_hgt1.params` is `px4_tuned_v2.params` with `EKF2_HGT_REF 1`; it is not a
+baseline and exists only to reproduce the numbers of 2026-11-01/02.
+
+```bash
+python -m eval.baselines.run_baseline --jobs 1 --label tuned_v2_cloud --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 -- --profile vio_at_hover              # then 5 6 7 8
+python -m eval.baselines.run_baseline --jobs 1 --runner hold --label v22_cloud --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 -- --profile vio_at_engage  # then 5 6 7 8
+python -m eval.baselines.run_baseline --pool runs/<half 1>/batch.json runs/<half 2>/batch.json --out runs/pooled_<label>_seeds1-8.json
+python -m eval.height_split --per-seed runs/pooled_tuned_v2_cloud_seeds1-8.json runs/pooled_v22_cloud_seeds1-8.json
+```
+
+All 184 flights were flown and scored: 0 crashes, 0 wall contacts, 0 failsafes in the
+scored hold. Real time: every run folder's `bridge.log` prints the sim time every 10 s of
+wall time; over all flights every 10 s stretch ran at a real-time factor of 0.98 or above,
+except one stretch at 0.96 (tuned PX4, 10 m/s, seed 2), which was flown again
+(@@REFLY@@).
+
+### As scored today (`EKF2_HGT_REF` 0, the benchmark's set-up)
+
+These are the numbers `eval.metrics` prints on current main, and the ones to quote until
+the scoring question at the end of this section is decided.
+
+| scenario | p95 m, tuned → v22 | worst toward wall m | rms m | crashes | failsafes |
+|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.494 (1.102) → **0.325 (0.561), −34 %** | 0.194 (0.489) → 0.069 (0.224), −64 % | 0.288 (0.517) → 0.252 (0.523), −12 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_4ms | 0.514 (1.150) → **0.328 (0.465), −36 %** | 0.191 (0.476) → 0.076 (0.234), −60 % | 0.311 (0.496) → 0.261 (0.352), −16 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_8ms | 0.529 (1.126) → **0.286 (0.410), −46 %** | 0.190 (0.439) → 0.096 (0.252), −50 % | 0.326 (0.480) → 0.222 (0.383), −32 % | 0/8 → 0/8 | 0/8 → 0/8 |
+
+| tuned PX4 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.908 | 0.189 | 0.707 | 0.194 | 0.214 | 1.102 | 0.290 | 0.344 | 0.494 |
+| 4 m/s | 0.887 | 0.263 | 0.536 | 0.299 | 0.388 | 1.150 | 0.266 | 0.324 | 0.514 |
+| 8 m/s | 0.912 | 0.356 | 0.518 | 0.266 | 0.325 | 1.126 | 0.262 | 0.468 | 0.529 |
+
+| v22 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.198 | 0.561 | 0.439 | 0.212 | 0.158 | 0.310 | 0.237 | 0.486 | 0.325 |
+| 4 m/s | 0.379 | 0.275 | 0.465 | 0.259 | 0.171 | 0.442 | 0.322 | 0.310 | 0.328 |
+| 8 m/s | 0.165 | 0.258 | 0.321 | 0.410 | 0.176 | 0.283 | 0.359 | 0.316 | 0.286 |
+
+The GPU server's 0.52 m (`docs/gpu-server.md`) was therefore right as scored; it was
+judged against a reference flown on the other height setting.
+
+### The error split into horizontal and vertical (`eval/height_split.py`)
+
+Per flight the read-out takes the scored error (truth minus setpoint over the 60 s hold)
+apart into its horizontal and vertical parts, measures EKF2's height minus the true height
+on the ground (the mean from 3 s to 0.5 s before lift-off), and scores again with that one
+number taken out of the vertical error. Whatever the estimate does after lift-off stays in.
+Mean over 8 seeds, m:
+
+| Controller, height setting | scenario | p95 as scored | horizontal p95 | vertical p95 | height offset on the ground, mean (min to max) | vertical p95, offset out | p95, offset out |
+|---|---|---|---|---|---|---|---|
+| tuned PX4, `EKF2_HGT_REF` 0 | calm | 0.494 | 0.394 | 0.244 | +0.165 (+0.049 to +0.426) | 0.111 | **0.407** |
+| | 4 m/s | 0.514 | 0.391 | 0.288 | +0.230 (+0.113 to +0.383) | 0.108 | **0.403** |
+| | 8 m/s | 0.529 | 0.394 | 0.304 | +0.241 (+0.143 to +0.372) | 0.109 | **0.406** |
+| tuned PX4, `EKF2_HGT_REF` 1 | calm | 0.449 | 0.395 | 0.187 | −0.006 (−0.244 to +0.120) | 0.110 | **0.408** |
+| | 4 m/s | 0.437 | 0.392 | 0.186 | −0.037 (−0.198 to +0.265) | 0.107 | **0.405** |
+| | 8 m/s | 0.422 | 0.393 | 0.141 | +0.016 (−0.119 to +0.138) | 0.110 | **0.406** |
+| v22, `EKF2_HGT_REF` 0 | calm | 0.325 | 0.183 | 0.250 | +0.180 (+0.014 to +0.443) | 0.086 | **0.198** |
+| | 4 m/s | 0.328 | 0.177 | 0.283 | +0.206 (+0.097 to +0.331) | 0.093 | **0.195** |
+| | 8 m/s | 0.286 | 0.182 | 0.232 | +0.175 (+0.054 to +0.314) | 0.092 | **0.195** |
+@@V22H1_SPLIT_ROWS@@
+
+What the table says:
+
+- **The horizontal error does not care about the setting**: tuned PX4 0.39 m on both, to
+  the millimetre. The whole difference between the settings is vertical.
+- **With the offset out the two settings give one number**: tuned PX4 0.407 / 0.403 /
+  0.406 m on 0 and 0.408 / 0.405 / 0.406 m on 1. Flight by flight (same seed, same
+  scenario, the two settings) the offset-out p95 differs by 0.004 m on average and 0.011 m
+  at most, and the horizontal p95 by 0.003 m (0.009 m at most), while the as-scored p95
+  differs by up to 0.30 m. The drone flew the same path; the frame it was scored in moved.
+- **The 2026-11-02 table is reproduced** on the old setting: tuned PX4 0.449 / 0.437 /
+  0.422 m here against 0.424 / 0.443 / 0.433 m then@@V22H1_REPRO@@. Its offsets happened to average
+  near zero, so it read close to the true hold error; it was still scattered by them
+  (single flights moved by 0.1 to 0.25 m either way).
+- **v22's margin as scored is squeezed by the same constant.** Adding the same 0.2 m to
+  both controllers' vertical error takes more, in per cent, from the one with the smaller
+  error. As scored v22 is 34 to 46 % tighter than tuned PX4; with the offset out 0.198 /
+  0.195 / 0.195 m against 0.407 / 0.403 / 0.406 m, **51 to 52 % tighter**, which is what
+  the vision-height benchmark said (−54 to −55 %, where the offset is zero).
+
+### Where the offset comes from
+
+EKF2 has no absolute height without GPS. On barometer height it sets its height origin
+from the barometer when it starts, and the simulated barometer is noisy (0.14 m white, as
+measured in "The mock fusion on barometer height" above), so local z is not zero on the
+pad: +0.01 to +0.45 m on `EKF2_HGT_REF` 0, −0.24 to +0.27 m on 1. PX4 v1.17 starts the two
+differently (as its EKF2 height code reads: with 0 the height starts from the first
+barometer sample; with 1 and no GPS it falls back to the barometer a moment later, from
+the filtered barometer), which would explain why 0 sits high on average and 1 does not.
+We did not chase that further: either way it is where the frame starts, it is there with
+the motors off, and it stays for the flight. Over the scored hold EKF2's height minus the truth is the same as on
+the ground to within 0.015 m in every batch mean (last column of the table below).
+
+A take-off to 2.5 m then ends 2.5 m above the pad in truth, as both controllers ask, while
+the setpoint reads 2.5 m plus the offset. `eval.metrics` subtracts one from the other.
+On vision height the offset is zero (+0.001 m over the 8 `v22_vision_cloud` flights): the
+vision fix is the height and starts at the truth.
+
+`eval/partner_session.py` already takes this out for a partner's real flights: it fits the
+EKF2 frame to the motion-capture frame per run (`align_estimate`), a constant shift
+included. With Gazebo truth nothing does.
+
+### Is tuned PX4 still properly tuned on barometer height?
+
+Yes. It is not settling off height; it holds the height it was given, and the height it
+was given is offset by the estimator both controllers share.
+
+| tuned PX4 over the 60 s hold, mean of 8 seeds | calm | 4 m/s | 8 m/s |
+|---|---|---|---|
+| true height minus setpoint, as scored, `EKF2_HGT_REF` 0 (m) | −0.162 | −0.221 | −0.236 |
+| the same with the ground offset out (m) | +0.003 | +0.009 | +0.006 |
+| the same, `EKF2_HGT_REF` 1, offset out (m) | +0.002 | +0.000 | −0.005 |
+| spread of the height error within a hold, std (m) | 0.040 | 0.041 | 0.041 |
+| vertical p95, offset out (m) | 0.111 | 0.108 | 0.109 |
+
+With the offset out tuned PX4 sits within a centimetre of its height setpoint on average
+and moves 0.04 m around it. That 0.04 m is the barometer-aided height estimate itself
+moving (EKF2 height minus truth has the same 0.04 m spread, next table), not the
+controller chasing it badly: v22, a different controller, shows 0.03 m on its flights.
+No parameter in `px4_tuned_v2.params` would remove a frame offset, and nothing here asks
+for a re-tune, so the tuned set is unchanged and no decision row proposes changing it.
+Tuned PX4's 0.41 m is horizontal: seeds 1 and 6 (0.9 and 1.1 m), where PX4 moves its own
+setpoint after the estimate jumps, as in every table above.
+
+What a buyer should hear: the comparison is fair on either scoring, because both
+controllers carry the same offset; scored as today the margin is understated (34 to 46 %),
+with the offset removed it is 51 to 52 %.
+
+### EKF2's height against the truth during the hold (for the mock and the next policy)
+
+A retrained policy cannot remove what the estimate itself does: it holds the estimate.
+`eval.height_split` prints EKF2 height minus true height over the scored hold, mean of 8
+seeds per scenario, m, `EKF2_HGT_REF` 0:
+
+| Batch | scenario | mean | std within a hold | slow drift (range of the 5 s mean), mean (worst) | mean minus the offset on the ground |
+|---|---|---|---|---|---|
+| tuned PX4 | calm | +0.161 | 0.040 | 0.112 (0.31) | −0.004 |
+| | 4 m/s | +0.220 | 0.040 | 0.114 (0.31) | −0.010 |
+| | 8 m/s | +0.234 | 0.039 | 0.113 (0.31) | −0.007 |
+| v22 | calm | +0.165 | 0.040 | 0.114 (0.32) | −0.015 |
+| | 4 m/s | +0.201 | 0.039 | 0.112 (0.31) | −0.005 |
+| | 8 m/s | +0.163 | 0.040 | 0.112 (0.32) | −0.013 |
+| v22 on vision height (`px4_tuned_v1.params`) | 4 m/s | −0.013 | 0.050 | 0.176 (0.40) | −0.014 |
+
+So on the barometer the height estimate wanders about 0.04 m (std) and 0.11 m (slow, over
+a minute; 0.31 m on the worst seed) under either controller, and less than on vision
+height (0.05 and 0.18 m), where the profile's vision height jump and dropout go straight
+into the height. The mock's barometer option (walk 0.005 m/sqrt(s), 0.04 m after a
+minute) already matches this, so nothing changes in the mock (`docs/baro-successor.md`).
+The constant offset needs no modelling: a policy holds the estimate's height wherever its
+frame starts.
+
+### v22 on vision height on the cloud image
+
+The open question of the 2026-11-02 section ("the height source or the image?") is closed
+by `v22_vision_cloud`: v22 on `px4_tuned_v1.params` (vision height), 4 m/s, 8 seeds, on the
+cloud image.
+
+| seed | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| p95 m | 0.194 | 0.226 | 0.224 | 0.163 | 0.160 | 0.297 | 0.210 | 0.138 | **0.201** |
+
+The Mac image gave 0.196 m on the same set-up. The image is not a cause; v22's move from
+0.20 to 0.25 m (then) and 0.33 m (now) is the height offset in the scoring, and with it
+out v22 scores 0.195 m at 4 m/s on the barometer too.
+
+### 10 and 12 m/s wind into the wall
+
+New scenarios `wall1m_wind_10ms` and `wall1m_wind_12ms` (the 8 m/s scenario with more wind
+and turbulence), v22 with `--rangefinder`, 8 seeds each:
+
+| scenario | p95 m, tuned → v22 | worst toward wall m | rms m | p95 offset out, tuned → v22 | crashes |
+|---|---|---|---|---|---|
+| wall1m_wind_10ms | 0.502 (1.101) → **0.322 (0.618), −36 %** | 0.191 (0.414) → 0.109 (0.183), −43 % | 0.296 → 0.253, −14 % | 0.408 → 0.192, −53 % | 0/8 → 0/8 |
+| wall1m_wind_12ms | 0.492 (1.096) → **0.333 (0.517), −32 %** | 0.194 (0.386) → 0.128 (0.209), −34 % | 0.285 → 0.263, −8 % | 0.411 → 0.216, −47 % | 0/8 → 0/8 |
+
+Both hold at datasheet wind with no crash and no wall contact. Tuned PX4 is as tight at
+12 m/s as in calm air (its error is the estimate, not the wind); v22 gives up about 2 cm
+at 12 m/s (0.216 against 0.195 m, offset out) and its worst move toward the wall is 0.11
+and 0.13 m (mean over seeds) against 0.06 to 0.09 m at 0 to 8 m/s. The plan's go check (holds at 10 and 12 m/s,
+0 crashes, tighter than tuned) passes, so `hold_wind_finetune` stays off.
+
+### v24 with the rangefinder against v22 (the re-fly `docs/wall-range.md` waited for)
+
+v24 compiled into its own image (`structure-hold/px4-sitl:v24`, header exported from
+`training/policies/structure_hold_v24.onnx`, the committed header left at v22), both
+policies flown with `--rangefinder` so the wall guard is on for both, 8 seeds x 3
+scenarios:
+
+| scenario | p95 m, v22 → v24 | worst toward wall m | rms m | p95 offset out | mean lift, offset out m | crashes |
+|---|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.340 (0.485) → **0.274 (0.398), −19 %** | 0.060 (0.158) → 0.049 (0.111), −18 % | 0.281 → 0.224, −20 % | 0.204 → 0.179, −12 % | −0.016 → +0.003 | 0/8 → 0/8 |
+| wall1m_wind_4ms | 0.314 (0.507) → **0.273 (0.365), −13 %** | 0.066 (0.166) → 0.047 (0.104), −29 % | 0.252 → 0.215, −15 % | 0.202 → 0.181, −10 % | −0.016 → +0.011 | 0/8 → 0/8 |
+| wall1m_wind_8ms | 0.377 (0.535) → **0.257 (0.453), −32 %** | 0.091 (0.174) → 0.056 (0.098), −38 % | 0.318 → 0.196, −38 % | 0.196 → 0.185, −6 % | −0.014 → +0.016 | 0/8 → 0/8 |
+
+Against tuned PX4 v24 is 44 / 47 / 51 % tighter as scored (v22 with the rangefinder 31 /
+39 / 29 %) and 70 to 75 % less toward the wall. It is also smoother: rate roughness 1.35 /
+1.59 / 1.97 against v22's 2.2, thrust roughness 0.09 against 0.16, and it stays further
+from the wall at its closest (0.89 to 0.91 m against 0.83 to 0.85 m). Its mean lift is
++0.3 to +1.6 cm, inside the soft rule (under 5 cm); the worst single seed sits 0.16 to
+0.19 m high.
+
+Read with care: as scored, part of v24's gain is the height offset falling differently on
+the two batches (it is a per-flight random number, and v22's flights drew larger ones);
+with the offset out the gain in p95 is 6 to 12 % (a ratio of 0.88 to 0.94, where the mock
+predicted about 0.77), and the same seed flown twice can move a v22 flight by 0.1 to 0.2 m
+(`experiments/LOG.md`, 2026-11-09 21:18). The gain toward the wall (18 to 38 % less on
+every scenario, and a lower worst seed on all three) and the smoother commands do not
+depend on the offset. So v24 met the plan's check (`docs/gpu-server-plan.md`: tighter on
+mean p95 and on worst toward the wall, 0 crashes), by less in p95 than the mock said.
+**Releasing it is Zain's decision** (asked 2026-11-09); the module header stays v22's
+until then.
+
+### What this changes
+
+- **Numbers to quote, as scored on current main** (tuned PX4 → v22, 8 seeds): 0.494 →
+  0.325 m (−34 %), 0.514 → 0.328 m (−36 %), 0.529 → 0.286 m (−46 %); toward the wall −64 /
+  −60 / −50 %; 0 crashes for either.
+- **With the pre-take-off height offset out**: 0.407 → 0.198 m, 0.403 → 0.195 m, 0.406 →
+  0.195 m (−51 / −52 / −52 %).
+- **Proposed** (`docs/decisions.md`, 2026-11-09): the Gazebo scorers remove the height
+  offset the estimator had on the ground before lift-off, as `eval/partner_session.py`
+  already does for a partner's flights, so that a number means hold error and not where
+  the barometer happened to start. Until Zain decides, `eval.metrics` is unchanged and the
+  as-scored numbers are the benchmark.
+- The tuned parameters are unchanged. `EKF2_HGT_REF` stays 0, as `eval/log_health.py`
+  asks.

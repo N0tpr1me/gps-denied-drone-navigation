@@ -146,3 +146,28 @@ the header from it (`sim2real/px4/README.md`); the module then reads the range o
 The numbers above are on vision height, which `gz_x500_sitl` fused until 2026-11-03; the
 check now runs on barometer height (`docs/gazebo_check.md` "Policies judged"), where the
 server's `v24_check_range` job re-scores v24 against v22 before the Gazebo re-fly.
+
+**The Gazebo re-fly (2026-11-09, flown in the cloud, one flight at a time).** v24 compiled
+into its own image and v22, both with `--rangefinder`, 8 seeds on calm, 4 and 8 m/s
+(`docs/baseline.md`, "v24 with the rangefinder against v22"):
+
+| | v22 | v24 | change |
+| --- | --- | --- | --- |
+| mean p95, calm / 4 / 8 m/s (m), as scored | 0.340 / 0.314 / 0.377 | 0.274 / 0.273 / 0.257 | −19 / −13 / −32 % |
+| the same with the pre-take-off height offset out | 0.204 / 0.202 / 0.196 | 0.179 / 0.181 / 0.185 | −12 / −10 / −6 % |
+| worst toward the wall, mean (m) | 0.060 / 0.066 / 0.091 | 0.049 / 0.047 / 0.056 | −18 / −29 / −38 % |
+| closest to the wall (m) | 0.83 to 0.85 | 0.89 to 0.91 | further off |
+| mean lift, offset out (m) | −0.016 / −0.016 / −0.014 | +0.003 / +0.011 / +0.016 | inside the soft rule |
+| rate roughness | about 2.2 | 1.35 / 1.59 / 1.97 | smoother |
+| crashes, wall contacts | 0 / 24 | 0 / 24 | |
+| against tuned PX4, p95 as scored | −31 / −39 / −29 % | −44 / −47 / −51 % | |
+
+Gazebo confirms the direction the mock gave: v24 is tighter than v22 on mean p95 and on the
+move toward the wall in all three scenarios, with no crash, so it meets the plan's release
+check. The size is smaller than the mock's ratio of 0.77: with the height offset out it is
+0.88 to 0.94 in p95, close to what two flights of the same seed can differ by; the gain
+toward the wall and the smoother commands are the clearer part. v24 needs a forward
+rangefinder to be worth it (without one it ties v22 in the mock). **Not released: that is
+Zain's decision, asked 2026-11-09.** If he says yes, the release steps are the ones in
+CLAUDE.md ("Releasing a policy"): both module headers, the parts list,
+`training/policies/README.md`, the decision row, then the evaluation kit re-flown with it.
