@@ -40,6 +40,11 @@ noise and scripted faults, which PX4 takes as a ``sensor_gps`` instance (``MAV_U
 1, ``gps_on.params``) and EKF2 fuses beside the vision stream. Nothing is sent while the
 receiver is scripted quiet.
 
+Heading error: a profile with a ``vision_yaw`` block (``vision_yaw.py``) also fills
+ODOMETRY's attitude with the vehicle's true attitude turned about the vertical by the scripted
+error, which EKF2 then fuses as its heading (``vision_yaw.params``). Without it the attitude
+stays NaN and EKF2's heading comes from the compass.
+
 Rangefinder: a profile with a ``rangefinder`` entry (``run_gazebo --rangefinder``) also
 gets a forward DISTANCE_SENSOR (MAV_SENSOR_ROTATION_NONE, i.e. forward facing) on the same
 link, computed from the same truth pose against the scenario's wall (``bridge.Rangefinder``),
@@ -86,6 +91,8 @@ class Bridge:
         self.lock = threading.Lock()
         self.sent = self.dropped = self.received = 0
         self.rangefinder = self.profile.rangefinder
+        self.vision_yaw = self.profile.vision_yaw
+        self.quat_enu_flu = (1.0, 0.0, 0.0, 0.0)  # Gazebo's latest true attitude
         self.ranges_sent = 0
         self.gps_sent = 0
         self.origin = (args.origin_lat, args.origin_lon, args.origin_alt)
@@ -100,6 +107,11 @@ class Bridge:
             print(f"bridge: forward rangefinder at {self.rangefinder.rate_hz:.0f} Hz against "
                   f"the wall at {self.rangefinder.wall_point}, normal "
                   f"{self.rangefinder.normal_toward}", flush=True)
+        if self.vision_yaw is not None:
+            v = self.vision_yaw
+            print(f"bridge: vision yaw sent, heading off by {v.offset_deg:+.1f} deg, drifting "
+                  f"{v.drift_rate_deg_s:+.2f} deg/s up to {v.drift_max_deg:.1f} deg from "
+                  f"{v.drift_at_s:.1f} s after the anchor", flush=True)
         if self.profile.gps is not None:
             print(f"bridge: GPS at {self.profile.gps.rate_hz:.0f} Hz, {self.profile.gps.fix}, "
                   f"{len(self.profile.gps_faults)} scripted faults", flush=True)
@@ -135,6 +147,8 @@ class Bridge:
         t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         with self.lock:
             self.received += 1
+            q = pose.orientation
+            self.quat_enu_flu = (q.w, q.x, q.y, q.z)
             if self.rangefinder is not None:
                 self.send_range(t, pose)
             was_anchored = self.bridge.anchored
@@ -186,10 +200,14 @@ class Bridge:
 
     def send(self, sample) -> None:
         p, v = odometry_ned(sample, self.profile.frame_mistake)
+        q = [NAN, NAN, NAN, NAN]
+        if self.vision_yaw is not None:
+            q = [float(c) for c in self.vision_yaw.attitude_ned(
+                self.quat_enu_flu, self.bridge.t_rel(sample.t))]
         self.mav.mav.odometry_send(
             int(round(sample.t * 1e6)),
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
-            float(p[0]), float(p[1]), float(p[2]), [NAN, NAN, NAN, NAN],
+            float(p[0]), float(p[1]), float(p[2]), q,
             float(v[0]), float(v[1]), float(v[2]), NAN, NAN, NAN,
             NAN21, NAN21, sample.resets % 256, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )

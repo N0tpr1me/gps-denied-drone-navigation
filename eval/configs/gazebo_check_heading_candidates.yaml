@@ -1,0 +1,112 @@
+# The heading-error check for the server's candidates (training/queues/heading_error.yaml, job
+# heading_check): gazebo_check_heading.yaml with the PD left out and the candidates trained by
+# heading_s0 and heading_s1 added through params.candidates, each judged against v22 on the
+# pooled heading cells (rough) with calm_clean and head_none as the true-heading cells it must
+# not lose.
+# Cells, base env and rules are gazebo_check_heading.yaml's; keep the two in step.
+#   python -m training.launch --config eval/configs/gazebo_check_heading_candidates.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/gazebo_check_heading_candidates.yaml --device cuda \
+#       --set params.candidates.heading_s0=runs/<run>/policy.onnx
+name: gazebo_check_heading_candidates
+entrypoint: eval.gazebo_check
+seed: 7001  # unused: the check's seeds are params.seeds
+expected_hours: 0.8
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx
+  candidates: {}  # filled by the queue: params.candidates.heading_s0=<run>/policy.onnx
+  reference: v22
+  seeds: [7001, 7002]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 64
+  window_s: 40.0
+  wobble_threshold: 0.1
+  bootstrap: 2000
+  rules:
+    max_crash_increase: 0.01
+    clean_p95_slack_m: 0.02
+    toward_wall_slack_m: 0.05
+    fast_ring_slack: 0.25
+  base_env:
+    airframe: gz_x500_sitl
+    contact_radius_m: 0.40
+    episode_length_s: 60.0
+    hold_distance: 1.0
+    hold_height: 2.4
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      mean_speed: 4.0  # gazebo_check.yaml's wind4 cell (the wall1m_wind_4ms scenario)
+      gust_speed: [1.0, 3.0]
+      turb_sigma: 0.5
+      num_gusts: 2
+      gust_start: [15.0, 40.0]
+      gust_duration: [1.0, 2.0]
+      turb_tau: 1.0
+  cells:
+    - name: calm_clean
+      label: "calm, clean estimate, true heading"
+      rough: false
+      env:
+        estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0,
+                   vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0,
+                   jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+        disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}
+    - name: head_none
+      label: "4 m/s, vio_default, true heading"
+      rough: false  # the base the heading cells move from; kept out of the pooled set
+    - name: head_off15
+      label: "heading 15 deg off at engage"
+      env: {heading_error: {prob: 1.0, offset_deg: 15.0}}
+    - name: head_off30
+      label: "heading 30 deg off at engage"
+      env: {heading_error: {prob: 1.0, offset_deg: 30.0}}
+    - name: head_off45
+      label: "heading 45 deg off at engage"
+      env: {heading_error: {prob: 1.0, offset_deg: 45.0}}
+    - name: head_drift
+      label: "heading drifting 1 deg/s from 10 s to 30 deg"
+      env: {heading_error: {prob: 1.0, drift_rate_deg_s: 1.0, drift_start_s: 10.0,
+                            drift_max_deg: 30.0}}
+    - name: head_steps
+      label: "compass steps of 10 to 30 deg (0.05 /s), followed over 3 s"
+      env: {heading_error: {prob: 1.0, step_rate_hz: 0.05, step_deg: [10.0, 30.0],
+                            step_tau_s: 3.0, max_deg: 45.0}}
+    - name: head_off30_wind8
+      label: "heading 30 deg off at engage, 8 m/s into the wall"
+      env:
+        heading_error: {prob: 1.0, offset_deg: 30.0}
+        disturbance: {mean_speed: 8.0, mean_heading_deg: 0.0, gust_speed: [2.0, 4.0],
+                      turb_sigma: 1.0}
+  gazebo_baseline: "Gazebo flights on field_heading_* (training/queues/heading_error.yaml) not flown yet"
+  gazebo: {}
+smoke:
+  num_envs: 4
+  bootstrap: 50
+  seeds: [7001]
+  window_s: 1.0
+  base_env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    hold_distance: 1.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0

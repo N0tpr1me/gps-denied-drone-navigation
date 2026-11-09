@@ -61,14 +61,19 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 DEFAULT_PARAMS = HERE / "ekf2_ev.params"
 GPS_ON_PARAMS = HERE / "gps_on.params"
+VISION_YAW_PARAMS = HERE / "vision_yaw.params"
 
 
 def px4_params_for(profile, params_path: Path) -> dict[str, int | float]:
     """The PX4 set of a flight: the file given, with ``gps_on.params`` over it when the
-    profile carries the scripted GPS (the bridge is then the receiver EKF2 fuses)."""
+    profile carries the scripted GPS (the bridge is then the receiver EKF2 fuses), and
+    ``vision_yaw.params`` when it carries a scripted heading error (EKF2 takes its heading
+    from the vision stream's attitude)."""
     params = read_params(params_path)
     if profile.gps is not None:
         params.update(read_params(GPS_ON_PARAMS))
+    if getattr(profile, "vision_yaw", None) is not None:
+        params.update(read_params(VISION_YAW_PARAMS))
     return params
 
 
