@@ -1,0 +1,209 @@
+# The GPU server's second queue: the evidence buyers ask for, from what already exists
+# (docs/gpu-server-plan.md "Week 2"; the plan Zain approved on 2026-11-09). Runs after
+# server_week1.yaml; nothing here depends on its results. Every job is under 1 h on 1 GPU, so
+# the queue runs without --approved; Zain allows 2 GPUs at once on the shared machine:
+#
+#   python -m training.queue training/queues/server_week2.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/server_week2.yaml --smoke
+#   python -m training.queue training/queues/server_week2.yaml --max-gpus 2
+#
+# Three pieces of work, in priority order:
+#   1. the hold datasheet: where Structure Hold and the PD yardstick break over wind speed,
+#      wind direction, distance and estimate quality (docs/hold-datasheet.md), then the edge
+#      cells in Gazebo against tuned PX4;
+#   2. failure rates with 95 % bounds per scripted fault for the FMEA (docs/fault-rates.md),
+#      one fault per GPU job, and the Gazebo field faults from 3 seeds to 8;
+#   3. seed repeatability: v22's recipe on three more seeds through the Gazebo-like check.
+# `hours` are estimates from the cloud CPU runs scaled to a 24 GB card; the --smoke run's
+# env_steps_per_s replaces them, and a job that would pass 1 h is split by seed.
+name: server_week2
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- 1. the hold datasheet
+  - id: datasheet_into
+    gpu: true
+    launch: eval/configs/hold_datasheet_into.yaml
+    hours: 0.9
+    why: "48 cells: wind 0 to 14 m/s into the wall, 1 and 3 m, four estimate qualities, v22 and the PD"
+
+  - id: datasheet_along
+    gpu: true
+    launch: eval/configs/hold_datasheet_along.yaml
+    hours: 0.9
+    why: "40 cells: the same with the wind along the wall"
+
+  - id: datasheet_lee
+    gpu: true
+    launch: eval/configs/hold_datasheet_lee.yaml
+    hours: 0.9
+    why: "40 cells: the same with the wind away from the wall, the drone in its lee"
+
+  - id: datasheet_table
+    cmd: >
+      python -m eval.hold_datasheet {run:datasheet_into} {run:datasheet_along} {run:datasheet_lee}
+      --out runs/hold_datasheet/datasheet.md
+    smoke_cmd: python -m eval.hold_datasheet --help > /dev/null
+    after: [datasheet_into, datasheet_along, datasheet_lee]
+    hours: 0.05
+    why: "the datasheet table and each controller's envelope (holds to X m/s) from the three sweeps"
+
+  # ---------------------------------------------------------------- 2. failure rates per fault
+  - id: fault_nominal
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [nominal]}
+    hours: 0.3
+    why: "F8: vio_default as flown, 20,480 episodes, v22 and the PD; the reference row"
+
+  - id: fault_reset
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [reset]}
+    hours: 0.3
+    why: "F1: VIO reset to the origin"
+
+  - id: fault_restart
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [restart]}
+    hours: 0.3
+    why: "F2: VIO restart, a 2 s gap then the reset"
+
+  - id: fault_dropout3
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [dropout3]}
+    hours: 0.3
+    why: "F3: a 3 s dropout, dead-reckoned toward the wall"
+
+  - id: fault_silence5
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [silence5]}
+    hours: 0.3
+    why: "F4: the 5 s before the module's SH_WD_EST_TO trip"
+
+  - id: fault_freeze1
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [freeze1]}
+    hours: 0.3
+    why: "F6: the 1 s before the module's SH_WD_FRZ_T trip"
+
+  - id: fault_drift
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [drift]}
+    hours: 0.3
+    why: "F7: a 3 cm/s walk of the reported position for 20 s"
+
+  - id: fault_degrade
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [degrade]}
+    hours: 0.3
+    why: "F36: dust, fog, low light for the whole hold"
+
+  - id: fault_jumps5x
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {params.only: [jumps5x]}
+    hours: 0.3
+    why: "F8 at the training stress rates"
+
+  - id: fault_table
+    cmd: >
+      python -m eval.fault_rates collect {run:fault_nominal} {run:fault_reset} {run:fault_restart}
+      {run:fault_dropout3} {run:fault_silence5} {run:fault_freeze1} {run:fault_drift}
+      {run:fault_degrade} {run:fault_jumps5x} --out runs/fault_rates/fault_rates.md
+    smoke_cmd: python -c "import eval.fault_rates"
+    after: [fault_nominal, fault_reset, fault_restart, fault_dropout3, fault_silence5,
+            fault_freeze1, fault_drift, fault_degrade, fault_jumps5x]
+    hours: 0.05
+    why: "one table, one row per FMEA fault: crashes / episodes, the 95 % bound as 1 in N, the PD beside it"
+
+  # ---------------------------------------------------------------- 3. seed repeatability
+  - id: seed_v22_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v22.yaml
+    set: {seed: 1}
+    hours: 0.8
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s1_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
+
+  - id: seed_v22_s2
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v22.yaml
+    set: {seed: 2}
+    hours: 0.8
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s2_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
+
+  - id: seed_v22_s3
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v22.yaml
+    set: {seed: 3}
+    hours: 0.8
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s3_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
+
+  - id: seed_check
+    gpu: true
+    launch: eval/configs/gazebo_check_seeds.yaml
+    set:
+      params.controllers.1.policy: "{run:seed_v22_s1}/policy.onnx"
+      params.controllers.2.policy: "{run:seed_v22_s2}/policy.onnx"
+      params.controllers.3.policy: "{run:seed_v22_s3}/policy.onnx"
+    after: [seed_v22_s1, seed_v22_s2, seed_v22_s3]
+    hours: 0.75
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-201321_gazebo_check_seeds_s7001_63a05e0: about 5 % seed spread in pooled p95, verdicts that turn on single replay cells (docs/gazebo_check.md, Seed repeatability)"
+
+  # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL
+  - id: gz_edges_tuned
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_v2_edges --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_14ms wall1m_along_10ms wall1m_along_12ms wall1m_lee_12ms
+      -- --profile vio_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    hours: 0.6
+    why: "tuned PX4 at the datasheet's edges: 14 m/s into the wall, 10 and 12 m/s along it, 12 m/s from behind it; 32 flights, crashes allowed"
+
+  - id: gz_edges_v22
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_edges --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_14ms wall1m_along_10ms wall1m_along_12ms wall1m_lee_12ms
+      -- --profile vio_at_engage --rangefinder
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_edges_tuned]
+    hours: 0.6
+    why: "v22 on the same 32 flights: the Gazebo rows beside the datasheet's edge cells"
+
+  # The field faults at 8 seeds instead of 3 (docs/field-faults.md flew 1 to 3). One batch per
+  # fault and controller on the evaluation kit's scenario; the GPS profiles turn the scripted
+  # receiver on by themselves (run_estimate lays gps_on.params over the set).
+  - id: gz_faults_v22
+    cmd: >
+      for f in reset restart silence freeze drift degrade gps_jump rtk_float gps_loss; do
+      python -m eval.baselines.run_baseline --runner hold --label v22_field_${f}_8s --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_${f}_at_engage --rangefinder || exit 1; done
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_edges_v22]
+    hours: 0.9
+    why: "v22 through nine field faults x 8 seeds (72 flights): the Gazebo sample behind the FMEA rows"
+
+  - id: gz_faults_tuned
+    cmd: >
+      for f in reset restart silence freeze drift degrade gps_jump rtk_float gps_loss; do
+      python -m eval.baselines.run_baseline --label tuned_v2_field_${f}_8s --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_${f}_at_hover || exit 1; done
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_faults_v22]
+    hours: 0.9
+    why: "tuned PX4 on the same 72 flights"

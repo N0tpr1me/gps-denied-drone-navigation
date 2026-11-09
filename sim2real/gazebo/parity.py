@@ -52,15 +52,19 @@ def build_parity_binary(out_dir: Path, compiler: str) -> Path:
 
 
 def run_parity(exe: Path, seed: int = 0, samples: int = 256,
-               work_dir: Path | None = None) -> dict[str, Any]:
-    """Compare the C++ binary with the NumPy model on random params and states."""
+               work_dir: Path | None = None, surface2: bool = True) -> dict[str, Any]:
+    """Compare the C++ binary with the NumPy model on random params and states. With
+    ``surface2`` a deck sits over the samples (docs/bridge-holds.md), shedding on."""
     rng = np.random.default_rng(seed)
     # The near-wall flow on, at the top of its eval ranges, so every term is checked.
     cfg = DisturbanceConfig(num_gusts=3, gust_start=(0.0, 10.0), gust_duration=(0.5, 3.0),
                             k_lin=(0.0, 0.2), mean_speed=(3.0, 12.0), wall_deflect=(0.2, 0.8),
                             wall_recirc=(0.2, 0.6), wake_ti=(0.1, 0.3), shed_amp=(0.1, 0.4),
-                            shed_angle_deg=(0.0, 90.0))
-    p = sample_params(cfg, 1, rng, wall_point=(0.3, -0.2, 0.0), wall_normal=(-1.0, 0.1, 0.0))
+                            shed_angle_deg=(0.0, 90.0), surface2_shed_amp=(0.1, 0.4))
+    deck = (dict(surface2_point=(0.0, 0.0, 1.5), surface2_normal=(0.05, 0.0, -1.0),
+                 surface2_across=(0.0, 1.0, 0.0)) if surface2 else {})
+    p = sample_params(cfg, 1, rng, wall_point=(0.3, -0.2, 0.0), wall_normal=(-1.0, 0.1, 0.0),
+                      **deck)
     work = Path(work_dir or tempfile.mkdtemp())
     params_path = work / "params.txt"
     write_params(params_path, p)
@@ -102,9 +106,10 @@ def main() -> int:
         return 2
     with tempfile.TemporaryDirectory() as tmp:
         exe = build_parity_binary(Path(tmp), compiler)
-        report = run_parity(exe, work_dir=Path(tmp))
-    print(report)
-    return 0 if report["ok"] else 1
+        reports = [run_parity(exe, work_dir=Path(tmp), surface2=deck) for deck in (False, True)]
+    for report in reports:
+        print(report)
+    return 0 if all(r["ok"] for r in reports) else 1
 
 
 if __name__ == "__main__":

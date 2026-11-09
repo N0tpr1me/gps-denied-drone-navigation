@@ -1,0 +1,114 @@
+# Surface passes (docs/surface-passes.md): v22 continued on episodes where the hold point
+# moves along the wall at a fixed standoff, the 5 m passes of the product's Decided row.
+# - No new input: the position error is to the moving hold point and the velocity input is
+#   relative to the hold point's velocity (envs/structure_hold/env.py), so the actor starts
+#   as v22 exactly and a plain hold reads exactly as before. Fresh critic warmed up first.
+# - 70 % of the episodes are passes (5 m give or take, 0.2 to 1 m/s, a quarter up the wall,
+#   up to 3 legs of raster); 30 % stay plain holds with v22's re-engages, so the hold itself
+#   is still trained on. Everything else is v22's recipe on the barometer-height x500.
+# - Scored and selected on 0.5 m/s passes along the wall (eval.env), against the PD
+#   yardstick; eval/configs/gate1_x500_ekf_pass.yaml then judges it on the held-out seeds
+#   (hold_pass_gate in training/queues/surface_passes.yaml).
+# GPU-sized: 4096 drones, 1200 iterations a part, chained twice by the queue runner (part 2
+# resumes part 1's policy.pt), about 45 min a part at the mock's GPU speed; check the smoke
+# run's env_steps_per_s first and shorten `iterations` if a part would pass 1 h.
+#   python -m training.launch --config training/configs/structure_hold_ppo_pass.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_pass.yaml --device cuda
+name: structure_hold_ppo_pass
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  init_actor_onnx: training/policies/structure_hold_v22.onnx  # released 2026-10-31
+  critic_warmup: 200
+  resume_std: 0.05  # as for v12 to v22: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 1200
+  save_interval: 100
+  num_obs: 21  # v22's inputs; passes add none
+  num_steps_per_env: 48
+  history: 15
+  sim: torch
+  resume: null  # part 2: the queue sets params.resume to part 1's policy.pt
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.05  # on the plain holds only; a pass is flown from one engage
+    surface_pass:
+      prob: 0.7
+      length_m: [3.0, 6.0]
+      speed_mps: [0.2, 1.0]
+      accel_mps2: 0.5
+      start_s: [1.0, 4.0]
+      vertical_prob: 0.25
+      legs: [1, 3]
+      row_step_m: [0.5, 1.0]
+      pause_s: 1.0
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]
+    reward:  # v22's
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0
+      episode_length_s: 25.0
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+      surface_pass:  # every episode a 5 m, 0.5 m/s pass along the wall
+        prob: 1.0
+        length_m: 5.0
+        speed_mps: 0.5
+        start_s: [2.0, 4.0]
+        vertical_prob: 0.0
+        legs: 1
+    select_every: 300
+    select_envs: 256
+smoke:
+  critic_warmup: 2
+  num_obs: 21
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 3.0
+    surface_pass: {prob: 0.7, length_m: 1.0, speed_mps: [0.5, 1.0], start_s: 0.5,
+                   vertical_prob: 0.25, legs: [1, 2], row_step_m: 0.3}
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {surface_pass: {prob: 1.0}}
+    select_every: 2
+    select_envs: 8

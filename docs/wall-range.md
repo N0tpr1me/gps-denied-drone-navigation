@@ -81,6 +81,7 @@ every flight. v22 does not read it, so its rows are the same in both.
 | v24, rangefinder (`20261101-043726`) | 0.151 (ratio 0.77, 0.75 to 0.79) | +0.012 | 0.017 | 0.036 | 0.117 / 0.075 | fails lift only |
 | v24, no rangefinder (`20261101-035616`) | 0.187 (ratio 0.95, 0.92 to 0.99) | +0.016 | 0.016 | 0.069 | - | fails lift only |
 | v25, no rangefinder (`20261101-054339`) | 0.197 (ratio 1.00) | +0.008 | - | - | - | fails p95, lift, seed 1 |
+| v24, rangefinder, barometer height (GPU server CPUs, `20261109-161451`, v22 0.176 there) | 0.136 (ratio 0.77) | +0.004 | - | - | 0.106 / 0.076 (v22 0.217 / 0.201) | passes (lift rule soft since 2026-11-03) |
 
 With a rangefinder the seed 3 replay (Gazebo's estimate jumps of 0.96, 0.30 and 0.36 m,
 the flight that came closest to the wall) halves: v24 goes 0.075 m toward the wall where v22
@@ -88,6 +89,11 @@ goes 0.19. The scripted re-engage crashes less (0.8 % against 2.3 %), and after 
 toward the wall right before the re-engage (not scored: no estimate-holder can avoid it)
 77 % crash against v22's 93 %, because the range reference is latched on the wall, not on
 the jumped estimate.
+
+Re-run on 2026-11-09 on the GPU server's CPUs after the check moved to barometer height
+(2026-11-03): the same ratio, 0.77, and a smaller lift, so v24 is still cleared for the
+Gazebo re-fly. The scripted re-engage after a 1.4 m jump toward the wall crashed 80 % against
+v22's 95 % there.
 
 The lift rule (then `lift_not_higher`: mean height offset on the estimate not above the
 reference's; since 2026-11-03 `lift_ok`, which also passes a lift under 0.05 m, so v24

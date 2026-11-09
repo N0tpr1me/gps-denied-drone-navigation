@@ -85,10 +85,10 @@ def gps_as_expected(profile, ekf: dict[str, Any]) -> bool:
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
                    name: str, env: dict[str, str], watch: bool = False,
-                   cpuset: str | None = None) -> list[str]:
+                   cpuset: str | None = None, world: str = WORLD) -> list[str]:
     cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
-           "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
+           "-e", f"PX4_GZ_WORLD={world}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
            "-e", "STRUCTURE_HOLD_WIND_TRACE=/out/wind_trace.csv",
            "-e", "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml"]
@@ -108,9 +108,11 @@ def score_ulog(ulog: Path, sc, params, altitude: float) -> tuple[dict[str, Any],
     ekf = analyse(ulog, altitude, window)
     trace = read_ulog(ulog)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
+    surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
+                if sc.surface2_normal_toward is not None else None)
     gusts = [(float(s), float(s) + float(d))
              for s, d in zip(params.gust_start[0], params.gust_duration[0], strict=True)]
-    metrics = compute_metrics(trace, surface, gusts, window)
+    metrics = compute_metrics(trace, surface, gusts, window, surface2=surface2)
     metrics["window_s"] = list(window) if window else None
     metrics["gusts_s"] = gusts
     return ekf, metrics
@@ -155,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     config = {
         "scenario": args.scenario, "name": sc.name, "scenario_seed": sc.seed,
         "profile": prof.to_dict(), "px4_params": px4_params, "commit": commit,
-        "image": args.image, "world": WORLD, "spawn": sc.spawn.__dict__,
+        "image": args.image, "world": sc.world, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hover_s": hover_s, "disturbance": params_summary(wind),
     }
@@ -163,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
                          args.container_name, to_environment(px4_params), watch=args.watch,
-                         cpuset=args.cpuset)
+                         cpuset=args.cpuset, world=sc.world)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:

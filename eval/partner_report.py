@@ -42,6 +42,7 @@ TRIP_TEXT = {
     "landed": "landed",
     "range_lost": "rangefinder lost",
     "estimate_frozen": "position estimate froze",
+    "estimate_runaway": "VIO velocity ran away from the IMU",
     "unknown": "unknown reason",
 }
 NAV_TEXT = {0: "Manual mode", 1: "Altitude mode", 2: "Position mode", 4: "Hold mode", 18: "Land",

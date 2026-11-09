@@ -150,3 +150,51 @@ blocked there, so that build used PX4's published Gazebo Harmonic image as its b
 (`sim2real/docker/cloud_build.sh`); the server builds the normal image with `run.sh build`.
 Not checked until the server: the GPU steps (CUDA torch, GPU in Docker, Isaac Lab) and how
 many flights a Threadripper runs at once at real time.
+
+## The server we got (2026-11-09): a shared university machine
+
+The server is a university GPU machine shared with other students, not one of our own:
+4x RTX 4500 Ada (24 GB), Threadripper PRO 7965WX (24 cores, 48 threads), 503 GB RAM,
+Ubuntu 24.04, driver 580.142, Docker without sudo and the NVIDIA Container Toolkit already
+installed by the admin. No sudo for us, and no job scheduler or GPU booking: other people's
+jobs run until they stop. On the first day all four GPUs were taken by other users' jobs
+(two of them notebooks holding 23 GB each), and their CPU load ran from about 20 to 130
+runnable threads.
+
+**Access.** Only reachable over the university VPN, so cloud sessions cannot reach it.
+Claude works through Remote Control on Zain's Mac and `ssh gpu` (a key used only for this
+server). No GitHub login is kept on the shared machine: the Mac pushes `main` to a bare
+repo in the home folder over ssh and the server checks it out; results come back to the
+Mac for commits and PRs.
+
+**Setup.** `server_setup.sh` passed everything except the GPU smoke run, which `launch.py`
+refused because no GPU was free (correct). Its SITL step flies 8 hovers at once; on a
+shared machine run it with `--no-sitl` and fly the hover test and parallel check by hand.
+
+**Gazebo on this server: probably fine; the reference was wrong.** The first tuned PX4
+batches were judged against the Mac's 0.427 / 0.424 / 0.428 m, but those were flown with
+`EKF2_HGT_REF` 1 (GPS height, falling back to the barometer) before PR #136 set it to 0.
+The cloud re-flew tuned PX4 on current main the same day at real-time factor about 1.0:
+0.494 / 0.514 / 0.529 m. Against that, the server's numbers are close:
+
+| Flights at once | Tuned PX4 mean p95, calm / 4 / 8 m/s (m) | Real-time factor, worst |
+| --- | --- | --- |
+| Mac, one at a time, `EKF2_HGT_REF` 1 (`docs/baseline.md`, the old reference) | 0.427 / 0.424 / 0.428 | 0.85 |
+| cloud, one at a time, current main (`EKF2_HGT_REF` 0) | 0.494 / 0.514 / 0.529 | about 1.0 |
+| server, 4 at once, 4 cores each | 0.534 / 0.544 / 0.559 | 0.21 |
+| server, 2 at once, 6 cores each | 0.509 / 0.499 / 0.475 | 0.57 |
+| server, 1 at a time, 8 cores (calm only) | 0.519 | 0.40 |
+
+The server batches did dip below real time under other users' load (worst 0.21 at 4 at
+once), so per-seed numbers move more than in the cloud; whether that matters is not
+settled. Gazebo stays in the cloud for now (decided 2026-11-09) and the server runs the
+GPU jobs and the mock.
+
+**The mock on the CPU.** At `nice` 10, pinned away from other work, the Gazebo-like checks
+run fine (16 threads: the 0.75 h v24 check took 31 min). GPU-sized training does not: the
+Route Follow pipes recipe (4096 drones) took about 4 minutes an iteration on 8 threads, so
+1500 iterations would be about 100 h. Training waits for a free GPU.
+
+**How we share it.** At most 2 GPUs at once, one job per free card (Zain, 2026-11-09),
+`nvidia-smi` first as always; CPU work at `nice` 10; long jobs in `tmux` so they survive the
+Mac sleeping or the VPN dropping (Claude cannot start the next job until it is back).

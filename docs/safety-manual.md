@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.8, ready for sign-off (section 8); 1.0 to 1.7 were not signed |
-| Date | 2026-11-02 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7 and the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Version | 1.9, ready for sign-off (section 8); 1.0 to 1.8 were not signed |
+| Date | 2026-11-09 |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`) and the VIO runaway trip of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -64,7 +64,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
 | Estimate faults trained on | Delay 50 to 150 ms, noise, slow bias drift, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
 | Height above ground | Tested 2 to 3.5 m. Engaging on the ground is refused | `sitl_test.py` ground-engage check |
-| Visibility | The VIO must keep tracking: dust, fog, steam or darkness that make it noisier and walk off are simulated (F36, F37) but only up to a VIO that still runs, with its noise about 5 cm, losses under a second and a walk of 0.1 m/sqrt(s). A VIO that stops is F4 | `docs/field-faults.md` (degrade) |
+| Visibility | The VIO must keep tracking: dust, fog, steam or darkness that make it noisier and walk off are simulated (F36, F37) but only up to a VIO that still runs, with its noise about 5 cm, losses under a second and a walk of 0.1 m/sqrt(s). A VIO that stops is F4. A VIO that runs away (heavy dust) trips the hold and is taken out of EKF2, but the drone then coasts along the structure until the pilot stops it (F46): stop the hold when the VIO degrades | `docs/field-faults.md` (degrade, heavy dust) |
 
 ### Do not use Structure Hold
 
@@ -97,12 +97,12 @@ Each layer works without the one above it. Only the first contains learning.
 | Policy | Holds the point in wind and through short estimate faults | Yes |
 | Last-step check | A non-finite rate becomes 0 and a non-finite thrust becomes hover thrust; rates are clamped to the policy's range | No |
 | Brake-and-hover fallback | After `SH_FB_T` (0.5 s) without a fresh fix, brakes to a level hover (`docs/fallback.md`). Off for v22, which flies dropouts itself (`SH_FB_EN` -1 follows the policy's own setting); `SH_FB_EN` 1 turns it on | No |
-| Watchdog | In Structure Hold it trips on: a test fault, an invalid estimate (EKF2 flags or a NaN), a stale estimate (`SH_WD_EST_TO`, 5 s), a frozen fix (`SH_WD_FRZ_T`, 1 s), tilt (`SH_WD_TILT`, 45 deg), hold error (`SH_WD_POS_ERR`, 2 m). In Structure Hover on the rangefinder alone it trips when the range is lost for 0.5 s. A trip latches until disarm | No |
+| Watchdog | In Structure Hold it trips on: a test fault, an invalid estimate (EKF2 flags or a NaN), a stale estimate (`SH_WD_EST_TO`, 5 s), a frozen fix (`SH_WD_FRZ_T`, 1 s), a VIO velocity that runs away from the IMU's (`SH_WD_VIO_DV`, 0.8 m/s over 3 s; it also counts the horizontal estimate as lost, so the handback skips Position mode), tilt (`SH_WD_TILT`, 45 deg), hold error (`SH_WD_POS_ERR`, 2 m). In Structure Hover on the rangefinder alone it trips when the range is lost for 0.5 s. A trip latches until disarm | No |
 | Handback order | Decided rows, pinned by `test_handback.cpp`. Next to a measured wall: Structure Hover (with `SH_HB_RANGE` 1 also when the position estimate is gone). Otherwise Position mode (Altitude mode if there is no horizontal estimate), then Hold, then Land, with Land asked for again until it takes. A trip in Structure Land goes to stock Land first | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says. It moves the point back at most `SH_SHIFT_MAX` (3 m) in one hold, then stops and says so | No |
 | Keep-out | With collision-prevention sensors, the hold point (in all three modes) never comes closer than the keep-out to an obstacle they see; the structure ahead keeps `SH_WALL_MIN` instead. It only moves the point away, it does not avoid or plan, and at most `SH_SHIFT_MAX` (3 m) in one hold | No |
 | Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point, and a back-off away from the wall when the vehicle itself is inside `SH_WALL_MIN` on the measured range (PX4's loop carried past the point). With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
-| Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid or frozen estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
+| Entry checks | Refuses to engage on the ground, while a trip is latched, on an invalid, frozen or runaway estimate, and (optionally) right after an EKF reset (`SH_RST_HOLD`) or without a usable range (`SH_WALL_REQ`) | No |
 | Parameter clamps | The module clamps every `SH_` parameter to its range (`ParamLimits.hpp`); PX4 itself does not enforce limits | No |
 | Ground station | Every safety action is sent to QGroundControl as a text message (section 4), and so is a warning when the vehicle nears a watchdog limit, before the trip; a status line and a live number array show the hold while it flies (`docs/pilot-status.md`) | No |
 | PX4 itself | Stock failsafes (battery, RC loss, geofence) and the pilot's mode switch override the module at any time | No |
@@ -128,6 +128,9 @@ Each layer works without the one above it. Only the first contains learning.
 | `Structure Hover: position lost, holding X m from the wall on the rangefinder` | critical | `SH_HB_RANGE` 1: the horizontal estimate is gone and Structure Hover holds the distance on the range alone. It slides along the wall with the wind | Take over and land soon; nothing controls the position along the wall |
 | `Structure Hover: position back, holding on the estimate` | info | The estimate came back | Continue or land |
 | `<mode>: no position fix for X s, watchdog hands back at Y s` | warning | No fix for half of `SH_WD_EST_TO`; at Y s the watchdog hands back | Be ready for the handback; move away from the structure if you can |
+| `Structure Hold: VIO velocity ran X m/s from the IMU's (SH_WD_VIO_DV), VIO not trusted until it restarts` | critical | The VIO's velocity changed by more than the IMU says the drone's did over 3 s: a VIO running away in dust, fog or low light (F46). The watchdog trips with it, and the hand back treats the position as lost (Structure Hover on the rangefinder, else Altitude mode) | Take over: Position mode would fly the same runaway estimate. Back off on sight and land; check the VIO after landing |
+| `Structure Hold: EKF2 stops fusing the VIO (EKF2_EV_CTRL X to Y) until it restarts or disarm` | critical | `SH_WD_EV_CUT` 1: the module took the runaway VIO out of EKF2 (F46). EKF2 dead-reckons, then holds the drone level; the position estimate goes invalid | Take over in Altitude mode (or stay in Structure Hover on the rangefinder), back off and land |
+| `Structure Hold: EKF2 fuses the VIO again (EKF2_EV_CTRL X)` | info | The VIO restarted or the vehicle disarmed: EKF2's setting is back as it was | Check the VIO before engaging again |
 | `<mode>: position fix has not moved for X s, watchdog trips at Y s` | warning | The VIO repeats its last position (half of `SH_WD_FRZ_T`) | Be ready for the handback; check the VIO after landing |
 | `<mode>: tilted X deg, watchdog trips at Y deg` | warning | Three quarters of `SH_WD_TILT`: the wind is near what the drone can hold against | Back away from the structure and land; do not hold in this wind |
 | `<mode>: X m off the hold point, watchdog trips at Y m` | warning | Half of `SH_WD_POS_ERR` from the hold point | Watch the wall distance; take Position mode if it keeps growing |
@@ -177,6 +180,7 @@ height, F27 over three seeds.
 | F10 | Latency above the trained range | Wrong `EKF2_EV_DELAY`, slow VIO | Oscillation, crash (an early policy crashed 68 % of runs at 150 to 250 ms in the mock) | 4 | Tilt or hold-error trip, late | Handback | 3: keep inside the envelope | M (`docs/gate1.md` stress) |
 | F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies on garbage | 4 | Invalid-estimate trip, same step | Handback | 1 | U |
 | F36 | VIO degrades but keeps running: noisier, walks off, loses tracking in bursts | Rotor-blown dust, fog, steam, a dark underside | Both the policy and stock PX4 follow the walk: tuned PX4 touched the wall on 3 of 6 flights (seed 1, every wind) | 4 | Nothing: 5 cm of noise and 0.5 s losses are inside the trained range and under every trip; the rangefinder (wall guard) catches the walk toward the wall only | Held through 20 s of it, 0 of 6 touched, closest 0.85 m, height within 0.46 m; moved with the walk up to 1 m | 2 with the rangefinder, 4 without it | G (`field_degrade`, barometer height, 3 winds x 2 seeds) |
+| F46 | VIO runs away: position and velocity drift off together, on time, small noise, no tracking loss reported | Heavy dust (Basalt ran away in the dust renders, PR #152) | Every controller follows it, and EKF2 tilts its attitude to agree, so even modes that fly no position slide: v22 and tuned PX4 moved 77 to 78 m along the wall in 25 s at 0.5 m/s^2 | 4 | VIO runaway trip, `SH_WD_VIO_DV` (0.8 m/s over 3 s); `SH_WD_EV_CUT` takes the VIO out of EKF2 | Caught about 2 s in; EKF2 stops fusing the VIO; Structure Hover holds the wall distance on the rangefinder, starting from the wind lean of 8 s before. It still coasts along the wall on the speed it picked up before the trip: 22 / 32 m in 25 s, closest 0.69 / 0.53 m. Runaways under about 0.3 m/s^2 hide in EKF2's tilt and are not caught | **3**: the coast needs the pilot; 4 with either parameter 0 | U (`test_watchdog`, `test_range_hover`), M (`eval/vio_runaway.py`: 0 false trips in 31 h, 0.5 m/s^2 caught 2.2 s in), G (`field_runaway`, 2 seeds) |
 | F12 | Heading at engage is wrong | Magnetometer near steel | Wall direction wrong: guard and hold axes off | 3 | Only the rangefinder's 35 deg limit | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
 | F38 | GPS on: RTK fix drops to float, solution 0.8 m off | Fix lost under a structure | EKF2 walks 0.3 m toward the float solution; tuned PX4 went to 0.66 m from the wall | 3 | Rangefinder (wall guard) | Hold point held at `SH_WALL_MIN` 0.70 m (closest 0.72 m), no trip | 2 | G (`field_rtk_float`) |
 | F39 | GPS on: receiver quiet for 10 s, comes back 1 m off (hand-over) | Receiver lost under the structure | EKF2 re-aligns the vision stream to the returning GPS over about 15 s: the estimate walks 0.3 m; tuned PX4 went to 0.69 m | 3 | Rangefinder (wall guard) | Held at 0.70 m (closest 0.73 m), no trip. The walk is not an EKF reset, so nothing else sees it | 2 | G (`field_gps_loss`) |
@@ -248,6 +252,8 @@ match the drone, and a policy trained on it being released for that drone.
 | `SH_WALL_REQ` | 0 | 1; required with GPS on | F13, F27 |
 | `SH_HB_RANGE` | 1 | Keep 1 if the rangefinder is reliable on your structure | F4 is 2 with it, 4 without |
 | `SH_WD_FRZ_T` | 1 s | Keep 1 s | F6 |
+| `SH_WD_VIO_DV` | 0.8 m/s | Keep 0.8 m/s; replay a few of your own healthy logs first (`python -m eval.vio_runaway replay <ulog>`) and keep it at least twice their largest value | F46 |
+| `SH_WD_EV_CUT` | 1 | Keep 1 | F46: without it EKF2 keeps fusing the runaway and the drone follows it through its attitude, whatever mode flies |
 | `SH_WD_EST_TO` | 5 s | Keep | F4 |
 | `SH_WD_POS_ERR` | 2 m | 1 m for first flights | Earlier trips while building trust |
 | `SH_WD_TILT` | 45 deg | 30 deg for first flights | Earlier trips while building trust |
@@ -270,6 +276,11 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
 - No test yet for F12 (wrong heading) or F15 (wrong surface).
 - F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; a harsher
   degrade, more seeds and a longer cloud are next.
+- F46 (VIO runaway) is one setting on two seeds in Gazebo. After the trip the drone coasts
+  along the wall with nothing on board to stop it; a slow runaway (under about 0.3 m/s^2)
+  or a slow drift is not caught; a runaway before take-off is warned about but does not
+  block arming in stock modes; `SH_WD_EV_CUT` writes `EKF2_EV_CTRL` in flight (restored on
+  the VIO restart, disarm or module stop).
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
 - The keep-out (F41 to F45) is tested in unit tests and one SIH lidar case, not in Gazebo
@@ -304,7 +315,8 @@ signed again. Record each one below.
 | 1.5 | 2026-11-02 | `9e0324e` | Spike gate on the wall guard (F13, F37): short returns off dust no longer move the hold point; `field_degrade` re-flown | |
 | 1.6 | 2026-11-02 | `cbb68ba` | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
 | 1.7 | 2026-11-02 | this PR | Section 3, guarded modes: a back-off on the measured range when the vehicle itself is inside `SH_WALL_MIN`; the keep-out no longer moves the hold point by rounding at the wall floor (it used up its warning) | |
-| 1.8 | 2026-11-03 | this PR | Retreat cap on the wall guard and the keep-out (`SH_SHIFT_MAX`, 3 m per hold, decision row 2026-11-03): sections 3, 4 (two critical messages) and 6, F37 and F43 | |
+| 1.8 | 2026-11-03 | `c5003f2` | Retreat cap on the wall guard and the keep-out (`SH_SHIFT_MAX`, 3 m per hold, decision row 2026-11-03): sections 3, 4 (two critical messages) and 6, F37 and F43 | |
+| 1.9 | 2026-11-09 | this PR | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7 | |
 
 ## Change control
 

@@ -260,6 +260,19 @@ def test_set_overrides_params_and_seed_and_shows_in_the_log(tmp_path, dirs, monk
     assert run(cfg, dirs, "--device", "cpu", "--smoke", "--set", "nonsense") == 2
 
 
+def test_set_steps_into_lists_by_index():
+    cfg = {"params": {"controllers": [{"name": "a", "policy": "a.onnx"},
+                                      {"name": "b", "policy": "b.onnx"}], "seeds": [1, 2]}}
+    applied = launch.apply_overrides(cfg, ["params.controllers.1.policy=runs/x/policy.onnx",
+                                           "params.seeds.0=7"])
+    assert cfg["params"]["controllers"][1] == {"name": "b", "policy": "runs/x/policy.onnx"}
+    assert cfg["params"]["controllers"][0]["policy"] == "a.onnx"
+    assert cfg["params"]["seeds"] == [7, 2]
+    assert applied == ["params.controllers.1.policy=runs/x/policy.onnx", "params.seeds.0=7"]
+    with pytest.raises(launch.Refused, match="not an index"):
+        launch.apply_overrides(cfg, ["params.seeds.9=1"])
+
+
 def test_appended_log_lines_do_not_make_the_tree_dirty():
     assert not launch.is_dirty("")
     assert not launch.is_dirty(" M experiments/LOG.md\n")

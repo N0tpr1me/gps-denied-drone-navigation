@@ -130,6 +130,7 @@ switched in again on that flight. Checked every tick in this order:
 | 7 | `landed` | Engage refused: the land detector says on the ground | No |
 | 8 | `range_lost` | Structure Hover on the rangefinder alone lost its range for 0.5 s | Yes |
 | 9 | `estimate_frozen` | The VIO fix arrives on time but has not moved for `SH_WD_FRZ_T` | Yes |
+| 10 | `estimate_runaway` | The VIO's velocity changed more than the IMU's (EKF2's acceleration) over 3 s, by over `SH_WD_VIO_DV`, for 0.5 s: a VIO running away. Also trips Structure Hover unless it holds on the rangefinder (`SH_HB_RANGE` 1); the handback then treats the horizontal estimate as lost. Clears only when the VIO's ODOMETRY `reset_counter` changes (a VIO restart) or on disarm | Yes |
 
 The handback order (decided rows in `docs/decisions.md`; `Handback.hpp`):
 
@@ -171,6 +172,8 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WD_POS_ERR` | 2.0 | 0.2 to 10 | m | Watchdog: this far from the hold point trips |
 | `SH_WD_TILT` | 45.0 | 10 to 80 | deg | Watchdog: this much tilt trips |
 | `SH_WD_FRZ_T` | 1.0 | 0 to 10 | s | A VIO fix that has not moved for this long trips. 0 off |
+| `SH_WD_VIO_DV` | 0.8 | 0 to 10 | m/s | VIO runaway: the VIO's velocity change over 3 s may differ from the IMU's by this much. Checks only an ODOMETRY velocity in `MAV_FRAME_LOCAL_NED` or `MAV_FRAME_BODY_FRD` (`LOCAL_FRD` is not checked). Replay your own healthy logs first (`python -m eval.vio_runaway replay <ulog>`) and keep it at least twice their largest value. 0 off |
+| `SH_WD_EV_CUT` | 1 | 0 or 1 | | On a VIO runaway caught while a Structure mode flies or hands back, clear `EKF2_EV_CTRL`'s position and velocity bits (yaw kept) so EKF2 stops fusing the VIO, which it otherwise follows with its attitude; the old value goes back when the VIO restarts (`reset_counter`) or on disarm. The change is a normal parameter write, so PX4 saves it; if the module stops mid-flight it puts it back. 0 leaves EKF2 alone |
 | `SH_RST_HOLD` | 0.0 | 0 to 60 | s | Refuse an engage this long after an EKF2 xy reset. 0 off |
 | `SH_GCS_PER` | 10.0 | 0 to 60 | s | Period of the one-line status sent to the ground station while a mode flies (`docs/pilot-status.md`). 0 off; the engage line and near-limit warnings are sent regardless |
 | `SH_FIX_SRC` | 0 | 0 to 2 | | What counts as a fix: 0 auto (VIO odometry if present, else local position), 1 VIO odometry, 2 local position |
