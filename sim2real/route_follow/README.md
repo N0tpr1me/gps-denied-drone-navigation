@@ -43,4 +43,7 @@ Design points, each explained in its module docstring:
   mock turns it along the route).
 - **Each waypoint's acceptance radius is 0.5 m** (a tunnel plan; PX4's 2 m default would cut
   every corner into the wall) and every corner is fly-through, as QGroundControl plans it.
+- **Crash is a wall contact or a mission PX4 never finished.** Ending more than 0.5 m from
+  the last waypoint (the estimate drifted) is "not completed", not a crash, as in the mock.
+  `--rescore BATCH_DIR` re-scores a batch's ulogs after a scoring change.
 - The host side needs the `torch` extra, as `envs/route_follow` imports it.
