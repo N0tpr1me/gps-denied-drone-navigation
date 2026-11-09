@@ -9,7 +9,12 @@ report, in this order:
 3. **Jumps** (relocalisation): Poisson events adding a step of 0.1 to 2 m in a random
    direction, which then decays back with time constant ``jump_decay_s``.
 4. **White noise** on position and velocity.
-5. **Dropouts**: Poisson events of 0.2 to 3 s during which ``stale`` is True and the
+5. **Runaway** (off by default; ``runaway_at_s``): from that long after reset the VIO's
+   velocity error grows at ``runaway_accel_mps2`` along ``runaway_direction`` and the
+   position integrates it, reported velocity and position agreeing with each other: a VIO
+   tracking moving dust (``docs/field-faults.md``, "Heavy dust"). Scripted, no random draws,
+   so the other effects are the same step for step with it on.
+6. **Dropouts**: Poisson events of 0.2 to 3 s during which ``stale`` is True and the
    output is not refreshed from the input. ``dropout_mode`` says what is reported instead:
    ``"dead_reckon"`` (default) integrates the true acceleration like an IMU would, with a
    constant acceleration bias drawn per dropout, so the velocity drifts by
@@ -67,6 +72,11 @@ class EstimateCorruptionConfig:
     dropout_accel_bias_mps2: float = 0.3
     # Jumps and dropouts start only this long after reset (module docstring); 0 = at once.
     fault_start_s: float = 0.0
+    # Runaway (module docstring): when it starts after reset (None = never), how fast the
+    # velocity error grows, and along which ENU direction (normalised).
+    runaway_at_s: float | None = None
+    runaway_accel_mps2: float = 0.0
+    runaway_direction: tuple[float, float, float] = (0.0, 1.0, 0.0)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EstimateCorruptionConfig:
@@ -74,6 +84,9 @@ class EstimateCorruptionConfig:
         unknown = set(data) - known
         if unknown:
             raise ValueError(f"unknown estimate corruption keys: {sorted(unknown)}")
+        data = dict(data)
+        if "runaway_direction" in data:
+            data["runaway_direction"] = tuple(float(v) for v in data["runaway_direction"])
         return cls(**data)
 
     @classmethod
@@ -95,7 +108,7 @@ class EstimateCorruptionConfig:
             raise ValueError(f"dt must be positive, got {dt}")
         for f in fields(self):
             value = getattr(self, f.name)
-            if isinstance(value, str):
+            if isinstance(value, (str, tuple)):
                 continue
             if value is not None and not value >= 0:
                 raise ValueError(f"{f.name} must be >= 0, got {value}")
@@ -110,6 +123,8 @@ class EstimateCorruptionConfig:
             raise ValueError("jump_decay_s must be positive or None")
         if self.dropout_mode not in ("dead_reckon", "hold"):
             raise ValueError("dropout_mode must be 'dead_reckon' or 'hold'")
+        if len(self.runaway_direction) != 3 or not math.hypot(*self.runaway_direction) > 0:
+            raise ValueError("runaway_direction must be a nonzero 3-vector")
         if self.dropout_accel_bias_mps2 < 0:
             raise ValueError("dropout_accel_bias_mps2 must be >= 0")
         lo, hi = _dropout_step_range(self, dt)
@@ -304,7 +319,15 @@ class EstimateCorruptor:
         m_pos = d_pos + self.bias + self.jump_offset + cfg.pos_noise_std_m * nz.pos
         m_vel = d_vel + cfg.vel_noise_std_mps * nz.vel
 
-        # 5. Dropouts: a new one may start only when not already in one; this step counts.
+        # 5. Runaway: velocity error a * tau, position error a * tau^2 / 2, tau from runaway_at_s.
+        if cfg.runaway_at_s is not None and cfg.runaway_accel_mps2 > 0:
+            u = self._as_array(cfg.runaway_direction) / math.hypot(*cfg.runaway_direction)
+            tau = xp.clip(self._as_array(self.steps_since_reset) * self.dt - cfg.runaway_at_s,
+                          0.0, None)[:, None]
+            m_pos = m_pos + 0.5 * cfg.runaway_accel_mps2 * tau * tau * u
+            m_vel = m_vel + cfg.runaway_accel_mps2 * tau * u
+
+        # 6. Dropouts: a new one may start only when not already in one; this step counts.
         lo, hi = self.dropout_steps_min, self.dropout_steps_max
         span = hi - lo + 1
         length_steps = lo + self._to_int(xp.clip(xp.floor(nz.dropout_len * span), 0, span - 1))

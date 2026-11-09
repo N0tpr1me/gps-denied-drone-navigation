@@ -150,7 +150,8 @@ class EstimateProfile:
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "seed": self.seed, "divisor": self.divisor,
-                "estimate": {k: v for k, v in self.estimate.__dict__.items()},
+                "estimate": {k: list(v) if isinstance(v, tuple) else v
+                             for k, v in self.estimate.__dict__.items()},
                 "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s,
                 "fault_anchor_alt_m": self.fault_anchor_alt_m,
                 "bias_from_anchor": self.bias_from_anchor,
