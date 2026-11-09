@@ -1,0 +1,99 @@
+# Policy v28 candidate: v22 continued on barometer height (docs/baro-successor.md, queue
+# training/queues/baro_successor.yaml, jobs baro_s0 and baro_s1). v22 trained and was gated
+# with the fusion on vision height; the benchmark's EKF2 has flown on the barometer since
+# 2026-11-01 (EKF2_HGT_REF 0) and the mock's gz_x500_sitl fuses on it since 2026-11-03
+# (envs/estimate/ekf.py height_source "baro"): no height reset after a vision jump or
+# dropout, no frozen height, the barometer's own slow error instead.
+# - This is v22's recipe with nothing else moved (structure_hold_ppo_v22.yaml: same 21
+#   inputs, reward, estimate rates, airframe randomisation), so the released module header
+#   could take the result unchanged, and so it is the control for the other v22 continuations
+#   (wind, bridge, heading, passes, airframe sizes), which all train on the barometer too and
+#   each change one more thing.
+# - The height source is stated here (env.fusion), not left to the airframe preset: it is
+#   the one thing this candidate is about.
+# - Starts from v22's ONNX; fresh critic warmed up 200 iterations first.
+# GPU-sized as v26_wind: 4096 drones, 800 iterations plus the warm-up, one part under 1 h.
+# Two seeds (the queue's baro_s0 and baro_s1), because PPO moved more between seeds than
+# between recipes before (v23 to v25).
+#   python -m training.launch --config training/configs/structure_hold_ppo_v28_baro.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_v28_baro.yaml --device cuda
+name: structure_hold_ppo_v28_baro
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  init_actor_onnx: training/policies/structure_hold_v22.onnx  # released (PR #93)
+  critic_warmup: 200
+  resume_std: 0.05  # as v12 to v22: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 800
+  num_obs: 21
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    fusion: {height_source: baro}  # on top of the preset's EKF2 settings
+    episode_length_s: 60.0  # the Gazebo benchmark's hover
+    reengage_rate_hz: 0.05
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.1  # five times vio_default's 0.02, as v22
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 100
+    select_envs: 1024  # v22: 256; the checkpoints sit close together, so a steadier pick
+smoke:
+  critic_warmup: 2
+  num_obs: 21
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    fusion: {height_source: baro}
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0  # a few in the 2 s smoke episodes
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
