@@ -69,7 +69,45 @@ while the hold stays within 0.75 m sideways.
 
 ## v22 against the PD in the mock
 
-RESULTS
+`eval/configs/bridge_holds_v22.yaml`: the Gate 1 x500 fused set on barometer height with
+seven bridge cells, 3 seeds (9111 to 9113) x 512 episodes per cell. The yardstick is the
+cascaded PD (`envs/structure_hold/baseline.py`); tuned PX4 exists only in Gazebo (below).
+Run `20261109-173246_bridge_holds_v22_s9111_8026ac2` (commit 8026ac2, 19 min on 4 CPU cores).
+Mean p95 error over 1536 episodes per cell (lower is better), crash rate after it:
+
+| Cell | v22 | PD | v22 vs PD |
+| --- | --- | --- | --- |
+| Deck 1.5 m over, 1 m from the abutment, 8 m/s at 45 degrees | 0.180 m, 0.0 % | 0.334 m, 2.7 % | -46 % [-48, -44] |
+| Deck 1.0 m over, 1 m from the abutment, 8 m/s at 45 degrees | 0.178 m, 0.0 % | 0.316 m, 2.5 % | -44 % [-46, -41] |
+| Deck 1.5 m over, 6 m out, 8 m/s across the deck | 0.202 m, 0.0 % | 0.398 m, 0.0 % | -49 % [-51, -47] |
+| Deck 1 to 3 m over, 1 to 3 m out, 8 m/s any heading | 0.192 m, 0.0 % | 0.363 m, 0.3 % | -47 % [-49, -45] |
+| Pier wake, 1 m from the face, 8 m/s | 0.190 m, 0.0 % | 0.334 m, 2.7 % | -43 % [-46, -40] |
+| Pier wake, 2 m from the face, 8 m/s | 0.202 m, 0.0 % | 0.370 m, 0.0 % | -45 % [-48, -43] |
+| Pier wake, 1 m from the face, 10 m/s | 0.201 m, 0.0 % | 0.355 m, 3.1 % | -43 % [-46, -41] |
+
+v22 holds tighter than the PD in all seven cells (pooled 0.19 against 0.35 m) and never
+crashes (the PD: 1.6 % pooled, its contacts at 1 m from the abutment or pier face). v22's
+numbers sit where they do at the flat wall with the near-wall flow (0.18 to 0.20 m on the
+barometer Gate 1 set), so the deck and the pier's wake do not cost it a measurable amount in
+the mock, and the fine-tune (`structure_hold_ppo_v27_bridge.yaml`) is not needed on this
+evidence. The Gazebo flights against tuned PX4 decide it.
+
+### A first look in Gazebo (cloud image, one seed)
+
+Flown in the cloud container on 2026-11-09 on an image built there from this branch
+(`cloud_build.sh`, PX4's published Gazebo base, so a preview, not the benchmark), seed 1:
+v22 (hold runner, `vio_at_engage`, `--rangefinder`) and tuned PX4 (`vio_at_hover`,
+`px4_tuned_v2.params`). The wind trace of a `deck_open_8ms_flow` hover matched the Python
+model to 1e-15 N.
+
+| Scenario, seed 1 | v22 p95 | Tuned PX4 p95 | Crashes |
+| --- | --- | --- | --- |
+| `deck_corner_8ms_flow` | 0.265 m (1.52 m under the deck at the closest) | 0.906 m | 0 and 0 |
+| `pier_lee_8ms_flow` | 0.221 m | 0.881 m | 0 and 0 |
+
+Seed 1 is one of tuned PX4's bad seeds at the flat wall too (0.92 m in
+`docs/near-wall-flow.md`), so this says the worlds and runners work, not by how much v22
+wins; the 8-seed batches on the server do that.
 
 ## On the server
 
