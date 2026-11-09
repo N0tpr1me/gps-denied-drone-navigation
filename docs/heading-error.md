@@ -13,11 +13,15 @@ Next to steel the compass is off by up to tens of degrees. EKF2 turns its attitu
 while the vision positions stay in their own frame. Two things follow:
 
 1. Every loop that turns a position error into a tilt does it in a frame turned by the error.
-   A correction meant to go toward the hold point goes off to one side by the same angle. Up
-   to about 45 degrees a loop still converges, slower and in a curve; past 90 degrees the
-   corrections point away and the vehicle spirals out (the "toilet bowl" PX4 users know from
-   GPS flights with a bad compass). Stock PX4's Position mode and Structure Hold both have
-   this; nothing in either knows the heading is wrong.
+   A correction meant to go toward the hold point goes off to one side by the same angle.
+   With no lag in the loop that would still converge up to 90 degrees, but the turn eats the
+   loop's phase margin degree for degree, so a real loop starts to circle much sooner and the
+   circle grows until something limits it (the "toilet bowl" PX4 users know from GPS flights
+   with a bad compass). How far a loop goes depends on its margin: the mock's PD yardstick
+   settles at 10 degrees, slowly circles out from about 20, holds a circle over a metre wide at
+   30 and touches the wall at 45. Stock PX4's Position mode and Structure Hold both have this;
+   nothing in either knows the heading is wrong. Where tuned PX4's margin runs out is what the
+   Gazebo batches measure.
 2. Structure Hold takes the heading at engage as the wall's normal (`docs/integration-guide.md`).
    A compass already off at engage turns the structure frame by that angle. A compass that
    drifts after engage makes the policy, which holds the latched heading, turn the vehicle by
@@ -45,8 +49,8 @@ moved since. `env.believed_quat` is the attitude the module believes it has; the
 steers its thrust with it, as PX4's own attitude loop would, so the PD meets the same turned
 frame as the policy. Its own random stream: turning it on changes no other draw. The tests
 (`envs/structure_hold/tests/test_heading_env.py`) pin that the module's body-frame error is the
-true one turned by the current error, and that the PD still settles at 30 degrees and spirals
-out at 150.
+true one turned by the current error, and that the PD still settles at 10 degrees and circles
+out at 30.
 
 ## In Gazebo (`sim2real/estimate_bridge/vision_yaw.py`)
 

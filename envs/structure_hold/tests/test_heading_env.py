@@ -76,12 +76,13 @@ def test_reengage_latches_the_heading_again():
     assert torch.allclose(env.heading_latch, env.heading_err.delta)
 
 
-def test_pd_holds_through_30_deg_and_spirals_out_at_150():
-    """The mechanism the docs describe: a turned frame turns the PD's corrections. 30 deg
-    still converges; past 90 deg the corrections point away from the hold point."""
-    def fly(deg: float) -> float:
+def test_pd_holds_through_10_deg_and_spirals_out_at_30():
+    """The mechanism the docs describe: a turned frame turns the PD's corrections and eats its
+    phase margin. With its attitude and rate-loop lag the PD has about 20 deg to give: 10 deg
+    still settles, 30 deg grows into a circle over a metre wide (docs/heading-error.md)."""
+    def fly(deg: float) -> tuple[float, float]:
         env = StructureHoldEnv(cfg(HeadingErrorConfig(prob=1.0, offset_deg=deg),
-                                   episode_length_s=12.0), num_envs=16, seed=4)
+                                   episode_length_s=14.0), num_envs=16, seed=4)
         pd = CascadedPd(env)
         obs, _ = env.get_observations()
         worst = torch.zeros(16)
@@ -91,7 +92,7 @@ def test_pd_holds_through_30_deg_and_spirals_out_at_150():
             worst = torch.where(done, torch.full_like(worst, 9.0), torch.maximum(worst, err))
         return float((env.state.pos - env.hold_point).norm(dim=-1).max()), float(worst.max())
 
-    end30, _ = fly(30.0)
-    _, worst150 = fly(150.0)
-    assert end30 < 0.1
-    assert worst150 > 1.0
+    end10, _ = fly(10.0)
+    end30, worst30 = fly(30.0)
+    assert end10 < 0.1
+    assert worst30 > 1.0 and end30 > 0.5
