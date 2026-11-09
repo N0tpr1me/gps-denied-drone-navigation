@@ -1,0 +1,21 @@
+# A mine drift: vertical walls under a half-circle roof, 3 m wide and 3 m tall, a 60 degree
+# left turn, a stretch narrowed to 70 % (a collapsed section), then 60 degrees right, at
+# 1.2 m/s. The mock's arched and narrowed worlds, made fixed.
+name: drift_arched
+seed: 1
+kind: arched
+width_m: 3.0
+height_m: 3.0
+waypoints:
+  - [0.0, 0.0, 1.5]
+  - [10.0, 0.0, 1.5]
+  - [14.0, 6.93, 1.5]
+  - [17.5, 12.99, 1.5]
+  - [25.5, 12.99, 1.5]
+segment_scale: [1.0, 1.0, 0.7, 1.0]
+speed_mps: 1.2
+accel_mps2: 0.5
+end_hold_s: 5.0
+draft: along
+disturbance:
+  gust_start: [32.0, 70.0]
