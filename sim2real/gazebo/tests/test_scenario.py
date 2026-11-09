@@ -98,7 +98,7 @@ def test_unknown_keys_are_rejected():
 
 
 PAYLOADS = [f"{base}_payload{pct}" for base in ("wall1m_calm_0ms", "wall1m_wind_8ms")
-            for pct in (25, 50)]
+            for pct in (25, 35, 50)]
 
 
 @pytest.mark.parametrize("name", PAYLOADS)

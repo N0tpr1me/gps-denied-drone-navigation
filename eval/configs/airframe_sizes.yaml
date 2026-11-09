@@ -3,9 +3,9 @@
 # same PX4 pieces as the Gazebo benchmark (rate loop and filters, 83 Hz tick, EKF2-like fusion
 # on the barometer), so only the vehicle differs:
 #   - the x500 (gz_x500_sitl, 2.06 kg, thrust/weight 1.69),
-#   - the x500 with a 25 % and a 50 % payload (0.52 and 1.03 kg, max thrust unchanged, so
-#     thrust/weight 1.35 and 1.13; inertia up 7 and 15 % for a box just under the frame, as
-#     the Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*.yaml),
+#   - the x500 with a 25, 35 and 50 % payload (0.52, 0.72 and 1.03 kg, max thrust unchanged,
+#     so thrust/weight 1.35, 1.25 and 1.13; inertia up 7, 10 and 15 % for a box just under the
+#     frame, as the Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*),
 #   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6;
 #     its own rate gains as autotune would give them; envs/structure_hold/airframes.py).
 # A policy trained on the x500 flies the others through the module's own thrust mapping
@@ -17,7 +17,7 @@
 name: airframe_sizes
 entrypoint: eval.gate1
 seed: 7101  # unused: the seeds are params.seeds
-expected_hours: 0.6  # 6 cells x 1536 episodes x 3 controllers with the fusion, 4 CPU cores
+expected_hours: 0.6  # 7 cells x 1536 episodes x 4 controllers: 12 min for 6 cells x 2 on 4 CPU cores
 gpus: 1
 params:
   controllers:
@@ -65,6 +65,9 @@ params:
     - name: x500_payload25
       label: "x500 + 25 % payload, 0-8 m/s"
       env: {airframe_rand: {mass_scale: 1.25, thrust_to_weight_scale: 0.8, inertia_scale: 1.07}}
+    - name: x500_payload35
+      label: "x500 + 35 % payload, 0-8 m/s (hover at 0.88, near the clamp)"
+      env: {airframe_rand: {mass_scale: 1.35, thrust_to_weight_scale: 0.7407, inertia_scale: 1.10}}
     - name: x500_payload50
       label: "x500 + 50 % payload, 0-8 m/s (hover above the 0.9 clamp)"
       envelope: false

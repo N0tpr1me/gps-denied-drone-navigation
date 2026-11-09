@@ -37,7 +37,7 @@ jobs:
       params.policies.v27_s1: "{run:v27_s1}/policy.onnx"
     after: [v27_s0, v27_s1]
     hours: 0.6
-    why: "v22, both v27 seeds and the PD on x500, x500 +25 % / +50 % payload, 300 g (6 cells); go: a v27 beats v22 on the 300 g and payload cells and loses no more than 0.02 m p95 on the x500"
+    why: "v22, both v27 seeds and the PD on x500, x500 +25 % / +50 % payload, 300 g (7 cells); go: a v27 beats v22 on the 300 g and payload cells and loses no more than 0.02 m p95 on the x500"
 
   # The x500 must not pay for the spread: the release check against v22, one seed per card.
   - id: sizes_check_s0
@@ -68,24 +68,26 @@ jobs:
       python -m eval.baselines.run_baseline --label tuned_v2_payload --jobs auto
       --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
       --scenarios wall1m_calm_0ms_payload25 wall1m_wind_8ms_payload25
+      wall1m_calm_0ms_payload35 wall1m_wind_8ms_payload35
       wall1m_calm_0ms_payload50 wall1m_wind_8ms_payload50
       -- --profile vio_at_hover
     smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
     after: [gz_payload_image]
-    hours: 0.4
-    why: "tuned PX4 with 0.52 and 1.03 kg under the x500, calm and 8 m/s, 32 flights (crashes allowed: that is the result)"
+    hours: 0.5
+    why: "tuned PX4 with 0.52, 0.72 and 1.03 kg under the x500, calm and 8 m/s, 48 flights (crashes allowed: that is the result)"
 
   - id: gz_payload_v22
     cmd: >
       python -m eval.baselines.run_baseline --runner hold --label v22_payload --jobs auto
       --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
       --scenarios wall1m_calm_0ms_payload25 wall1m_wind_8ms_payload25
+      wall1m_calm_0ms_payload35 wall1m_wind_8ms_payload35
       wall1m_calm_0ms_payload50 wall1m_wind_8ms_payload50
       -- --profile vio_at_engage
     smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
     after: [gz_payload_tuned]
-    hours: 0.4
-    why: "v22, same 32 flights, vs gz_payload_tuned and against its own no-payload rows (server_week1 gz_v22_baseline); +50 % is expected to sink at the module's 0.9 thrust clamp"
+    hours: 0.5
+    why: "v22, same 48 flights, vs gz_payload_tuned and against its own no-payload rows (server_week1 gz_v22_baseline); +50 % is expected to sink at the module's 0.9 thrust clamp"
 
   - id: gz_payload_v27
     cmd: >
