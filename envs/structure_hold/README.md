@@ -21,7 +21,7 @@ expects.
 | | |
 | --- | --- |
 | World | ENU. The wall is the plane x = 0; the drone flies at x < 0, so the structure frame (x toward the surface, z up) is the world frame. |
-| Hold point | `hold_distance` m from the wall (default 1 to 3), `hold_height` m up, drawn per episode. |
+| Hold point | `hold_distance` m from the wall (default 1 to 3), `hold_height` m up, drawn per episode. With `surface_pass` (off by default; `passes.py`, `docs/surface-passes.md`) it moves 5 m along or up the wall at the same standoff, and the velocity input, speed penalty and scoring are relative to it. |
 | Observation (20) | estimated position error and velocity in the structure frame, gravity in the body frame, heading, body rates, previous action, estimate stale flag and age. Layout in `env.py` (`OBS`). |
 | Action (4) | body rate setpoints as a fraction of `max_rate_rad_s`, and thrust mapped from [-1, 1] to [0, `max_thrust`]. |
 | Reward | alive bonus minus bounded penalties on true position error (saturating over `pos_scale_m`, extra for the component toward the wall), speed (`stale_vel`, off by default, adds to the speed penalty while the estimate is stale), body rates, collective thrust away from the weight (`thrust`, off by default), action size, action change and tilt beyond `reward.tilt_free_deg`; a crash costs `reward.crash` once. Every term is bounded so a live step always beats a crash (`config.py`). |

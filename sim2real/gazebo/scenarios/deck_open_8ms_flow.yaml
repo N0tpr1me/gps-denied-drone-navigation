@@ -1,0 +1,27 @@
+# Under a bridge deck, away from the abutment (world bridge_deck; docs/bridge-holds.md):
+# 6 m out from the abutment and 1.5 m under the deck, the deck the only near surface. The
+# 8 m/s wind blows across the deck (along the abutment), the case that sheds the strongest
+# vortices from its edges: 0.8 to 1.2 Hz for a 1 m deep deck.
+name: deck_open_8ms_flow
+world: bridge_deck
+seed: 1
+spawn: {x: -6.0, y: 0.0, z: 0.0, yaw_deg: 0.0}   # 6 m from the abutment, nose toward it
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+surface2: {point: [0.0, 0.0, 4.0], normal_toward: [0.0, 0.0, 1.0], across: [0.0, 1.0, 0.0]}
+wind_heading_deg: 90.0  # across the deck (+y), along the abutment
+disturbance:
+  mean_speed: 8.0
+  num_gusts: 2
+  gust_start: [40.0, 65.0]
+  gust_duration: [1.0, 2.0]
+  gust_speed: [2.0, 4.0]
+  turb_sigma: 1.0
+  turb_tau: 1.0
+  wall_deflect: [0.3, 0.8]
+  wall_recirc: [0.2, 0.5]
+  wake_ti: [0.1, 0.3]
+  shed_amp: [0.1, 0.4]
+  surface2_shed_amp: [0.1, 0.4]
+  surface2_shed_width: 1.0
+  surface2_shed_strouhal: [0.1, 0.15]
+hover: {altitude: 2.5, hover_s: 60.0}

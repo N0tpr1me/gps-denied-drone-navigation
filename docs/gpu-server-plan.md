@@ -20,11 +20,9 @@ AMD Threadripper Pro. Nothing below depends on the exact count: the queue fills 
 | 10 to 12 m/s wind (`docs/market-research.md` row 15) | Gazebo cells at datasheet winds, 16 flights per controller; the cloud flies one or two at a time |
 | Bigger Gazebo batches, Isaac-trained policies, seed sweeps | Each needs a few GPU-hours or tens of CPU-cores for an hour; the Mac and the cloud each managed one such job a day |
 
-Not on the server, and not in the queue: the 5 m surface passes. They are in the product's
-Decided row but not in the env yet (nothing in `envs/structure_hold` moves the hold point
-along the wall), so they need a week of env, reward and yardstick work in the cloud first;
-`docs/market-research.md` row 12 sizes it at 3 to 6 weeks. The training that follows will be
-the same shape as `route_pipes` below and slots into the queue file when it exists.
+The 5 m surface passes (`docs/surface-passes.md`) have a queue of their own,
+`training/queues/surface_passes.yaml` (2026-11-09): two seeds of the pass training on 2 GPUs,
+chains of sub-1 h parts, then `hold_pass_gate`. It runs on its own or beside this one.
 
 ## How the queue works
 
@@ -120,7 +118,8 @@ the wind evidence are all in `experiments/LOG.md`.
   mock score is seed luck; today nobody knows.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
-- The 5 m surface passes once the env has them (see above).
+- If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
+  same moving setpoint, the pass's real yardstick (`docs/surface-passes.md`).
 - Heading error near steel (`training/queues/heading_error.yaml`, `docs/heading-error.md`): two
   heading-trained candidates (0.9 GPU-h each, side by side), their check against v22 (0.8 h),
   and 80 Gazebo flights of v22 and tuned PX4 with EKF2's heading 30 deg off or drifting
@@ -194,6 +193,7 @@ v24 release, if its re-fly wins, is a separate decision card.
 | `gz_v22_baseline` | 40 % or more below tuned, 0 crashes | A regression on main since the Mac batches; bisect before any new policy flies |
 | `gz_v24_refly` vs `gz_v22_range` | v24 tighter on mean p95 and worst toward the wall, 0 crashes | v24 parked; the lift rule stands as the gate |
 | `route_pipes_stress` | Best seed: narrow-pipe crashes under 11 %, beats both PDs on all 13 cells | More jumps in training did not help; next try is a rangefinder-weighted reward, not more iterations |
+| `hold_pass_gate` | PASS against the PD on the pass cells, lower p95 than v22 in every cell | v22 as it is stays the pass controller to beat; look at the start and stop of each pass (a pass-velocity input is the next idea) |
 | `gz_wind12_v22` | Holds at 10 and 12 m/s with 0 crashes, tighter than tuned | Switch on `hold_wind_finetune` |
 
 ## Where the numbers go
