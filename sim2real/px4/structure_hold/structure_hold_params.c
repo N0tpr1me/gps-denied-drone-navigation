@@ -75,6 +75,27 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
 PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
 
 /**
+ * Watchdog: VIO runaway, velocity disagreement with the IMU
+ *
+ * Trips the watchdog when the VIO's velocity (the odometry fix, SH_FIX_SRC) has changed by
+ * more than this much more than the IMU says the vehicle's velocity changed, over 2 s, for
+ * 0.3 s in a row; and refuses an engage while it is so. A VIO that locks onto moving dust
+ * runs away with its position and velocity agreeing with each other, on time, with no
+ * tracking loss reported (docs/field-faults.md, "Heavy dust"): only the IMU disagrees. The
+ * VIO is then not trusted until it reports a restart (ODOMETRY reset_counter) or the
+ * vehicle disarms: the handback takes the horizontal estimate as gone (Altitude mode, never
+ * Position mode), and with SH_HB_RANGE 1 Structure Hover holds the wall distance on the
+ * rangefinder. Needs the odometry fix with a velocity in NED or the body frame. 0 = off.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 1.0f);
+
+/**
  * Watchdog: entry hold-off after an estimator reset
  *
  * Structure Hold refuses to engage (commander keeps the current mode, or the module hands

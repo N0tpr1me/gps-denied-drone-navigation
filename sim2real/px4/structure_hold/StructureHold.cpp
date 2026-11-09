@@ -75,6 +75,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wd_pos_err, param_limits::SH_WD_POS_ERR, "SH_WD_POS_ERR");
 	sanitizeParam(_param_wd_tilt, param_limits::SH_WD_TILT, "SH_WD_TILT");
 	sanitizeParam(_param_wd_frz_t, param_limits::SH_WD_FRZ_T, "SH_WD_FRZ_T");
+	sanitizeParam(_param_wd_vio_dv, param_limits::SH_WD_VIO_DV, "SH_WD_VIO_DV");
 	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
 	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
 	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
@@ -109,6 +110,7 @@ void StructureHold::updateParams()
 	limits.max_fix_frozen_s = _param_wd_frz_t.get();
 	_watchdog.setLimits(limits);
 	_pilot.setLimits(limits);
+	_runaway_fix.setLimit(_param_wd_vio_dv.get());
 
 	_gains.p_pos = _param_p_pos.get();
 	_gains.p_vel = _param_p_vel.get();
@@ -393,6 +395,10 @@ Trip StructureHold::entryRefusal(const hrt_abstime now) const
 		return Trip::EstimateFrozen;
 	}
 
+	if (fixRunaway()) {
+		return Trip::EstimateRunaway;
+	}
+
 	return Trip::None;
 }
 
@@ -563,7 +569,7 @@ void StructureHold::handbackStep(const hrt_abstime now)
 	// switches, and escalate if the requested mode was refused. From Structure Land, whose
 	// rate setpoints come from PX4's own cascade, stop the descent there instead.
 	const bool xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
-			      && PX4_ISFINITE(_local_position.y);
+			      && PX4_ISFINITE(_local_position.y) && !fixRunaway();
 
 	if (_active_mode_id == _hover_mode_id && _param_hb_range.get() != 0 && (_range_hover_handback || !xy_valid)) {
 		// From Structure Hover with the range or the horizontal estimate gone: no xy
@@ -635,6 +641,21 @@ void StructureHold::updateFix(const hrt_abstime now)
 			_last_fix_sample_us = odom.timestamp_sample > 0 ? odom.timestamp_sample : _last_fix_us;
 			_odometry_seen = true;
 			_frozen_fix.update(_last_fix_sample_us, odom.position[0], odom.position[1], odom.position[2]);
+
+			// The fix's velocity in NED for the runaway check: NED as sent, or the body frame
+			// turned by the attitude; any other frame (a VIO's own heading) is not compared.
+			Vector3f v(NAN, NAN, NAN);
+
+			if (odom.velocity_frame == vehicle_odometry_s::VELOCITY_FRAME_NED) {
+				v = Vector3f(odom.velocity);
+
+			} else if (odom.velocity_frame == vehicle_odometry_s::VELOCITY_FRAME_BODY_FRD) {
+				v = Dcmf(Quatf(_attitude.q)) * Vector3f(odom.velocity);
+			}
+
+			if (useOdometryFix()) {
+				_runaway_fix.fix(_last_fix_sample_us, v(0), v(1), v(2), odom.reset_counter);
+			}
 		}
 	}
 
@@ -844,7 +865,12 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 	const bool guarded_mode = _state == structure_hold_status_s::STATE_HOVER
 				  || _state == structure_hold_status_s::STATE_LANDING;
 	in.fix_frozen_s = guarded_mode ? 0.f : _fix_frozen_s;
-	const bool xy_valid = in.xy_valid;
+	// A runaway fix stops the policy and Structure Hover on it (with SH_HB_RANGE 1 the hover
+	// flies on the range instead, estimateGood()); the handback then takes the horizontal
+	// estimate as gone: Altitude mode, never Position mode chasing the runaway. Structure
+	// Land carries on down.
+	in.fix_runaway = _state != structure_hold_status_s::STATE_LANDING && fixRunaway();
+	const bool xy_valid = in.xy_valid && !fixRunaway();
 
 	if (range_only) {
 		// Structure Hover on the range alone flies no horizontal estimate and no position
@@ -855,6 +881,7 @@ Trip StructureHold::checkWatchdog(const hrt_abstime now, const Dcmf &r, float po
 		in.estimate_timestamp_us = _local_position.timestamp;
 		in.position_error_m = 0.f;
 		in.fix_frozen_s = 0.f;
+		in.fix_runaway = false;
 	}
 
 	const Trip trip = _watchdog.check(in);
@@ -1128,11 +1155,11 @@ void StructureHold::publishTrajectorySetpoint(float z_ned, const Vector3f &veloc
 
 bool StructureHold::estimateGood() const
 {
-	// Valid, finite, fresh and not frozen: what the range hover and the wind feed-forward
-	// trust.
+	// Valid, finite, fresh, not frozen and not run away: what the range hover and the wind
+	// feed-forward trust.
 	return _local_position.xy_valid && _local_position.v_xy_valid && PX4_ISFINITE(_local_position.x)
 	       && PX4_ISFINITE(_local_position.y) && PX4_ISFINITE(_local_position.vx) && PX4_ISFINITE(_local_position.vy)
-	       && _stale_s < RANGE_HOVER_STALE_S && !fixFrozen();
+	       && _stale_s < RANGE_HOVER_STALE_S && !fixFrozen() && !fixRunaway();
 }
 
 bool StructureHold::fixFrozen() const
@@ -1176,7 +1203,7 @@ void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
 	}
 	const bool good = estimateGood();
 	const bool xy_valid = _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
-			      && PX4_ISFINITE(_local_position.y);
+			      && PX4_ISFINITE(_local_position.y) && !fixRunaway();
 
 	if (!_range_hover.active()) {
 		if (!PX4_ISFINITE(wall)) {
@@ -1312,6 +1339,8 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.fallback_active = _fallback_active;
 	status.yaw_guarded = _param_ctrl.get() == 1 && _policy.yawGuard().enabled && !_fallback_active;
 	status.odometry_fix = useOdometryFix();
+	status.vio_imu_dv = _runaway_fix.disagreement();
+	status.vio_runaway = fixRunaway();
 	status.wall_distance_m = _wall_out.wall_m;
 	status.hold_clearance_m = _wall_out.clearance_m;
 	status.standoff_shift_m = _wall_guard.totalShift();
@@ -1541,6 +1570,7 @@ void StructureHold::Run()
 
 		if (_armed && !armed) {
 			_last_trip = Trip::None;
+			_runaway_fix.reset();  // a VIO that ran away is trusted again after a disarm
 		}
 
 		_armed = armed;
@@ -1548,6 +1578,8 @@ void StructureHold::Run()
 
 	if (_local_position_sub.update(&_local_position)) {
 		_watchdog.noteReset(_local_position.xy_reset_counter, now);
+		_runaway_fix.inertial(_local_position.timestamp_sample, _local_position.ax, _local_position.ay,
+				      _local_position.az);
 	}
 
 	vehicle_land_detected_s land_detected;
@@ -1560,6 +1592,16 @@ void StructureHold::Run()
 	updateFix(now);
 	updateRange();
 	updateWindFeedForward(now);
+
+	// Said once, in any mode: in Position mode too the pilot is flying on that estimate.
+	if (fixRunaway() != _runaway_warned) {
+		_runaway_warned = fixRunaway();
+
+		if (_runaway_warned) {
+			mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: VIO velocity ran %.1f m/s from the IMU's (SH_WD_VIO_DV), VIO not trusted until it restarts",
+					     (double)_runaway_fix.disagreement());
+		}
+	}
 
 	const bool mode_active = _vehicle_status.nav_state == _active_mode_id;
 	const bool land_selected = _land_mode_id != -1 && _vehicle_status.nav_state == _land_mode_id;
@@ -1596,7 +1638,7 @@ void StructureHold::Run()
 			if (refusal != Trip::None) {
 				_active_mode_id = _mode_id;
 				handBack(refusal, _local_position.xy_valid && PX4_ISFINITE(_local_position.x)
-					 && PX4_ISFINITE(_local_position.y), false);
+					 && PX4_ISFINITE(_local_position.y) && !fixRunaway(), false);
 
 			} else {
 				engage(_local_position);
