@@ -15,7 +15,7 @@
 name: gate1_x500_ekf_pass
 entrypoint: eval.gate1
 seed: 9001  # unused: the protocol seeds are params.seeds
-expected_hours: 0.6  # v22 and the PD on 4 CPU cores; a candidate adds about half
+expected_hours: 0.8  # v22 and the PD: 21 min on 4 CPU cores; each candidate adds about 10
 gpus: 1
 params:
   controllers:

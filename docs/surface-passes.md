@@ -119,12 +119,13 @@ GPU-sized (4096 drones, 1200 iterations a part); its selection and end-of-run ev
 passes against the PD. The smoke run passes on the cloud CPU (`--smoke`), and so does a resumed
 part 2.
 
-In `training/queues/server_week1.yaml` (`docs/gpu-server-plan.md`):
+In `training/queues/surface_passes.yaml` (2 GPUs, every run under 1 h, nothing needs Zain's
+yes):
 
 | Job | What | Go/no-go |
 | --- | --- | --- |
-| `hold_pass` | the config, chained twice (part 2 resumes part 1's `policy.pt`), about 45 min a part | the end-of-run eval beats the PD on passes |
-| `hold_pass_gate` | `gate1_x500_ekf_pass.yaml` with the trained policy added as `pass` | PASS against the PD, and a lower p95 than v22 in every cell (v22: 0.16 to 0.21 m) |
+| `hold_pass`, `hold_pass_s1` | the config on seeds 0 and 1, one GPU each, chained twice (part 2 resumes part 1's `policy.pt`), about 45 min a part | the end-of-run eval beats the PD on passes |
+| `hold_pass_gate` | `gate1_x500_ekf_pass.yaml` with both added as `pass_s0` (judged) and `pass_s1` | PASS against the PD, and a lower p95 than v22 in every cell (v22: 0.16 to 0.21 m) |
 
 ## Not done yet
 

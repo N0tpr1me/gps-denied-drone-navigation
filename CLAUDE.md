@@ -219,7 +219,7 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - Surface passes (Nov 2026, `docs/surface-passes.md`): the hold point moves 5 m along or up
   the wall at the same standoff (mock only). The velocity input is relative to the moving
   hold point, so no new input: v22 flies passes as it is and the pass training
-  (`structure_hold_ppo_pass.yaml`, queue job `hold_pass`) starts from it. Scored Gate 1 style
+  (`structure_hold_ppo_pass.yaml`, queue `training/queues/surface_passes.yaml`) starts from it. Scored Gate 1 style
   by `eval/configs/gate1_x500_ekf_pass.yaml`. The module and Gazebo do not fly passes yet.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those

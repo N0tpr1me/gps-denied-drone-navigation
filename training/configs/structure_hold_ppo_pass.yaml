@@ -8,7 +8,7 @@
 #   is still trained on. Everything else is v22's recipe on the barometer-height x500.
 # - Scored and selected on 0.5 m/s passes along the wall (eval.env), against the PD
 #   yardstick; eval/configs/gate1_x500_ekf_pass.yaml then judges it on the held-out seeds
-#   (the server queue's hold_pass_gate).
+#   (hold_pass_gate in training/queues/surface_passes.yaml).
 # GPU-sized: 4096 drones, 1200 iterations a part, chained twice by the queue runner (part 2
 # resumes part 1's policy.pt), about 45 min a part at the mock's GPU speed; check the smoke
 # run's env_steps_per_s first and shorten `iterations` if a part would pass 1 h.
