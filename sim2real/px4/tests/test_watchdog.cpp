@@ -35,6 +35,163 @@ static WatchdogInputs healthy()
 	return in;
 }
 
+// RunawayFix driven like the module: the IMU (local position ax, ay, az) at 100 Hz and the
+// VIO's velocity at 50 Hz, both from a vehicle swinging in gusts. ``err(t)`` is the VIO's
+// velocity error along north, ``noise`` its white velocity noise.
+template<typename Err>
+static float flyRunaway(RunawayFix &f, float seconds, Err err, float noise = 0.f, float imu_bias = 0.f,
+			uint64_t t0 = 1'000'000, uint8_t counter = 0)
+{
+	unsigned rng = 12345u;
+	auto gauss = [&rng]() {
+		float sum = 0.f;
+		for (int i = 0; i < 12; i++) {  // Irwin-Hall: near enough to a unit normal
+			rng = rng * 1664525u + 1013904223u;
+			sum += static_cast<float>(rng >> 8) / 16777216.f;
+		}
+		return sum - 6.f;
+	};
+	float max_dv = 0.f;
+	const int steps = static_cast<int>(seconds * 100.f);
+
+	for (int k = 0; k < steps; k++) {
+		const float t = 0.01f * k;
+		const uint64_t t_us = t0 + 10'000ULL * k;
+		// True motion: a 0.5 Hz swing of 0.4 m/s and 1.2 m/s^2 peak, on all three axes.
+		const float w = 3.14159265f;
+		const float a = 0.4f * w * std::cos(w * t);
+		const float v = 0.4f * std::sin(w * t);
+		f.inertial(t_us, a + imu_bias, -a, 0.5f * a);
+
+		if (k % 2 == 0) {
+			f.fix(t_us, v + err(t) + noise * gauss(), -v + noise * gauss(), 0.5f * v + noise * gauss(), counter);
+			max_dv = std::fmax(max_dv, f.disagreement());
+		}
+	}
+
+	return max_dv;
+}
+
+static void testRunawayFix()
+{
+	// Off by default: never runaway, whatever the VIO does.
+	{
+		RunawayFix f;
+		flyRunaway(f, 6.f, [](float t) { return 3.f * t; });
+		CHECK(!f.runaway());
+	}
+
+	// A healthy VIO in gusts, with dust-level noise (0.2 m/s) and a 0.1 m/s^2 IMU bias the
+	// EKF has not learnt: the vehicle's own motion cancels, nothing trips.
+	{
+		RunawayFix f;
+		f.setLimit(0.8f);
+		const float max_dv = flyRunaway(f, 60.f, [](float) { return 0.f; }, 0.2f, 0.1f);
+		CHECK(!f.runaway());
+		CHECK(max_dv < 0.65f);  // 0.3 of it is the bias over the 3 s window
+	}
+
+	// A relocalisation jump moves the position, not the velocity: nothing to see here (the
+	// check reads velocities only). A constant velocity offset from the start never changes.
+	{
+		RunawayFix f;
+		f.setLimit(1.f);
+		flyRunaway(f, 20.f, [](float) { return 2.f; });
+		CHECK(!f.runaway());
+	}
+
+	// A runaway at 0.5 m/s^2 from 5 s, at the default 0.8 m/s: the change over 3 s passes it
+	// 1.6 s in, and two 0.25 s slots later it trips; it stays tripped after the VIO stops
+	// accelerating.
+	{
+		RunawayFix f;
+		f.setLimit(0.8f);
+		flyRunaway(f, 6.5f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
+		CHECK(!f.runaway());
+		RunawayFix g;
+		g.setLimit(0.8f);
+		flyRunaway(g, 8.f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
+		CHECK(g.runaway());
+		CHECK(g.disagreement() > 0.8f);
+		flyRunaway(g, 10.f, [](float) { return 1.5f; }, 0.05f, 0.f, 9'000'000);  // stopped accelerating
+		CHECK(g.runaway());
+		CHECK(g.disagreement() < 0.5f);
+		// The VIO says it restarted: trusted again, and a fresh window starts.
+		flyRunaway(g, 1.f, [](float) { return 0.f; }, 0.f, 0.f, 20'000'000, 1);
+		CHECK(!g.runaway());
+		// So does a disarm (reset()).
+		RunawayFix h;
+		h.setLimit(1.f);
+		flyRunaway(h, 10.f, [](float t) { return 2.f * t; });
+		CHECK(h.runaway());
+		h.reset();
+		CHECK(!h.runaway() && h.disagreement() <= 0.f);
+	}
+
+	// Dust: 0.5 s tracking losses every 2 s do not blind it. The IMU integral runs through the
+	// gaps and the change is scaled back to the 3 s window, so a healthy VIO stays quiet and
+	// a runaway still trips.
+	{
+		auto lossy = [](RunawayFix &f, float accel) {
+			for (int k = 0; k < 3000; k++) {
+				const uint64_t t_us = 1'000'000 + 10'000ULL * k;
+				const float t = 0.01f * k;
+				f.inertial(t_us, 0.1f, 0.f, 0.f);  // a 0.1 m/s^2 bias, the vehicle still
+				const bool lost = std::fmod(t, 2.f) > 1.5f;
+
+				if (k % 2 == 0 && !lost) {
+					f.fix(t_us, t > 10.f ? accel * (t - 10.f) : 0.f, 0.f, 0.f, 0);
+				}
+			}
+		};
+		RunawayFix healthy_dust;
+		healthy_dust.setLimit(1.f);
+		lossy(healthy_dust, 0.f);
+		CHECK(!healthy_dust.runaway());
+		RunawayFix runaway_dust;
+		runaway_dust.setLimit(1.f);
+		lossy(runaway_dust, 0.8f);
+		CHECK(runaway_dust.runaway());
+	}
+
+	// A short glitch (a 2 m/s velocity spike for 0.1 s) is not a runaway: it needs two
+	// slots in a row over the limit and leaves the window again.
+	{
+		RunawayFix f;
+		f.setLimit(1.f);
+		flyRunaway(f, 10.f, [](float t) { return (t > 5.f && t < 5.1f) ? 2.f : 0.f; });
+		CHECK(!f.runaway());
+	}
+
+	// No velocity from the VIO (NaN), or a gap: nothing is compared across it.
+	{
+		RunawayFix f;
+		f.setLimit(1.f);
+		for (int k = 0; k < 1000; k++) {
+			f.inertial(1'000'000 + 10'000ULL * k, 5.f, 0.f, 0.f);
+			f.fix(1'000'000 + 10'000ULL * k, NAN, 0.f, 0.f, 0);
+		}
+		CHECK(!f.runaway() && f.disagreement() <= 0.f);
+		// Fixes 2.5 s apart (the VIO lost): every one starts over, the window never fills.
+		RunawayFix g;
+		g.setLimit(1.f);
+		for (int k = 0; k < 40; k++) {
+			for (int j = 0; j < 250; j++) {
+				g.inertial(1'000'000 + 2'500'000ULL * k + 10'000ULL * j, 0.f, 0.f, 0.f);
+			}
+			g.fix(1'000'000 + 2'500'000ULL * k, 10.f * k, 0.f, 0.f, 0);
+		}
+		CHECK(!g.runaway() && g.disagreement() <= 0.f);
+		// The IMU stops for longer than the gap: the window starts over too.
+		RunawayFix h;
+		h.setLimit(1.f);
+		flyRunaway(h, 3.f, [](float) { return 0.f; });
+		h.inertial(10'000'000, 0.f, 0.f, 0.f);  // 6 s after its last sample
+		h.fix(10'000'000, 0.f, 0.f, 0.f, 0);
+		CHECK(h.disagreement() <= 0.f);
+	}
+}
+
 int main()
 {
 	WatchdogLimits limits{};
@@ -211,6 +368,21 @@ int main()
 		CHECK(f.frozenSeconds() <= 0.f);
 	}
 
+	// A runaway fix trips after the watchdog's other estimate checks, before tilt.
+	{
+		Watchdog wd(limits);
+		WatchdogInputs in = healthy();
+		in.fix_runaway = true;
+		CHECK(wd.check(in) == Trip::EstimateRunaway);
+		CHECK(!wd.mayEnter(in));
+		in.tilt_rad = 2.f;
+		CHECK(wd.check(in) == Trip::EstimateRunaway);
+		in.xy_valid = false;
+		CHECK(wd.check(in) == Trip::EstimateInvalid);
+	}
+
+	testRunawayFix();
+
 	// Names are stable (they end up in logs and the status topic).
 	CHECK(std::string_view(Watchdog::name(Trip::None)) == "none");
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateStale)) == "estimate_stale");
@@ -222,6 +394,8 @@ int main()
 	CHECK(static_cast<int>(Trip::RangeLost) == 8);  // structure_hold_status TRIP_RANGE_LOST
 	CHECK(std::string_view(Watchdog::name(Trip::EstimateFrozen)) == "estimate_frozen");
 	CHECK(static_cast<int>(Trip::EstimateFrozen) == 9);  // structure_hold_status TRIP_ESTIMATE_FROZEN
+	CHECK(std::string_view(Watchdog::name(Trip::EstimateRunaway)) == "estimate_runaway");
+	CHECK(static_cast<int>(Trip::EstimateRunaway) == 10);  // structure_hold_status TRIP_ESTIMATE_RUNAWAY
 
 	// Every trip has its own plain-words reason for the pilot, and the longest ground-station
 	// message built from it ("Structure Hold: engage refused: " or the longer "watchdog trip"
@@ -232,7 +406,7 @@ int main()
 		const std::string_view unknown = Watchdog::reason(static_cast<Trip>(200));
 		CHECK(unknown == "unknown");
 
-		for (int t = 0; t <= static_cast<int>(Trip::EstimateFrozen); t++) {
+		for (int t = 0; t <= static_cast<int>(Trip::EstimateRunaway); t++) {
 			const Trip trip = static_cast<Trip>(t);
 			const std::string_view reason = Watchdog::reason(trip);
 			const std::string_view code = Watchdog::name(trip);
