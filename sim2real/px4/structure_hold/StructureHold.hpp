@@ -241,6 +241,11 @@ private:
 	float _fix_frozen_s{0.f};
 	structure_hold::RunawayFix _runaway_fix{};  // the fix's velocity against the IMU's
 	bool _runaway_warned{false};
+	// SH_WD_EV_CUT: EKF2_EV_CTRL as it was before the module cleared its position and
+	// velocity bits on a runaway VIO; -1 while EKF2 is untouched.
+	param_t _param_ev_ctrl{PARAM_INVALID};
+	int32_t _ev_ctrl_saved{-1};
+	void cutVision(bool cut);
 	float _last_estimate_age_s{0.f};
 
 	// Forward rangefinder and the floor it puts under the hold point (WallGuard.hpp):
@@ -313,6 +318,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_TILT>) _param_wd_tilt,
 		(ParamFloat<px4::params::SH_WD_FRZ_T>) _param_wd_frz_t,
 		(ParamFloat<px4::params::SH_WD_VIO_DV>) _param_wd_vio_dv,
+		(ParamInt<px4::params::SH_WD_EV_CUT>) _param_wd_ev_cut,
 		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
 		(ParamInt<px4::params::SH_BENCH>) _param_bench,

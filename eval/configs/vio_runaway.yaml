@@ -18,6 +18,10 @@ params:
   # (attitude error, an unlearnt offset) as a constant per env, plus white noise.
   imu_bias_mps2: 0.1
   imu_noise_mps2: 0.05
+  # EKF2 pulls its acceleration toward the VIO's (tilt and accel bias through the vision
+  # velocity fusion): a critically damped observer of this natural period, fitted so a
+  # 0.5 m/s^2 runaway gives the 3 s disagreement the Gazebo log showed (1.3 m/s).
+  ekf_tau_s: 2.5
   seeds: [7101, 7102]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 128
   controllers:
@@ -87,5 +91,4 @@ params:
 smoke:
   num_envs: 8
   seeds: [7101]
-  base_env:
-    episode_length_s: 25.0
+  episode_length_s: 25.0  # (a smoke base_env would replace the whole block)

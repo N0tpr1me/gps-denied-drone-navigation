@@ -77,6 +77,7 @@ static constexpr IntRange SH_WALL_REQ{0, 1, 0};
 static constexpr IntRange SH_LAND_EN{0, 1, 1};
 static constexpr IntRange SH_HB_GUARD{0, 1, 1};
 static constexpr IntRange SH_HB_RANGE{0, 1, 1};
+static constexpr IntRange SH_WD_EV_CUT{0, 1, 1};
 // Keep-out from PX4's collision-prevention data; -1 follows CP_DIST
 static constexpr FloatRange SH_KO_DIST{-1.0f, 5.0f, -1.0f};
 // Retreat cap on both guards per hold; 0 = no cap

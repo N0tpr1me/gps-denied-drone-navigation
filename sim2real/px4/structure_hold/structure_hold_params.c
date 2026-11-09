@@ -96,6 +96,23 @@ PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
 PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 0.8f);
 
 /**
+ * Stop EKF2 fusing a VIO that ran away
+ *
+ * EKF2 keeps fusing a runaway VIO (SH_WD_VIO_DV) and turns its own attitude estimate to
+ * agree with it, so the drone physically accelerates with the runaway even in a mode that
+ * flies no position: in Gazebo, Structure Hover on the rangefinder slid 84 to 88 m along
+ * the wall (docs/field-faults.md, "Heavy dust"). With 1, once the runaway is caught while
+ * one of the module's modes flies or hands back, the module clears EKF2_EV_CTRL's position
+ * and velocity bits (yaw kept) so EKF2 stops fusing the VIO, and puts the old value back
+ * when the VIO reports a restart (ODOMETRY reset_counter) or the vehicle disarms. Not while
+ * another mode flies with the module on standby, nor in Structure Land. 0: EKF2 untouched.
+ *
+ * @boolean
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_WD_EV_CUT, 1);
+
+/**
  * Watchdog: entry hold-off after an estimator reset
  *
  * Structure Hold refuses to engage (commander keeps the current mode, or the module hands

@@ -16,13 +16,44 @@ StructureHold::StructureHold() :
 	WorkItem(MODULE_NAME, px4::wq_configurations::nav_and_controllers)
 {
 	_param_cp_dist = param_find("CP_DIST");  // PX4's collision prevention, absent in some builds
+	_param_ev_ctrl = param_find("EKF2_EV_CTRL");
 	updateParams();
 }
 
 StructureHold::~StructureHold()
 {
+	cutVision(false);  // never leave EKF2 without its VIO after the module stops
 	perf_free(_loop_perf);
 	perf_free(_tick_perf);
+}
+
+void StructureHold::cutVision(bool cut)
+{
+	if (_param_ev_ctrl == PARAM_INVALID || cut == (_ev_ctrl_saved >= 0)) {
+		return;
+	}
+
+	if (cut) {
+		int32_t now_ctrl = 0;
+		param_get(_param_ev_ctrl, &now_ctrl);
+		// Bits 0 to 2: horizontal position, vertical position, velocity; bit 3 (yaw) stays.
+		const int32_t cut_ctrl = now_ctrl & ~int32_t(7);
+
+		if (cut_ctrl == now_ctrl) {
+			return;  // EKF2 fuses no VIO position or velocity: nothing to take out
+		}
+
+		_ev_ctrl_saved = now_ctrl;
+		param_set(_param_ev_ctrl, &cut_ctrl);
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: EKF2 stops fusing the VIO (EKF2_EV_CTRL %d to %d) until it restarts or disarm",
+				     (int)now_ctrl, (int)cut_ctrl);
+
+	} else {
+		const int32_t back = _ev_ctrl_saved;
+		_ev_ctrl_saved = -1;
+		param_set(_param_ev_ctrl, &back);
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: EKF2 fuses the VIO again (EKF2_EV_CTRL %d)", (int)back);
+	}
 }
 
 bool StructureHold::init()
@@ -76,6 +107,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wd_tilt, param_limits::SH_WD_TILT, "SH_WD_TILT");
 	sanitizeParam(_param_wd_frz_t, param_limits::SH_WD_FRZ_T, "SH_WD_FRZ_T");
 	sanitizeParam(_param_wd_vio_dv, param_limits::SH_WD_VIO_DV, "SH_WD_VIO_DV");
+	sanitizeParam(_param_wd_ev_cut, param_limits::SH_WD_EV_CUT, "SH_WD_EV_CUT");
 	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
 	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
 	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
@@ -1213,8 +1245,21 @@ void StructureHold::rangeHoverStep(const hrt_abstime now, const Dcmf &r)
 
 		// The wind the vehicle leaned into while the estimate was good, split along the
 		// normal (toward the wall positive) and along the wall (t = n rotated +90 deg).
-		const float fx = _wind_ff.valid() ? _wind_ff.x() : 0.f;
-		const float fy = _wind_ff.valid() ? _wind_ff.y() : 0.f;
+		// After a VIO runaway the last seconds' lean chased the runaway (the policy followed
+		// it, and EKF2 tilted to agree): start from the lean of before it. In Gazebo the
+		// current one held 0.4 to 0.9 m/s^2 along the wall and slid the vehicle 60 m.
+		float lean[2] {0.f, 0.f};
+
+		if (fixRunaway()) {
+			_wind_ff.lagged(lean);
+
+		} else if (_wind_ff.valid()) {
+			lean[0] = _wind_ff.x();
+			lean[1] = _wind_ff.y();
+		}
+
+		const float fx = lean[0];
+		const float fy = lean[1];
 		_range_hover.start(wall, _param_wall_min.get(), fx * nx + fy * ny, -fx * ny + fy * nx);
 		_range_hover_seen_us = now;
 		_range_hover_xy_back_us = 0;
@@ -1601,6 +1646,20 @@ void StructureHold::Run()
 			mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: VIO velocity ran %.1f m/s from the IMU's (SH_WD_VIO_DV), VIO not trusted until it restarts",
 					     (double)_runaway_fix.disagreement());
 		}
+	}
+
+	// SH_WD_EV_CUT: a runaway caught while the module is in charge (or handing back) takes
+	// the VIO out of EKF2, which otherwise turns its attitude to follow it; it goes back in
+	// when the VIO restarts or on disarm (the runaway clears then).
+	const bool in_charge = _state == structure_hold_status_s::STATE_ENGAGED
+			       || _state == structure_hold_status_s::STATE_HANDBACK
+			       || _state == structure_hold_status_s::STATE_HOVER;
+
+	if (fixRunaway() && in_charge && _param_wd_ev_cut.get() != 0) {
+		cutVision(true);
+
+	} else if (!fixRunaway()) {
+		cutVision(false);
 	}
 
 	const bool mode_active = _vehicle_status.nav_state == _active_mode_id;

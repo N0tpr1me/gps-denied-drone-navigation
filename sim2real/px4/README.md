@@ -190,6 +190,21 @@ What it does today:
   Land, where Position mode would only fly the same frozen estimate without the wall guard;
   with `SH_HB_RANGE` 1 Structure Hover counts a frozen fix as no estimate and holds the wall
   distance on the rangefinder until the fix moves again.
+- **VIO runaway trip** (`SH_WD_VIO_DV`, m/s, default 0.8, 0 = off; `RunawayFix` in
+  `Watchdog.hpp`; `docs/field-faults.md` "Heavy dust"). In heavy dust a VIO can keep
+  running and keep its noise small while its velocity runs away; EKF2 fuses it, nothing
+  goes stale or invalid, and every controller follows it. The module compares how much the
+  VIO odometry's velocity changed over 3 s (0.25 s slot means, gaps up to 2 s spanned) with
+  how much EKF2's bias-corrected acceleration (`vehicle_local_position` ax, ay, az) says
+  the vehicle's did. Past the limit for two slots in a row it latches until the VIO's
+  `reset_counter` changes or disarm: Structure Hold trips (`estimate_runaway`, trip 10),
+  an engage is refused, Structure Hover holds on the rangefinder (`SH_HB_RANGE` 1) or trips,
+  and the handback counts the horizontal estimate as lost (Altitude mode, never Position
+  mode). Velocity in NED is used as sent, `BODY_FRD` is turned by the attitude, other
+  frames are not checked. EKF2's tilt takes up a slow runaway (about 2.5 s), so a runaway
+  under about 0.3 m/s^2 can stay under the limit. `structure_hold_status` logs
+  `vio_imu_dv` and `vio_runaway`; `runaway_replay.cpp` runs the same class over a text
+  stream for the Python parity test.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -213,7 +228,7 @@ What it does today:
   the near-limit warning with `--pilot-warning`.
 - **Parameters** under `SH_`: `SH_EN`, `SH_CTRL`, yaw guard `SH_YAW_GUARD` / `SH_YAW_P`,
   rate clamp `SH_RATE_MAX`, fallback `SH_FB_EN` / `SH_FB_T` / `SH_FB_K` / `SH_FB_TILT`, fix
-  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*` (the frozen-fix trip `SH_WD_FRZ_T` among them), the engage hold-off
+  source `SH_FIX_SRC` / `SH_FIX_GAP`, watchdog thresholds `SH_WD_*` (the frozen-fix trip `SH_WD_FRZ_T` and the VIO runaway trip `SH_WD_VIO_DV` among them), the engage hold-off
   after an EKF reset `SH_RST_HOLD`, the wall guard `SH_WALL_MIN` / `SH_WALL_REQ`, the guards' retreat cap `SH_SHIFT_MAX`, Structure Land `SH_LAND_EN`, Structure Hover `SH_HB_GUARD` and its range-only option `SH_HB_RANGE`, the ground-station status period `SH_GCS_PER`, the test hook `SH_TEST_FAULT`, the bench-test-only ground engage `SH_BENCH`, placeholder gains
   `SH_P_*`, `SH_V_MAX`, `SH_VEL_SRC`.
 

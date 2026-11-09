@@ -139,6 +139,17 @@ def fly_set(env: Any, controller: Any, p: dict[str, Any], seed: int,
     rng = np.random.default_rng(seed)
     imu_bias = rng.normal(0.0, float(p.get("imu_bias_mps2", 0.1)), (n, 3))
     imu_noise = float(p.get("imu_noise_mps2", 0.05))
+    # EKF2 corrects its acceleration toward the VIO: the vision velocity fusion moves its tilt
+    # and accel bias so that the integrated acceleration follows the fix. Modelled as a
+    # critically damped velocity / acceleration-offset observer on the raw fix (natural
+    # period ekf_tau_s), started converged on the IMU bias. It is why a constant bias does
+    # not trip the check, and why a slow runaway can hide from it: EKF2 takes the runaway
+    # into its tilt (the Gazebo logs, docs/field-faults.md "Heavy dust").
+    tau = float(p.get("ekf_tau_s", 2.5))
+    k1, k2 = (2.0 / tau, 1.0 / (tau * tau)) if tau > 0 else (0.0, 0.0)
+    c_hat = imu_bias.copy()
+    v_hat = env.state.vel.cpu().numpy().astype(np.float64).copy()
+    fix_dt = fix_every * dt
     check = RunawayFix(n, limit)
 
     # The raw fix, as the corruptor reports it (before the fusion the policy reads).
@@ -169,11 +180,17 @@ def fly_set(env: Any, controller: Any, p: dict[str, Any], seed: int,
         # env that just ended, so its last IMU sample is skipped.
         vel_after = env.state.vel.cpu().numpy()
         accel = (vel_after - vel_before) / dt + imu_bias + imu_noise * rng.standard_normal((n, 3))
+        accel = accel - c_hat
+        v_hat += accel * dt
         live = alive & ~done
         check.inertial(t_us, accel, live)
         if (k + 1) % fix_every == 0:
             v = raw["vel"].cpu().numpy().astype(np.float64)
-            check.fix(t_us, v, 0, live & ~raw["stale"].cpu().numpy())
+            fresh = live & ~raw["stale"].cpu().numpy()
+            innov = np.where(fresh[:, None], v - v_hat, 0.0)
+            v_hat += k1 * fix_dt * innov
+            c_hat -= k2 * fix_dt * innov
+            check.fix(t_us, v, 0, fresh)
         max_dv = np.where(live, np.maximum(max_dv, check.disagreement), max_dv)
         new_trip = live & check.runaway & np.isnan(trip_s)
         if new_trip.any():
@@ -259,6 +276,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
     step = 0
     for s in p["sets"]:
         env_over = merge(p["base_env"], s.get("env"))
+        if p.get("episode_length_s") is not None:  # the smoke's shorter flights
+            env_over["episode_length_s"] = float(p["episode_length_s"])
         env_cfg = StructureHoldConfig.from_dict(env_over)
         at = env_cfg.estimate.runaway_at_s if env_cfg.estimate.runaway_accel_mps2 > 0 else None
         entry: dict[str, Any] = {"name": s["name"], "runaway_at_s": at,
