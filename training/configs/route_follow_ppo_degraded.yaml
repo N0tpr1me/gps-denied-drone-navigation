@@ -1,0 +1,88 @@
+# Route Follow with degraded sensors: the pipes recipe (route_follow_ppo_pipes.yaml) with
+# dust-spoiled rangefinders and a degraded VIO on top (GPU plan item 7; docs/route-follow.md
+# "Degraded sensors"). Sewer and tunnel buyers fly in dust, spray and the dark, where the
+# VIO is noisier and drifts further and the rangefinders lose returns or read short off the
+# dust. So, from scratch, as route_pipes:
+# - the estimate: the pipes recipe's five-times jumps and dropouts, plus the field-fault
+#   degrade's direction (docs/field-faults.md) at a level held for the whole episode: 5 cm
+#   position noise (tunnel default 2 cm), 0.15 m/s velocity noise (0.05), drift walk
+#   0.03 m/sqrt(s) and cap 0.7 m (0.02 and 0.5);
+# - the rangefinders: on 70 % of the beams as before, and half the episodes dusty: a fifth of
+#   the readings lost and a tenth short, at 20 to 90 % of the true distance (ranges.dust_*).
+# Two seeds (6, 7), each a chain of 3 parts of 1500 iterations on 4096 drones, about 45 min a
+# part on one GPU (training/queues/route_gazebo.yaml). Scored on the pipes against both PD
+# yardsticks as route_pipes is; the stress table (eval/configs/route_follow_stress_degraded.yaml)
+# judges it beside v2 and the pipes policies.
+#   python -m training.launch --config training/configs/route_follow_ppo_degraded.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/route_follow_ppo_degraded.yaml --device cuda
+name: route_follow_ppo_degraded
+entrypoint: training.train_route_ppo
+seed: 6
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  iterations: 1500
+  num_steps_per_env: 48
+  history: 3
+  sim: torch
+  save_interval: 100
+  resume: null  # part 2 and later: the queue sets params.resume to the previous part's policy.pt
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    route:
+      tunnel_prob: 0.7
+      tunnel_radius_m: [0.8, 2.0]
+      arch_prob: 0.4
+      pinch_prob: 0.25
+      pinch_frac: [0.7, 0.9]
+      branches: 2
+      branch_prob: 0.5
+      climb_deg: [-20.0, 20.0]
+    estimate:
+      pos_noise_std_m: 0.05
+      vel_noise_std_mps: 0.15
+      bias_walk_std_m_per_sqrt_s: 0.03
+      bias_max_m: 0.7
+      jump_rate_hz: 0.1
+      jump_min_m: 0.2
+      jump_max_m: 1.0
+      dropout_rate_hz: 0.1
+      dropout_min_s: 1.0
+      dropout_max_s: 3.0
+    ranges:
+      present_prob: 0.7
+      outlier_prob: 0.01
+      dust_prob: 0.5
+      dust_loss_prob: 0.2
+      dust_short_prob: 0.1
+  eval:
+    num_envs: 256
+    episodes: 1
+    env:
+      route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}  # the stress set's pipe_nominal
+      estimate: {pos_noise_std_m: 0.02, vel_noise_std_mps: 0.05, bias_walk_std_m_per_sqrt_s: 0.02,
+                 bias_max_m: 0.5, jump_rate_hz: 0.02, dropout_rate_hz: 0.02}
+      ranges: {dust_prob: 0.0}
+smoke:
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  resume: null
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
+    route: {tunnel_prob: 0.7, tunnel_radius_m: [0.8, 2.0], arch_prob: 0.4, pinch_prob: 0.25,
+            pinch_frac: [0.7, 0.9], branches: 2, branch_prob: 0.5, climb_deg: [-20.0, 20.0]}
+    estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.15, bias_walk_std_m_per_sqrt_s: 0.03,
+               bias_max_m: 0.7, jump_rate_hz: 0.1, jump_min_m: 0.2, jump_max_m: 1.0,
+               dropout_rate_hz: 0.1, dropout_min_s: 1.0, dropout_max_s: 3.0}
+    ranges: {present_prob: 0.7, outlier_prob: 0.01, dust_prob: 0.5}
+  eval:
+    num_envs: 8
+    episodes: 1
+    env: {}
