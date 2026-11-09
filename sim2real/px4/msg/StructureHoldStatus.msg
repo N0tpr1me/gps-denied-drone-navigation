@@ -41,7 +41,7 @@ uint8 controller
 bool fallback_active          # the brake-and-hover fallback flew this tick
 bool yaw_guarded              # the yaw action flown is the module's heading hold (SH_YAW_GUARD)
 bool odometry_fix             # fixes counted from vehicle_visual_odometry (else local position)
-float32 vio_imu_dv            # [m/s] change of the fix's velocity minus the IMU's over 2 s (SH_WD_VIO_DV; Watchdog.hpp RunawayFix)
+float32 vio_imu_dv            # [m/s] change of the fix's velocity minus the IMU's over 3 s (SH_WD_VIO_DV; Watchdog.hpp RunawayFix)
 bool vio_runaway              # the fix ran away from the IMU and is not trusted until the VIO restarts or a disarm
 float32 wall_distance_m       # [m] forward rangefinder, perpendicular to the wall (WallGuard.hpp); -1 without a usable sample
 float32 hold_clearance_m      # [m] hold point to the measured wall along the structure x axis; -1 without a sample

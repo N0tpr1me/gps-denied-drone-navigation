@@ -1,0 +1,91 @@
+# The VIO runaway check in the mock (eval/vio_runaway.py, docs/field-faults.md "Heavy dust"):
+# the module's SH_WD_VIO_DV check run over Structure Hold flights on the x500 as SITL flies it
+# (gazebo_check's set-up: EKF2-like fusion on the barometer, the bridge's lever arm, wind into
+# the wall). Healthy sets count false trips per flight hour; runaway sets (the VIO's velocity
+# error growing from 20 s into the hold, along the wall) time the trip. v22 and the cascaded
+# PD yardstick fly every set.
+#   python -m training.launch --config eval/configs/vio_runaway.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/vio_runaway.yaml --device cpu
+name: vio_runaway
+entrypoint: eval.vio_runaway
+seed: 7101  # unused: the sets' seeds are params.seeds
+expected_hours: 0.8
+gpus: 1
+params:
+  limit_mps: 0.8  # SH_WD_VIO_DV's default
+  fix_rate_hz: 50.0  # the bridge's ODOMETRY rate
+  # The IMU the check reads: EKF2's bias-corrected acceleration. What EKF2 leaves of the bias
+  # (attitude error, an unlearnt offset) as a constant per env, plus white noise.
+  imu_bias_mps2: 0.1
+  imu_noise_mps2: 0.05
+  seeds: [7101, 7102]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 128
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx
+    - name: pd
+      policy: null
+  base_env:
+    airframe: gz_x500_sitl
+    contact_radius_m: 0.40
+    episode_length_s: 60.0
+    hold_distance: 1.0
+    hold_height: 2.4
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    # vio_default (sim2real/estimate_bridge/profiles), stated in full.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      num_gusts: 2
+      gust_start: [15.0, 40.0]
+      gust_duration: [1.0, 2.0]
+      turb_tau: 1.0
+      mean_speed: 8.0
+      mean_heading_deg: 0.0
+      gust_speed: [2.0, 4.0]
+      turb_sigma: 1.0
+  sets:
+    # Healthy VIOs: every trip is a false one.
+    - name: healthy_8ms
+    - name: healthy_calm
+      env: {disturbance: {mean_speed: 0.0, num_gusts: 0, turb_sigma: 0.0}}
+    # Gate 1's stress corruption: jumps and dropouts five times as often.
+    - name: stress_8ms
+      env: {estimate: {jump_rate_hz: 0.1, dropout_rate_hz: 0.1}}
+    # Dust without a runaway: field_degrade's VIO (5 cm and 0.2 m/s more noise), all hold.
+    - name: dust_8ms
+      env: {estimate: {pos_noise_std_m: 0.054, vel_noise_std_mps: 0.206,
+                       bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0}}
+    # Runaways from 20 s into the hold, along the wall (ENU +y), with the dust's noise.
+    - name: runaway_0.25
+      env: {estimate: {vel_noise_std_mps: 0.206, runaway_at_s: 20.0,
+                       runaway_accel_mps2: 0.25}}
+    - name: runaway_0.5
+      env: {estimate: {vel_noise_std_mps: 0.206, runaway_at_s: 20.0,
+                       runaway_accel_mps2: 0.5}}
+    - name: runaway_1
+      env: {estimate: {vel_noise_std_mps: 0.206, runaway_at_s: 20.0,
+                       runaway_accel_mps2: 1.0}}
+    - name: runaway_3
+      env: {estimate: {vel_noise_std_mps: 0.206, runaway_at_s: 20.0,
+                       runaway_accel_mps2: 3.0}}
+smoke:
+  num_envs: 8
+  seeds: [7101]
+  base_env:
+    episode_length_s: 25.0

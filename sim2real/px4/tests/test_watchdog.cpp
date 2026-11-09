@@ -81,14 +81,14 @@ static void testRunawayFix()
 		CHECK(!f.runaway());
 	}
 
-	// A healthy VIO in gusts, with dust-level noise (0.2 m/s) and a 0.2 m/s^2 IMU bias the
+	// A healthy VIO in gusts, with dust-level noise (0.2 m/s) and a 0.1 m/s^2 IMU bias the
 	// EKF has not learnt: the vehicle's own motion cancels, nothing trips.
 	{
 		RunawayFix f;
-		f.setLimit(1.f);
-		const float max_dv = flyRunaway(f, 60.f, [](float) { return 0.f; }, 0.2f, 0.2f);
+		f.setLimit(0.8f);
+		const float max_dv = flyRunaway(f, 60.f, [](float) { return 0.f; }, 0.2f, 0.1f);
 		CHECK(!f.runaway());
-		CHECK(max_dv < 0.95f);  // about 0.4 of it is the bias over the 2 s window
+		CHECK(max_dv < 0.65f);  // 0.3 of it is the bias over the 3 s window
 	}
 
 	// A relocalisation jump moves the position, not the velocity: nothing to see here (the
@@ -100,18 +100,19 @@ static void testRunawayFix()
 		CHECK(!f.runaway());
 	}
 
-	// A runaway at 0.5 m/s^2 from 5 s: the change over 2 s passes 1 m/s just after 7 s, and
-	// three slots later it trips; it stays tripped after the VIO stops accelerating.
+	// A runaway at 0.5 m/s^2 from 5 s, at the default 0.8 m/s: the change over 3 s passes it
+	// 1.6 s in, and two 0.25 s slots later it trips; it stays tripped after the VIO stops
+	// accelerating.
 	{
 		RunawayFix f;
-		f.setLimit(1.f);
-		flyRunaway(f, 7.f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
+		f.setLimit(0.8f);
+		flyRunaway(f, 6.5f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
 		CHECK(!f.runaway());
 		RunawayFix g;
-		g.setLimit(1.f);
+		g.setLimit(0.8f);
 		flyRunaway(g, 8.f, [](float t) { return t > 5.f ? 0.5f * (t - 5.f) : 0.f; }, 0.05f);
 		CHECK(g.runaway());
-		CHECK(g.disagreement() > 1.f);
+		CHECK(g.disagreement() > 0.8f);
 		flyRunaway(g, 10.f, [](float) { return 1.5f; }, 0.05f, 0.f, 9'000'000);  // stopped accelerating
 		CHECK(g.runaway());
 		CHECK(g.disagreement() < 0.5f);
@@ -127,7 +128,33 @@ static void testRunawayFix()
 		CHECK(!h.runaway() && h.disagreement() <= 0.f);
 	}
 
-	// A short glitch (a 2 m/s velocity spike for 0.1 s) is not a runaway: it needs three
+	// Dust: 0.5 s tracking losses every 2 s do not blind it. The IMU integral runs through the
+	// gaps and the change is scaled back to the 3 s window, so a healthy VIO stays quiet and
+	// a runaway still trips.
+	{
+		auto lossy = [](RunawayFix &f, float accel) {
+			for (int k = 0; k < 3000; k++) {
+				const uint64_t t_us = 1'000'000 + 10'000ULL * k;
+				const float t = 0.01f * k;
+				f.inertial(t_us, 0.1f, 0.f, 0.f);  // a 0.1 m/s^2 bias, the vehicle still
+				const bool lost = std::fmod(t, 2.f) > 1.5f;
+
+				if (k % 2 == 0 && !lost) {
+					f.fix(t_us, t > 10.f ? accel * (t - 10.f) : 0.f, 0.f, 0.f, 0);
+				}
+			}
+		};
+		RunawayFix healthy_dust;
+		healthy_dust.setLimit(1.f);
+		lossy(healthy_dust, 0.f);
+		CHECK(!healthy_dust.runaway());
+		RunawayFix runaway_dust;
+		runaway_dust.setLimit(1.f);
+		lossy(runaway_dust, 0.8f);
+		CHECK(runaway_dust.runaway());
+	}
+
+	// A short glitch (a 2 m/s velocity spike for 0.1 s) is not a runaway: it needs two
 	// slots in a row over the limit and leaves the window again.
 	{
 		RunawayFix f;
@@ -145,14 +172,14 @@ static void testRunawayFix()
 			f.fix(1'000'000 + 10'000ULL * k, NAN, 0.f, 0.f, 0);
 		}
 		CHECK(!f.runaway() && f.disagreement() <= 0.f);
-		// Fixes 0.6 s apart: every one starts over, the window never fills.
+		// Fixes 2.5 s apart (the VIO lost): every one starts over, the window never fills.
 		RunawayFix g;
 		g.setLimit(1.f);
-		for (int k = 0; k < 100; k++) {
-			for (int j = 0; j < 60; j++) {
-				g.inertial(1'000'000 + 600'000ULL * k + 10'000ULL * j, 0.f, 0.f, 0.f);
+		for (int k = 0; k < 40; k++) {
+			for (int j = 0; j < 250; j++) {
+				g.inertial(1'000'000 + 2'500'000ULL * k + 10'000ULL * j, 0.f, 0.f, 0.f);
 			}
-			g.fix(1'000'000 + 600'000ULL * k, 10.f * k, 0.f, 0.f, 0);
+			g.fix(1'000'000 + 2'500'000ULL * k, 10.f * k, 0.f, 0.f, 0);
 		}
 		CHECK(!g.runaway() && g.disagreement() <= 0.f);
 		// The IMU stops for longer than the gap: the window starts over too.

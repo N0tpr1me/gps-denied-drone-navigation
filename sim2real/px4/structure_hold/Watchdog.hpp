@@ -37,7 +37,7 @@
  * and ran away by kilometres without reporting a tracking loss, docs/vio-render.md) reports a
  * position and a velocity that agree with each other and keep arriving on time, so neither
  * the stale nor the frozen check sees it. What it cannot fake is the IMU: RunawayFix compares
- * how much the VIO's velocity changed over the last WINDOW_S with how much the IMU says the
+ * how much the VIO's velocity changed over the last 3 s with how much the IMU says the
  * vehicle's velocity changed over the same time. The vehicle's own motion cancels out (it is
  * in both), so what is left is the change in the VIO's velocity error. A relocalisation jump
  * moves the position, not the velocity, so it does not count. A VIO that ran away is not
@@ -135,10 +135,12 @@ private:
 class RunawayFix
 {
 public:
-	static constexpr uint64_t SLOT_US = 100000;  // the difference is averaged over 0.1 s slots
-	static constexpr int SLOTS = 20;             // compared over WINDOW_S = 2 s
-	static constexpr uint64_t GAP_US = 500000;   // a longer gap in either stream starts over
-	static constexpr int TRIP_SLOTS = 3;         // over the limit this many slots in a row
+	static constexpr uint64_t SLOT_US = 250000;    // the difference is averaged over 0.25 s slots
+	static constexpr int SLOTS = 12;               // compared 12 slots apart: 3 s, more with gaps
+	static constexpr uint64_t WINDOW_US = 3000000;
+	static constexpr uint64_t IMU_GAP_US = 500000;  // a longer IMU gap starts over
+	static constexpr uint64_t FIX_GAP_US = 2000000; // so does a longer fix gap (the VIO lost)
+	static constexpr int TRIP_SLOTS = 2;           // over the limit this many slots in a row
 
 	/** The limit in m/s over the window; 0 = off (never runaway). */
 	void setLimit(float limit_mps) { _limit = limit_mps; }
@@ -153,7 +155,7 @@ public:
 			return;
 		}
 
-		if (_imu_t > 0 && t_us > _imu_t && t_us - _imu_t < GAP_US) {
+		if (_imu_t > 0 && t_us > _imu_t && t_us - _imu_t < IMU_GAP_US) {
 			const float dt = static_cast<float>(t_us - _imu_t) * 1e-6f;
 			_v_imu[0] += ax * dt;
 			_v_imu[1] += ay * dt;
@@ -167,7 +169,8 @@ public:
 	}
 
 	/** Every fix sample: its sample time, its velocity in NED (NaN: none) and the VIO's
-	 * reset counter. */
+	 * reset counter. Short tracking losses (dust) leave gaps between fixes; the IMU integral
+	 * runs on through them, so the comparison spans them, scaled back to the window. */
 	void fix(uint64_t t_us, float vn, float ve, float vd, uint8_t reset_counter)
 	{
 		if (_counter_seen && reset_counter != _counter) {
@@ -182,11 +185,15 @@ public:
 			return;
 		}
 
-		if (_fix_t > 0 && (t_us <= _fix_t || t_us - _fix_t >= GAP_US)) {
-			restart();  // a dropout or a clock step: compare only across unbroken data
+		if (_fix_t > 0 && (t_us <= _fix_t || t_us - _fix_t >= FIX_GAP_US)) {
+			restart();  // the VIO was lost, or a clock step
 		}
 
 		_fix_t = t_us;
+
+		if (_slot_n > 0 && t_us - _slot_t >= SLOT_US) {
+			closeSlot();  // this sample starts the next slot
+		}
 
 		if (_slot_n == 0) {
 			_slot_t = t_us;
@@ -196,10 +203,6 @@ public:
 		_slot[1] += ve - _v_imu[1];
 		_slot[2] += vd - _v_imu[2];
 		++_slot_n;
-
-		if (t_us - _slot_t >= SLOT_US) {
-			closeSlot();
-		}
 	}
 
 	bool runaway() const { return _runaway; }
@@ -237,8 +240,10 @@ private:
 			_slot[i] = 0.f;
 		}
 
+		_ring_t[_head] = _slot_t;
 		_slot_n = 0;
 		const int oldest = (_head + 1) % (SLOTS + 1);
+		const uint64_t t_new = _ring_t[_head];
 		_head = oldest;
 
 		if (_count < SLOTS + 1) {
@@ -250,8 +255,12 @@ private:
 		}
 
 		const float *o = _ring[oldest];
-		_disagreement = std::sqrt((e[0] - o[0]) * (e[0] - o[0]) + (e[1] - o[1]) * (e[1] - o[1])
-					  + (e[2] - o[2]) * (e[2] - o[2]));
+		const uint64_t span = t_new - _ring_t[oldest];
+		// Across tracking losses the slots span more than the window: scale the change back
+		// to it, so the limit means the same thing with and without gaps.
+		const float scale = span > WINDOW_US ? static_cast<float>(WINDOW_US) / static_cast<float>(span) : 1.f;
+		_disagreement = scale * std::sqrt((e[0] - o[0]) * (e[0] - o[0]) + (e[1] - o[1]) * (e[1] - o[1])
+						  + (e[2] - o[2]) * (e[2] - o[2]));
 		_over = (_limit > 0.f && _disagreement > _limit) ? _over + 1 : 0;
 
 		if (_over >= TRIP_SLOTS) {
@@ -267,6 +276,7 @@ private:
 	int _slot_n{0};
 	uint64_t _slot_t{0};
 	float _ring[SLOTS + 1][3] {};     // slot means, the newest at _head - 1
+	uint64_t _ring_t[SLOTS + 1] {};   // and when each slot started
 	int _head{0};
 	int _count{0};
 	int _over{0};

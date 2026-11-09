@@ -78,8 +78,8 @@ PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
  * Watchdog: VIO runaway, velocity disagreement with the IMU
  *
  * Trips the watchdog when the VIO's velocity (the odometry fix, SH_FIX_SRC) has changed by
- * more than this much more than the IMU says the vehicle's velocity changed, over 2 s, for
- * 0.3 s in a row; and refuses an engage while it is so. A VIO that locks onto moving dust
+ * more than this much more than the IMU says the vehicle's velocity changed, over 3 s, for
+ * 0.5 s in a row; and refuses an engage while it is so. A VIO that locks onto moving dust
  * runs away with its position and velocity agreeing with each other, on time, with no
  * tracking loss reported (docs/field-faults.md, "Heavy dust"): only the IMU disagrees. The
  * VIO is then not trusted until it reports a restart (ODOMETRY reset_counter) or the
@@ -93,7 +93,7 @@ PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
  * @decimal 1
  * @group Structure Hold
  */
-PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 1.0f);
+PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 0.8f);
 
 /**
  * Watchdog: entry hold-off after an estimator reset
