@@ -5,7 +5,7 @@
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
 | Version | 1.9, ready for sign-off (section 8); 1.0 to 1.8 were not signed |
 | Date | 2026-11-09 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`) and the VIO runaway trip of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`) and the VIO runaway trip and pre-arm VIO check of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`, `SH_WD_GND_V`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -184,6 +184,7 @@ height, F27 over three seeds.
 | F11 | EKF2 flags the estimate invalid, or a NaN | Estimator fault | Policy flies on garbage | 4 | Invalid-estimate trip, same step | Handback | 1 | U |
 | F36 | VIO degrades but keeps running: noisier, walks off, loses tracking in bursts | Rotor-blown dust, fog, steam, a dark underside | Both the policy and stock PX4 follow the walk: tuned PX4 touched the wall on 3 of 6 flights (seed 1, every wind) | 4 | Nothing: 5 cm of noise and 0.5 s losses are inside the trained range and under every trip; the rangefinder (wall guard) catches the walk toward the wall only | Held through 20 s of it, 0 of 6 touched, closest 0.85 m, height within 0.46 m; moved with the walk up to 1 m | 2 with the rangefinder, 4 without it | G (`field_degrade`, barometer height, 3 winds x 2 seeds) |
 | F46 | VIO runs away: position and velocity drift off together, on time, small noise, no tracking loss reported | Heavy dust (Basalt ran away in the dust renders, PR #152) | Every controller follows it, and EKF2 tilts its attitude to agree, so even modes that fly no position slide: v22 and tuned PX4 moved 77 to 78 m along the wall in 25 s at 0.5 m/s^2 | 4 | VIO runaway trip, `SH_WD_VIO_DV` (0.8 m/s over 3 s); `SH_WD_EV_CUT` takes the VIO out of EKF2 | Caught about 2 s in; EKF2 stops fusing the VIO; Structure Hover holds the wall distance on the rangefinder, starting from the wind lean of 8 s before. It still coasts along the wall on the speed it picked up before the trip: 22 / 32 m in 25 s, closest 0.69 / 0.53 m. Runaways under about 0.3 m/s^2 hide in EKF2's tilt and are not caught | **3**: the coast needs the pilot; 4 with either parameter 0 | U (`test_watchdog`, `test_range_hover`), M (`eval/vio_runaway.py`: 0 false trips in 31 h, 0.5 m/s^2 caught 2.2 s in), G (`field_runaway`, 2 seeds) |
+| F47 | VIO runs away while the drone is still on the ground, before arming | A VIO started in drifting dust (Basalt ran off at up to 2.8 m/s on the floor in the renders, `docs/vio-render.md`), or one not yet initialised | EKF2 fuses it and PX4 arms on it. Tuned PX4 took off and flew 80 / 83 m along the wall at 5 to 8.5 m/s, within 0.10 / 0.07 m of it | 4 | Pre-arm VIO check, `SH_WD_GND_V` (0.3 m/s at rest for 2 s): arming refused in every mode | Refused until the VIO had been steady for 10 s, then a normal take-off and hover (moved 0.1 m, 0.92 m or more from the wall). A VIO drifting under 0.3 m/s, or one that starts to run in the last 2 s before arming, is not blocked (F46 then applies in the air); nothing is checked while the vehicle is not at rest | **1**: a wait on the ground; 4 with `SH_WD_GND_V` 0 | U (`test_watchdog`), S (`sitl_test.py --prearm`), G (`field_runaway_prearm`, 2 seeds, with and without the check) |
 | F12 | Heading at engage is wrong | Magnetometer near steel | Wall direction wrong: guard and hold axes off | 3 | Only the rangefinder's 35 deg limit | The guard stops using ranges beyond 35 deg; the hold keeps the wrong axes | 3: fuse VIO yaw | none |
 | F38 | GPS on: RTK fix drops to float, solution 0.8 m off | Fix lost under a structure | EKF2 walks 0.3 m toward the float solution; tuned PX4 went to 0.66 m from the wall | 3 | Rangefinder (wall guard) | Hold point held at `SH_WALL_MIN` 0.70 m (closest 0.72 m), no trip | 2 | G (`field_rtk_float`) |
 | F39 | GPS on: receiver quiet for 10 s, comes back 1 m off (hand-over) | Receiver lost under the structure | EKF2 re-aligns the vision stream to the returning GPS over about 15 s: the estimate walks 0.3 m; tuned PX4 went to 0.69 m | 3 | Rangefinder (wall guard) | Held at 0.70 m (closest 0.73 m), no trip. The walk is not an EKF reset, so nothing else sees it | 2 | G (`field_gps_loss`) |
@@ -282,9 +283,11 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   degrade, more seeds and a longer cloud are next.
 - F46 (VIO runaway) is one setting on two seeds in Gazebo. After the trip the drone coasts
   along the wall with nothing on board to stop it; a slow runaway (under about 0.3 m/s^2)
-  or a slow drift is not caught; a runaway before take-off is warned about but does not
-  block arming in stock modes; `SH_WD_EV_CUT` writes `EKF2_EV_CTRL` in flight (restored on
+  or a slow drift is not caught; `SH_WD_EV_CUT` writes `EKF2_EV_CTRL` in flight (restored on
   the VIO restart, disarm or module stop).
+- F47 (VIO running on the ground) is one setting on two seeds in Gazebo and one SIH case,
+  with a scripted VIO; the limit has not been checked against a real VIO's start-up, and
+  the check blocks arming in every mode, so a false block keeps the drone on the ground.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
 - The keep-out (F41 to F45) is tested in unit tests and one SIH lidar case, not in Gazebo
@@ -320,7 +323,7 @@ signed again. Record each one below.
 | 1.6 | 2026-11-02 | `cbb68ba` | The keep-out from PX4's collision-prevention data (`SH_KO_DIST`): envelope row, safety layer, three pilot messages, F41 to F45, section 6 row | |
 | 1.7 | 2026-11-02 | this PR | Section 3, guarded modes: a back-off on the measured range when the vehicle itself is inside `SH_WALL_MIN`; the keep-out no longer moves the hold point by rounding at the wall floor (it used up its warning) | |
 | 1.8 | 2026-11-03 | `c5003f2` | Retreat cap on the wall guard and the keep-out (`SH_SHIFT_MAX`, 3 m per hold, decision row 2026-11-03): sections 3, 4 (two critical messages) and 6, F37 and F43 | |
-| 1.9 | 2026-11-09 | this PR | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7 | |
+| 1.9 | 2026-11-09 | this PR | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7. Added before any signature: the pre-arm VIO check (`SH_WD_GND_V`, proposed row 2026-11-09): section 3 row, section 4 two messages, section 6, F47 | |
 
 ## Change control
 
