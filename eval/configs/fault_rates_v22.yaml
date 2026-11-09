@@ -1,0 +1,115 @@
+# Failure rates per scripted estimate fault, for the safety manual's failure table
+# (docs/fault-rates.md): v22 and the PD yardstick, 20,480 episodes per fault on the GPU mock,
+# each fault at the same moment in every episode. The faults mirror the Gazebo field faults
+# (sim2real/estimate_bridge/profiles/field_*; docs/field-faults.md) as far as the mock can
+# script them: a jump, a dropout, a steady drift of the reported position, a noisier estimate.
+# No watchdog, wall guard or handback flies here (eval.fault_rates says what that means).
+#   python -m training.launch --config eval/configs/fault_rates_v22.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/fault_rates_v22.yaml --device cuda --set "params.only=[reset]"
+#   python -m eval.fault_rates collect runs/<reset> runs/<restart> ... --out runs/fault_rates.md
+# The GPU queue (training/queues/server_week2.yaml) runs one fault per job with params.only
+# and collects the reports; all nine faults in one run is about 2 h on a 24 GB card.
+name: fault_rates_v22
+entrypoint: eval.fault_rates
+seed: 7301  # unused: the protocol seeds are params.seeds
+expected_hours: 0.9  # ONE fault (params.only): 2 controllers x 20,480 episodes of 40 s
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released
+  seeds: [7301, 7302, 7303, 7304, 7305]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 4096
+  window_s: 20.0
+  base_env:
+    airframe: gz_x500_sitl  # the benchmark drone as Gazebo flies it: EKF2-like fusion on the barometer
+    episode_length_s: 40.0  # the fault lands at 10 s; 30 s to see what follows
+    hold_distance: 1.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    # vio_default's delay, noise and bias walk, its random jumps and dropouts off: the scripted
+    # fault is the only one in the episode, as in the field_* profiles.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.0
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.0
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:  # wall1m_wind_4ms, the evaluation kit's scenario: 4 m/s into the wall
+      mean_speed: 4.0
+      mean_heading_deg: 0.0
+      num_gusts: 2
+      gust_start: [12.0, 28.0]
+      gust_duration: [1.0, 2.0]
+      gust_speed: [1.0, 3.0]
+      turb_sigma: 0.5
+      turb_tau: 1.0
+  faults:
+    - name: nominal
+      fmea: F8
+      label: "vio_default as flown (random jumps and dropouts on), no scripted fault"
+      env: {estimate: {jump_rate_hz: 0.02, dropout_rate_hz: 0.02}}
+    - name: reset
+      fmea: F1
+      label: "VIO reset: the reported position snaps to the origin and stays (field_reset)"
+      env: {estimate: {jump_decay_s: null}}  # a reset does not decay
+      events: [{t_s: 10.0, jump: [1.0, 0.0, -2.4]}]  # the drone is at (-1, 0, 2.4)
+    - name: restart
+      fmea: F2
+      label: "VIO restart: 2 s gap, then the reported position restarts at the origin (field_restart)"
+      env: {estimate: {jump_decay_s: null}}
+      events: [{t_s: 10.0, dropout_s: 2.0}, {t_s: 12.0, jump: [1.0, 0.0, -2.4]}]
+    - name: dropout3
+      fmea: F3
+      label: "3 s dropout, dead-reckoned with a 0.3 m/s^2 bias toward the wall"
+      events: [{t_s: 10.0, dropout_s: 3.0, accel_bias: [0.3, 0.0, 0.0]}]
+    - name: silence5
+      fmea: F4
+      label: "5 s silence, dead-reckoned: the seconds before the module's SH_WD_EST_TO trip (field_silence)"
+      events: [{t_s: 10.0, dropout_s: 5.0, accel_bias: [0.3, 0.0, 0.0]}]
+    - name: freeze1
+      fmea: F6
+      label: "fix frozen for 1 s: the second before the module's SH_WD_FRZ_T trip (field_freeze)"
+      env: {estimate: {dropout_mode: hold}}
+      events: [{t_s: 10.0, dropout_s: 1.0}]
+    - name: drift
+      fmea: F7
+      label: "reported position walks 3 cm/s away from the wall for 20 s, 0.6 m in all (field_drift)"
+      env: {estimate: {bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 10.0}}
+      drift: {start_s: 10.0, duration_s: 20.0, rate_mps: 0.03, direction: [-1.0, 0.0, 0.0]}
+    - name: degrade
+      fmea: F36
+      label: "dust, fog, low light for the whole hold: 5 cm noise, 0.1 m/sqrt(s) walk, 0.5 s losses every 4 s (field_degrade)"
+      env: {estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1,
+                       bias_max_m: 2.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}
+    - name: jumps5x
+      fmea: F8
+      label: "random jumps and dropouts at five times the vio_default rates (the training stress rates)"
+      env: {estimate: {jump_rate_hz: 0.1, dropout_rate_hz: 0.1}}
+smoke:
+  # Every fault, tiny: 4 drones, one seed, 14 s episodes so each fault has landed (the latest
+  # event is the restart's reset at 12 s) and the queue's `params.only` finds its fault.
+  num_envs: 4
+  seeds: [7301]
+  window_s: 2.0
+  base_env:  # replaces base_env whole (launch merges the smoke block one level deep)
+    airframe: gz_x500_sitl
+    episode_length_s: 14.0
+    hold_distance: 1.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
