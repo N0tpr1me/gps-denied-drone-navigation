@@ -372,6 +372,12 @@ class StructureHoldConfig:
     episode_length_s: float = 20.0
     hold_distance: tuple[float, float] = (1.0, 3.0)  # m from the wall, per episode
     hold_height: tuple[float, float] = (2.0, 2.0)  # m above the origin
+    # A bridge deck over the hold (docs/bridge-holds.md): its underside this many metres
+    # above the episode's hold point, drawn per episode. None, the default, is open sky. The
+    # deck enters the wind as the disturbance model's second surface (its shelter and, with
+    # disturbance.surface2_shed_amp, its edge shedding in a wind across it, world y, the
+    # direction along the wall), and coming within contact_radius_m of it is a contact.
+    deck_clearance: tuple[float, float] | None = None
     start_offset_std_m: float = 0.2  # start position scatter around the hold point
     start_yaw_std_rad: float = 0.2  # start heading scatter about facing the wall (+x)
     # Mid-episode re-engages, for training: at this rate per second the hold point moves to
@@ -419,6 +425,11 @@ class StructureHoldConfig:
                 raise ValueError(f"{name}: min {lo} > max {hi}")
         if self.hold_distance[0] <= self.contact_radius_m:
             raise ValueError("hold_distance must start outside the contact radius")
+        if self.deck_clearance is not None:
+            lo, hi = self.deck_clearance
+            if lo > hi or lo <= self.contact_radius_m + 0.2:
+                raise ValueError("deck_clearance: need contact_radius_m + 0.2 < min <= max, "
+                                 f"got {self.deck_clearance}")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
         if self.engage_obs_cap_s <= 0:
@@ -461,8 +472,8 @@ class StructureHoldConfig:
         for key, build in nested.items():
             if key in d:
                 d[key] = build(d[key])
-        for key in ("hold_distance", "hold_height", "rate_lag_s"):
-            if key in d:
+        for key in ("hold_distance", "hold_height", "rate_lag_s", "deck_clearance"):
+            if d.get(key) is not None:
                 v = d[key]
                 d[key] = (float(v), float(v)) if isinstance(v, (int, float)) else tuple(
                     float(x) for x in v)

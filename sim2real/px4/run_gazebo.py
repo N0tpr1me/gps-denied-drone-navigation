@@ -92,10 +92,10 @@ STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_HOVER = 1, 2,
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
                    env: dict[str, str], watch: bool = False, land: str = "structure",
-                   cpuset: str | None = None) -> list[str]:
+                   cpuset: str | None = None, world: str = WORLD) -> list[str]:
     cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
-           "-e", f"PX4_GZ_WORLD={WORLD}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
+           "-e", f"PX4_GZ_WORLD={world}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
            "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
            "-e", "STRUCTURE_HOLD_WIND_TRACE=/out/wind_trace.csv",
            "-e", "ESTIMATE_BRIDGE_PROFILE=/out/estimate_config.yaml"]
@@ -265,9 +265,11 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
     hold_point = hold_point_enu(status, start_us, window)
     trace = trace_from_topics(topics, start_us2, hold_point=hold_point)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
+    surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
+                if sc.surface2_normal_toward is not None else None)
     gusts = [(float(s), float(s) + float(d))
              for s, d in zip(wind.gust_start[0], wind.gust_duration[0], strict=True)]
-    metrics = compute_metrics(trace, surface, gusts, window)
+    metrics = compute_metrics(trace, surface, gusts, window, surface2=surface2)
     hold = {
         "window_s": list(window),
         "hold_point_enu": [float(v) for v in hold_point],
@@ -378,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     config = {
         "scenario": args.scenario, "name": sc.name, "scenario_seed": sc.seed,
         "profile": prof.to_dict(), "px4_params": str(args.params), "module_params": args.param,
-        "commit": commit, "image": args.image, "world": WORLD, "spawn": sc.spawn.__dict__,
+        "commit": commit, "image": args.image, "world": sc.world, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hold_s": args.hold_s, "settle_s": args.settle_s, "disturbance": params_summary(wind),
     }
@@ -387,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
                          to_environment(px4_params), watch=args.watch, land=args.land,
-                         cpuset=args.cpuset)
+                         cpuset=args.cpuset, world=sc.world)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:

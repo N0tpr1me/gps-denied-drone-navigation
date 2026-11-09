@@ -93,6 +93,9 @@ TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeou
 # The wall: a point on it and the normal pointing from the drone toward it (structure x).
 WALL_POINT = (0.0, 0.0, 0.0)
 WALL_NORMAL_TOWARD = (1.0, 0.0, 0.0)
+# A deck over the hold (cfg.deck_clearance) spans out from the wall, so the wind across it,
+# the one that sheds from its edges, blows along the wall: world y (bridge_deck.sdf too).
+DECK_ACROSS = (0.0, 1.0, 0.0)
 
 
 class StructureHoldEnv:
@@ -191,6 +194,8 @@ class StructureHoldEnv:
         # they scatter about; which envs re-engaged on the last step; and their own generator,
         # so turning them on leaves every episode's other draws as they were.
         self.base_hold = torch.zeros(n, 3, dtype=dt, device=dev)
+        # The deck underside's height over each env (cfg.deck_clearance), inf without one.
+        self.deck_z = torch.full((n,), math.inf, dtype=dt, device=dev)
         self.reengaged = torch.zeros(n, dtype=torch.bool, device=dev)
         self.reengage_count = 0
         self.reengage_rng = np.random.default_rng([int(seed), 0xE6A])
@@ -226,6 +231,11 @@ class StructureHoldEnv:
         """Distance from the wall along its normal, positive on the free-air side, (N,)."""
         p = self.sim.state.pos if pos is None else pos
         return (self.wall_point - p) @ self.wall_normal
+
+    def deck_clearance(self, pos: torch.Tensor | None = None) -> torch.Tensor:
+        """Distance below the deck's underside, (N,); inf without a deck."""
+        p = self.sim.state.pos if pos is None else pos
+        return self.deck_z - p[:, 2]
 
     def _beam_cos(self) -> torch.Tensor:
         """Cosine between the body x axis (the rangefinder's beam) and the wall normal, (N,)."""
@@ -285,6 +295,12 @@ class StructureHoldEnv:
         # Never start inside the wall or the ground.
         start[:, 0] = np.minimum(start[:, 0], -(cfg.contact_radius_m + 0.2))
         start[:, 2] = np.maximum(start[:, 2], cfg.min_height_m + 0.2)
+        # The deck draws after everything above, and only when there is one, so a config
+        # without it keeps its random stream.
+        deck_z = np.full(n, math.inf)
+        if cfg.deck_clearance is not None:
+            deck_z = height + rng.uniform(*cfg.deck_clearance, size=n)
+            start[:, 2] = np.minimum(start[:, 2], deck_z - (cfg.contact_radius_m + 0.2))
         yaw = cfg.start_yaw_std_rad * rng.standard_normal(n)
 
         t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
@@ -296,15 +312,20 @@ class StructureHoldEnv:
         self.sim.reset(env_ids, state)
         self.hold_point[env_ids] = t(hold)
         self.base_hold[env_ids] = t(hold)
+        self.deck_z[env_ids] = t(deck_z)
         self.rate_pid.reset(env_ids)
         self.estimator.reset(self.sim.state.pos, self.sim.state.vel, env_ids)
         if self.fusion is not None:
             self.fusion.reset(env_ids, self.sim.state.pos[env_ids], self.sim.state.vel[env_ids])
 
         # Wind: wall_normal here is the disturbance model's convention (into free air).
+        deck = {}
+        if cfg.deck_clearance is not None:
+            deck = dict(surface2_point=np.stack([np.zeros(n), np.zeros(n), deck_z], 1),
+                        surface2_normal=(0.0, 0.0, -1.0), surface2_across=DECK_ACROSS)
         new = wind.to_torch(
             sample_params(cfg.disturbance, n, rng, wall_point=WALL_POINT,
-                          wall_normal=tuple(-x for x in WALL_NORMAL_TOWARD)),
+                          wall_normal=tuple(-x for x in WALL_NORMAL_TOWARD), **deck),
             self.device, self.dtype,
         )
         if self.wind is None or n == self.num_envs:
@@ -551,7 +572,8 @@ class StructureHoldEnv:
         clearance = self.clearance(state.pos)
         gravity_body = quat_rotate_inverse(state.quat, torch.tensor(
             [0.0, 0.0, -1.0], dtype=self.dtype, device=self.device).expand(self.num_envs, 3))
-        contact = clearance <= cfg.contact_radius_m
+        contact = (clearance <= cfg.contact_radius_m) | (
+            self.deck_clearance(state.pos) <= cfg.contact_radius_m)
         ground = state.pos[:, 2] <= cfg.min_height_m
         tilt = -gravity_body[:, 2] < self.cos_max_tilt
         box = err.norm(dim=-1) > cfg.max_pos_error_m
@@ -648,7 +670,8 @@ class StructureHoldEnv:
         hold = self.base_hold[ids] + torch.as_tensor(offset, dtype=self.dtype,
                                                      device=self.device)
         hold[:, 0] = hold[:, 0].clamp(max=-cfg.hold_distance[0])
-        hold[:, 2] = hold[:, 2].clamp(min=cfg.min_height_m + 0.5)
+        hold[:, 2] = torch.minimum(hold[:, 2].clamp(min=cfg.min_height_m + 0.5),
+                                   self.deck_z[ids] - (cfg.contact_radius_m + 0.5))
         self.hold_point[ids] = hold
         self.range_ref[ids] = self.clearance(hold)
         self.last_action[ids] = 0.0

@@ -11,6 +11,7 @@ from envs.disturbance.core import (
     drag_force,
     sample_params,
     shelter_factor,
+    surface2_distance,
     wall_distance,
     wind_velocity,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "drag_force",
     "sample_params",
     "shelter_factor",
+    "surface2_distance",
     "wall_distance",
     "wind_velocity",
 ]
