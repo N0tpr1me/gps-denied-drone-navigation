@@ -306,7 +306,7 @@ def _launch_app(device: str) -> None:
         if omni.kit.app.get_app().is_running():
             _APP = "external"
             return
-    except ImportError:
+    except (ImportError, RuntimeError):  # Isaac Sim 5.1 raises when no Kit app exists yet
         pass
     from isaaclab.app import AppLauncher  # type: ignore[import-not-found]
 

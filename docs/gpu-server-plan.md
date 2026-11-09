@@ -24,6 +24,13 @@ The 5 m surface passes (`docs/surface-passes.md`) have a queue of their own,
 `training/queues/surface_passes.yaml` (2026-11-09): two seeds of the pass training on 2 GPUs,
 chains of sub-1 h parts, then `hold_pass_gate`. It runs on its own or beside this one.
 
+The barometer-height successor (`docs/baro-successor.md`) has one too,
+`training/queues/baro_successor.yaml` (2026-11-09): v22's recipe on barometer height, three
+seeds on 2 GPUs (0.9 h each), then each judged against v22 in the Gazebo-like check (0.8 h
+each), about 5.1 GPU-hours, every job under an hour. It is parked: the looser barometer
+holds it was written for turned out to be a scoring offset, and the seed-repeatability
+retrains already show what the barometer gives in the check, so run it only if asked.
+
 ## How the queue works
 
 ```
@@ -115,7 +122,9 @@ the wind evidence are all in `experiments/LOG.md`.
 - If Isaac passes M3: Isaac Lab's speed decides whether later recipes use more drones or
   longer episodes inside the hour rule (`docs/isaac-lab.md` "M3"). A seed sweep of v22's recipe
   on Isaac and on the mock (3 seeds each, 6 GPU runs of 45 min) says how much of a candidate's
-  mock score is seed luck; today nobody knows.
+  mock score is seed luck. The mock half ran in the cloud on 2026-11-09 (`docs/gazebo_check.md`
+  "Seed repeatability"): 5 % spread in pooled p95 between seeds, verdicts that flip on single
+  replay cells, so a check margin inside about 10 % is seed luck; the Isaac half still waits.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
@@ -154,7 +163,7 @@ python -m training.queue training/queues/server_week2.yaml --max-gpus 2
 | --- | --- | --- | --- |
 | 1. the hold datasheet | 3 x 0.9 | the wind at which Structure Hold and the PD break, per direction, distance and estimate quality: the number every datasheet quotes, which nobody publishes for hold accuracy; then the edge cells in Gazebo | `docs/hold-datasheet.md` |
 | 2. failure rates per fault | 9 x 0.3 | a 95 % bound on the crash rate behind every FMEA row (20,480 episodes each), and the Gazebo field faults from 3 seeds to 8 | `docs/fault-rates.md` |
-| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check | `docs/gazebo_check.md` |
+| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check. Done in the cloud 2026-11-09 (the four jobs are disabled in the queue): about 5 % seed spread in pooled p95, verdicts that turn on single replay cells | `docs/gazebo_check.md` "Seed repeatability" |
 | 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
 | 5. deck and pier undersides | about 0.3 | holds under a bridge deck and in a pier's wake, a second surface in the wind model and two Gazebo worlds | `training/queues/bridge_holds.yaml`, `docs/bridge-holds.md` |
 | 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | `training/queues/heading_error.yaml`, `docs/heading-error.md` |
