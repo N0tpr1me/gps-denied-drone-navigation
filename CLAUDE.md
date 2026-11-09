@@ -247,9 +247,11 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - **Releasing a policy:** the mock score alone has not predicted Gazebo (v3, v8, v11, v12
   looked good and flew worse). A candidate must beat the released policy on
   `eval/configs/gazebo_check.yaml` before a Gazebo re-fly, and is released only if Gazebo
-  confirms it. Then regenerate both module headers (`sim2real/px4/README.md`) and the parts list
-  (`python -m sim2real.assurance.make_sbom`), update
-  `training/policies/README.md`, and add the decision row.
+  confirms it. A check margin inside about 10 % in pooled p95, or a verdict that rests on one
+  replay cell, is within seed luck (`docs/gazebo_check.md` "Seed repeatability"): train such a
+  candidate on three seeds before believing it. Then regenerate both module headers
+  (`sim2real/px4/README.md`) and the parts list (`python -m sim2real.assurance.make_sbom`),
+  update `training/policies/README.md`, and add the decision row.
 - Where things run: simulations go on the GPU server, not the Mac (Zain, 2026-10-31). The
   server turned out to be a shared university machine (2026-11-09, `docs/gpu-server.md` "The
   server we got"): reached only by `ssh gpu` from the Mac on the VPN, at most 2 GPUs at once,
