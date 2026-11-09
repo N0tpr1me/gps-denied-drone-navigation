@@ -1,0 +1,22 @@
+# Surface pass benchmark (docs/surface-passes.md "In Gazebo"): as wall1m_wind_4ms, but the
+# hold is a 5 m pass along the wall at the same 1 m standoff. 4 m/s mean wind blowing into
+# the wall, light turbulence, one gust in the pass and one in the hold at its end.
+name: wall1m_pass_wind_4ms
+seed: 1
+# 1 m from the wall (x = 0), nose toward it; the pass goes from y = 2.5 to y = -2.5.
+spawn: {x: -1.0, y: 2.5, z: 0.0, yaw_deg: 0.0}
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+wind_heading_deg: 0.0   # mean wind toward +x, i.e. into the wall
+disturbance:
+  mean_speed: 4.0
+  num_gusts: 2
+  # The hold starts at 60 s (pass.engage_at_s): the first gust lands in the cruise of the
+  # pass, 6 s in; the second in the hold at its end, 18 s in.
+  gust_start: [66.0, 78.0]
+  gust_duration: [1.0, 2.0]
+  gust_speed: [1.0, 3.0]
+  turb_sigma: 0.5
+  turb_tau: 1.0
+# The hold: 3 s still, 11 s for the 5 m (0.5 m/s, 0.5 m/s^2), 16 s still at the end.
+hover: {altitude: 2.5, hover_s: 30.0}
+pass: {length_m: 5.0, speed_mps: 0.5, start_s: 3.0, engage_at_s: 60.0}

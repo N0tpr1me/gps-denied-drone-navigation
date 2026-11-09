@@ -32,7 +32,9 @@ whether Structure Hold (external mode 1 under the auto main mode, as sitl_test.p
 it) is flying. A profile with ``fault_anchor: engage`` keys its fault schedule to the first
 such sample (``bridge.py``). The mode only counts once the vehicle is airborne
 (``heartbeat.airborne_engage``): the flight sequence first tries an engage on the ground,
-which the module refuses, and the mode shows for a moment then.
+which the module refuses, and the mode shows for a moment then. PX4's Offboard mode counts
+as an engage too: the stock-PX4 pass flight (``sim2real/px4/pass_flight.py``) starts its
+scored pass at that switch.
 
 GPS: a profile with a ``gps`` block (``gps.py``) also gets a HIL_GPS message per receiver
 tick on the same link: the truth in the world's latitude and longitude with the profile's
@@ -72,7 +74,11 @@ from envs.frames import enu_to_ned
 from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.gps import SATELLITES, enu_to_lat_lon_alt
-from sim2real.estimate_bridge.heartbeat import airborne_engage, structure_hold_engaged
+from sim2real.estimate_bridge.heartbeat import (
+    airborne_engage,
+    offboard_engaged,
+    structure_hold_engaged,
+)
 
 NAN = float("nan")
 NAN21 = [NAN] * 21
@@ -191,7 +197,8 @@ class Bridge:
             return
         if msg.get_srcComponent() != mavlink.MAV_COMP_ID_AUTOPILOT1:
             return
-        engaged = structure_hold_engaged(msg.custom_mode)
+        # Offboard is the stock-PX4 pass flight's engage (heartbeat.offboard_engaged).
+        engaged = structure_hold_engaged(msg.custom_mode) or offboard_engaged(msg.custom_mode)
         with self.lock:
             if engaged != self.engaged:
                 print(f"bridge: Structure Hold {'engaged' if engaged else 'not flying'}",

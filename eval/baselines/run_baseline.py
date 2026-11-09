@@ -95,7 +95,11 @@ HOLD_SETTLE_S = 2.0  # the engage transient run_gazebo leaves out of the scored 
 def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
                      expected_mode: str = "Hold", hold_s: float = HOLD_S) -> dict[str, Any]:
     """One table row from a run's estimate_summary.json (or hold_summary.json) and
-    ekf.json. ``expected_mode`` "External 1" is the hold runner: ``hold_s`` is its hold."""
+    ekf.json. ``expected_mode`` "External 1" is the hold runner: ``hold_s`` is its hold.
+    A summary that names its own ``scored_mode`` and ``hold_s`` (a surface pass: the stock
+    runner flies it in Offboard, for the scenario's time) overrides both."""
+    expected_mode = summary.get("scored_mode", expected_mode)
+    hold_s = float(summary.get("hold_s", hold_s))
     metrics = summary.get("metrics") or {}
     hover = summary.get("hover") or summary.get("flight") or {}
     # A flight that ran to the end but could not be scored is not a crash, just unscored.
@@ -123,7 +127,7 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
     # Mode changes inside the window are cut at the commanded Land at the end of the hover
     # (stock runner only: the hold runner's window ends at the commanded disengage, and the
     # rest of its sequence is commanded mode changes, not failsafes).
-    if window and modes and expected_mode == "Hold":
+    if window and modes and expected_mode in ("Hold", "Offboard"):
         land = [m["t"] for m in modes.get("sequence", []) if m["mode"] == "Land"
                 and m["t"] >= window[1] - 1.0]
         if land:
@@ -133,12 +137,19 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
     row["flown"] = "never became armable" not in str(hover.get("error", ""))
     row["crash"] = row["flown"] and (row["contacts"] > 0 or not completed)
     row["post_hold_fail"] = False
-    if expected_mode == "External 1" and row["flown"]:
-        # The scored window is the first engaged stretch; a full one means the hold ended at
-        # the commanded disengage, whatever the sequence did afterwards.
+    if expected_mode in ("External 1", "Offboard") and row["flown"]:
+        # The scored window is the first engaged stretch (or the stock pass flight's
+        # Offboard stretch); a full one means the hold ended at the commanded disengage (or
+        # Land), whatever the sequence did afterwards.
         full = bool(window) and window[1] - window[0] >= hold_s - HOLD_SETTLE_S - 1.0
         row["crash"] = row["contacts"] > 0 or not full
         row["post_hold_fail"] = full and not completed
+    # A surface pass: the standoff error and the lag along the pass, for the table.
+    flown = metrics.get("pass") or (summary.get("hold") or {}).get("pass")
+    if flown:
+        row["pass"] = {k: flown.get(k) for k in ("travel_m", "standoff_p95_m", "along_p95_m",
+                                                 "p95_while_moving_m", "p95_while_still_m",
+                                                 "end_error_m")}
     for key in METRICS:
         row[key] = float(metrics[key]) if key in metrics else math.nan
     return row
@@ -188,6 +199,23 @@ def table(batch: dict[str, Any]) -> str:
                      f"{fmt(a['worst_toward_surface_m_worst'])} | {a['crashes']}/{a['n']} "
                      f"| {a.get('post_hold_fails', 0)}/{a['n']} "
                      f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) |")
+    passes = [r for r in batch["rows"] if r.get("pass")]
+    if passes:
+        # Surface passes (eval/pass_score.py): the error split along the wall normal (the
+        # standoff) and along the pass, and while the point moves against while it rests.
+        keys = ("standoff_p95_m", "along_p95_m", "p95_while_moving_m", "p95_while_still_m")
+        lines += ["", "| pass: scenario | seed | travel m | standoff p95 m | along p95 m "
+                  "| p95 moving m | p95 still m |", "|---|---|---|---|---|---|---|"]
+        for r in passes:
+            p = r["pass"]
+            lines.append(f"| {r['scenario']} | {r['seed']} | {fmt(p.get('travel_m'), 2)} | "
+                         + " | ".join(fmt(p.get(k)) for k in keys) + " |")
+        for name in dict.fromkeys(r["scenario"] for r in passes):
+            rs = [r["pass"] for r in passes if r["scenario"] == name]
+            means = [statistics.fmean(v for v in (p.get(k) for p in rs) if v is not None)
+                     for k in keys]
+            lines.append(f"| {name} | mean of {len(rs)} | | "
+                         + " | ".join(fmt(m) for m in means) + " |")
     return "\n".join(lines) + "\n"
 
 

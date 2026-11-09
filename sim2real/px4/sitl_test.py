@@ -69,6 +69,26 @@ keep-out (less ``--wall-tol``) from the pole and still be in Structure Hold, and
 station must get a "keep-out" warning. The ulog check then expects a nonzero
 keep_out_shift_m.
 
+With ``--pass-len`` the first hold is a surface pass (PassPath.hpp, docs/surface-passes.md):
+SH_PASS_LEN, SH_PASS_DIR (``--pass-up``), SH_PASS_SPD and SH_PASS_T0 are set before the
+engage, and the hold point must wait the settle, slide that far along the wall (to the right
+of the engage heading for a positive length) or up it, and hold where it stopped. Checked on
+PX4's estimate: the ground station gets the "pass" and "pass done" lines, the vehicle ends
+the length away along the pass direction, it follows the moving point (the mock's trapezoid
+from the "pass" line on) within ``--drift-tol``, and its distance along the wall normal, the
+standoff, never changes by more than that. The pass is switched off again for the later
+engages. With ``--wall`` and ``--pass-wall-step-m`` the virtual wall has a step that much
+closer over the second half of the pass (a buttress): the wall guard must move the moving
+hold point back and the pass must still finish. With ``--keep-out`` and ``--pass-pole-m`` a
+pole stands on the pass line that far from the engage point: the pass must stop short of it
+("pass stopped") and the vehicle must stay the keep-out away. The ulog check then expects
+the pass state and its offset in the status topic.
+
+``--engage-at-boot-s`` holds the first engage until PX4's own clock (time since boot, the
+simulation's time in Gazebo) reaches that value, so two controllers flown one after the other
+meet the same wind and the same estimate faults at the same moment of their pass
+(``pass_flight.py`` is the stock-PX4 side).
+
 Afterwards the ulog is checked for the structure_hold_status topic (states standby,
 engaged and handback all logged, with the test-fault trip reason).
 
@@ -79,10 +99,15 @@ Positions are PX4 local NED; only magnitudes are reported, so no frame conversio
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import os
+import re
+import shutil
 import struct
+import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,6 +145,48 @@ LIDAR_BINS = 72
 LIDAR_MIN_CM = 20
 LIDAR_MAX_CM = 1000
 MAV_FRAME_BODY_FRD = 12
+# The surface pass (PassPath.hpp): the module's acceleration (the mock's
+# SurfacePass.accel_mps2) and structure_hold_status.pass_state.
+PASS_ACCEL_MPS2 = 0.5
+PASS_DONE, PASS_STOPPED = 3, 4
+
+
+def pass_duration(length_m: float, speed_mps: float, accel: float = PASS_ACCEL_MPS2) -> float:
+    """Seconds a pass takes from its start to its stop (envs/structure_hold/passes.py)."""
+    d = abs(length_m)
+    if d <= 0:
+        return 0.0
+    peak = min(speed_mps, math.sqrt(d * accel))
+    return 2.0 * peak / accel + (d - peak * peak / accel) / peak
+
+
+def pass_profile(t: float, length_m: float, speed_mps: float,
+                 accel: float = PASS_ACCEL_MPS2) -> tuple[float, float]:
+    """(distance flown, speed) ``t`` seconds after a pass starts: the mock's trapezoid, which
+    the module's stepped path follows to within a centimetre (tests/test_pass_path.cpp)."""
+    d = abs(length_m)
+    if d <= 0 or t <= 0:
+        return 0.0, 0.0
+    peak = min(speed_mps, math.sqrt(d * accel))
+    ta = peak / accel
+    tc = (d - peak * ta) / peak
+    dur = 2.0 * ta + tc
+    if t >= dur:
+        return d, 0.0
+    if t < ta:
+        return 0.5 * accel * t * t, accel * t
+    if t < ta + tc:
+        return 0.5 * accel * ta * ta + peak * (t - ta), peak
+    return d - 0.5 * accel * (dur - t) ** 2, accel * (dur - t)
+
+
+def pass_direction(yaw: float, up: bool, length_m: float) -> tuple[float, float, float]:
+    """Unit direction of a pass in NED, as PassPath::engage: to the right of the heading
+    ``yaw`` for a positive length, or up (NED z falls) with ``up``."""
+    sign = -1.0 if length_m < 0 else 1.0
+    if up:
+        return (0.0, 0.0, -sign)
+    return (-sign * math.sin(yaw), sign * math.cos(yaw), 0.0)
 
 
 @dataclass
@@ -135,6 +202,7 @@ class Telemetry:
     pitch: float = 0.0
     vn: float = 0.0
     ve: float = 0.0
+    boot_s: float = 0.0  # PX4's time since boot, from LOCAL_POSITION_NED
 
 
 @dataclass
@@ -148,13 +216,21 @@ class VirtualWall:
     creep_mps: float = 0.0       # the wall walks toward the origin from creep_t0 ...
     creep_max_m: float = 0.0     # ... by at most this much
     creep_t0: float = 0.0
+    # A step in the wall (a buttress): from step_at_m along step_dir (a level unit vector
+    # along the wall, from the origin) on, the face is step_m closer.
+    step_dir: tuple[float, float] = (0.0, 0.0)
+    step_at_m: float = 0.0
+    step_m: float = 0.0
 
     def gap_m(self, tel: Telemetry) -> float:
         """Perpendicular distance vehicle -> wall (negative once through it)."""
         n = (math.cos(self.yaw), math.sin(self.yaw))
-        moved = (tel.north - self.origin[0]) * n[0] + (tel.east - self.origin[1]) * n[1]
+        rel = (tel.north - self.origin[0], tel.east - self.origin[1])
+        moved = rel[0] * n[0] + rel[1] * n[1]
         crept = min(self.creep_mps * max(time.monotonic() - self.creep_t0, 0.0), self.creep_max_m)
-        return self.ahead_m - crept - moved
+        along = rel[0] * self.step_dir[0] + rel[1] * self.step_dir[1]
+        step = self.step_m if self.step_m > 0 and along >= self.step_at_m else 0.0
+        return self.ahead_m - crept - step - moved
 
     def range_m(self, tel: Telemetry) -> float | None:
         gap = self.gap_m(tel)
@@ -191,6 +267,7 @@ class VirtualPole:
 class Samples:
     hold_drift: list[float] = field(default_factory=list)
     hold_alt_err: list[float] = field(default_factory=list)
+    hold_pass: list[tuple[float, float, float, float]] = field(default_factory=list)
     posctl_drift: list[float] = field(default_factory=list)
 
 
@@ -216,6 +293,9 @@ class Vehicle:
         self._text_index: dict[int, int] = {}
         # The module's live array as the ground station sees it: (time, values).
         self.live: list[tuple[float, list[float]]] = []
+        # (our clock, PX4's time since boot) per position message: a pass is timed on PX4's
+        # clock, which in Gazebo runs at the simulation's speed, not ours.
+        self.clock: list[tuple[float, float]] = []
 
     def pump(self, seconds: float) -> None:
         """Process incoming messages for ``seconds``; keep the joystick stream alive."""
@@ -288,6 +368,8 @@ class Vehicle:
         if t == "LOCAL_POSITION_NED":
             self.tel.north, self.tel.east, self.tel.down = msg.x, msg.y, msg.z
             self.tel.vn, self.tel.ve = msg.vx, msg.vy
+            self.tel.boot_s = msg.time_boot_ms * 1e-3
+            self.clock.append((time.monotonic(), self.tel.boot_s))
         elif t == "HEARTBEAT" and msg.get_srcComponent() == mavlink.MAV_COMP_ID_AUTOPILOT1:
             self.tel.main_mode = (msg.custom_mode >> 16) & 0xFF
             self.tel.sub_mode = (msg.custom_mode >> 24) & 0xFF
@@ -308,6 +390,18 @@ class Vehicle:
                 self.statustext.append((time.monotonic(), msg.severity, msg.text))
         elif t == "DEBUG_FLOAT_ARRAY" and msg.name == LIVE_NAME:
             self.live.append((time.monotonic(), list(msg.data)))
+
+    def boot_at(self, when: float) -> float:
+        """PX4's time since boot at ``when`` on our clock (between position messages)."""
+        if not self.clock:
+            return math.nan
+        i = bisect.bisect_left(self.clock, (when, -math.inf))
+        if i <= 0:
+            return self.clock[0][1] + (when - self.clock[0][0])
+        if i >= len(self.clock):
+            return self.clock[-1][1] + (when - self.clock[-1][0])
+        (t0, b0), (t1, b1) = self.clock[i - 1], self.clock[i]
+        return b0 + (b1 - b0) * (when - t0) / max(t1 - t0, 1e-9)
 
     def live_since(self, t0: float) -> list[list[float]]:
         """Live arrays (DEBUG_FLOAT_ARRAY "SH_STATUS") received since ``t0``."""
@@ -453,6 +547,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--obstacle-m", type=float, default=0.5,
                    help="pole distance right of the hold point after the jump, m")
     p.add_argument("--keep-out-s", type=float, default=12.0, help="time after the jump, s")
+    p.add_argument("--pass-len", type=float, default=0.0,
+                   help="fly the first hold as a surface pass of this length, m (SH_PASS_LEN; "
+                        "positive right or up, negative left or down)")
+    p.add_argument("--pass-up", action="store_true",
+                   help="the pass goes up the wall (SH_PASS_DIR 1)")
+    p.add_argument("--pass-speed", type=float, default=0.5, help="SH_PASS_SPD, m/s")
+    p.add_argument("--pass-t0", type=float, default=3.0, help="SH_PASS_T0, s")
+    p.add_argument("--pass-wall-step-m", type=float, default=0.0,
+                   help="with --wall: the wall is this much closer over the second half of "
+                        "the pass")
+    p.add_argument("--pass-pole-m", type=float, default=0.0,
+                   help="with --keep-out: a pole on the pass line this far from the engage point")
+    p.add_argument("--pass-slack-s", type=float, default=2.0,
+                   help="how much later than its trapezoid the pass may finish, s (a stale "
+                        "estimate holds it back: the Gazebo runner allows more)")
+    p.add_argument("--engage-at-boot-s", type=float, default=0.0,
+                   help="hold the first engage until PX4's time since boot reaches this, s")
     p.add_argument("--hover-s", type=float, default=8.0,
                    help="with --wall: time after the trip with the wall creeping in, s")
     return p.parse_args()
@@ -524,6 +635,14 @@ def fly(args: argparse.Namespace) -> dict:
         v.set_param("SH_WALL_MIN", args.wall_min)
     if args.keep_out:
         v.set_param("CP_DIST" if args.keep_out_param == "cp" else "SH_KO_DIST", args.keep_out_m)
+    if args.pass_len:
+        v.set_param("SH_PASS_LEN", args.pass_len)
+        v.set_param("SH_PASS_DIR", 1 if args.pass_up else 0)
+        v.set_param("SH_PASS_SPD", args.pass_speed)
+        v.set_param("SH_PASS_T0", args.pass_t0)
+        # Long enough for the settle, the pass and a hold at its end.
+        args.hold_s = max(args.hold_s,
+                          args.pass_t0 + pass_duration(args.pass_len, args.pass_speed) + 6.0)
     result["params"] = args.param
 
     # 0. On the ground. First wait until the vehicle can arm at all (estimator, preflight),
@@ -543,7 +662,16 @@ def fly(args: argparse.Namespace) -> dict:
     samples = Samples()
 
     # 2. Engage Structure Hold and hold.
+    if args.engage_at_boot_s > 0:
+        result["engage_late_s"] = round(max(v.tel.boot_s - args.engage_at_boot_s, 0.0), 2)
+        v.wait_for(lambda: v.tel.boot_s >= args.engage_at_boot_s, 120, "the engage time")
+    result["engage_boot_s"] = round(v.tel.boot_s, 2)
     t_engage = time.monotonic()
+    # Where and which way the module latches its hold: read before the command, because the
+    # heartbeat that confirms the mode comes up to a second later and the heading has moved
+    # a few degrees by then (over a 5 m pass that is most of a metre of standoff).
+    latched_point = (v.tel.north, v.tel.east, v.tel.down)
+    latched_yaw = v.tel.yaw
     ack = v.set_mode(MAIN_AUTO, SUB_EXTERNAL1)
     checks["engage_accepted"] = ack == mavlink.MAV_RESULT_ACCEPTED
     v.wait_for(lambda: in_structure_hold(v), 5, "Structure Hold in heartbeat")
@@ -551,7 +679,11 @@ def fly(args: argparse.Namespace) -> dict:
     engage_point = (v.tel.north, v.tel.east, v.tel.down)
     if args.wall:
         v.wall = VirtualWall((engage_point[0], engage_point[1]), v.tel.yaw, args.wall_m)
-    record_hold(v, args.hold_s, engage_point, samples.hold_drift, samples.hold_alt_err)
+    if args.pass_len:
+        engage_point = latched_point
+        pass_step(v, args, engage_point, latched_yaw, t_engage, result, samples)
+    else:
+        record_hold(v, args.hold_s, engage_point, samples.hold_drift, samples.hold_alt_err)
     checks["still_engaged_after_hold"] = in_structure_hold(v)
     result["hold"] = {
         "duration_s": args.hold_s,
@@ -562,9 +694,11 @@ def fly(args: argparse.Namespace) -> dict:
     checks["position_held"] = max(samples.hold_drift) <= args.drift_tol
     checks["altitude_held"] = max(samples.hold_alt_err) <= args.drift_tol
     pilot_view_hold(v, args, t_engage, result)
-    if args.wall:
+    # A pass that already met the buttress or the pole has used the once-per-engage guard
+    # messages these two steps look for.
+    if args.wall and not (args.pass_len and args.pass_wall_step_m > 0):
         wall_guard_step(v, args, engage_point, result)
-    if args.keep_out:
+    if args.keep_out and not (args.pass_len and args.pass_pole_m > 0):
         keep_out_step(v, args, result)
 
     # 3. Disengage to the stock mode and check PX4 keeps holding.
@@ -823,6 +957,110 @@ def moving_engage_step(v: Vehicle, args: argparse.Namespace, result: dict,
     v.set_mode(stock[0], stock[1])
 
 
+def pass_step(v: Vehicle, args: argparse.Namespace, engage: tuple[float, float, float],
+              yaw: float, t_engage: float, result: dict, samples: Samples) -> None:
+    """The first hold flown as a surface pass: record it against the moving hold point."""
+    checks = result["checks"]
+    length = abs(args.pass_len)
+    d = pass_direction(yaw, args.pass_up, args.pass_len)
+    n = (math.cos(yaw), math.sin(yaw))
+    right = (-math.sin(yaw), math.cos(yaw))
+    duration = pass_duration(length, args.pass_speed)
+    buttress = args.wall and args.pass_wall_step_m > 0 and not args.pass_up
+    pole = args.keep_out and args.pass_pole_m > 0 and not args.pass_up
+    if buttress:
+        v.wall = VirtualWall((engage[0], engage[1]), yaw, args.wall_m, step_dir=(d[0], d[1]),
+                             step_at_m=0.5 * length, step_m=args.pass_wall_step_m)
+    if pole:
+        v.pole = VirtualPole(engage[0] + args.pass_pole_m * d[0],
+                             engage[1] + args.pass_pole_m * d[1])
+    # (time, along the pass, along the wall normal, across both), from the engage point
+    rows = samples.hold_pass
+    gaps: list[float] = []
+    pole_d: list[float] = []
+    end = time.monotonic() + args.hold_s
+    while time.monotonic() < end:
+        v.pump(0.1)
+        rel = (v.tel.north - engage[0], v.tel.east - engage[1], v.tel.down - engage[2])
+        along = rel[0] * d[0] + rel[1] * d[1] + rel[2] * d[2]
+        normal = rel[0] * n[0] + rel[1] * n[1]
+        across = rel[2] if not args.pass_up else rel[0] * right[0] + rel[1] * right[1]
+        rows.append((v.tel.boot_s, along, normal, across))
+        if buttress:
+            gaps.append(v.wall.gap_m(v.tel))
+        if pole:
+            pole_d.append(v.pole.distance_m(v.tel))
+
+    def first(pattern: str) -> tuple[float, str] | None:
+        for when, _severity, text in v.statustext:
+            if when >= t_engage and re.search(pattern, text):
+                return when, text
+        return None
+
+    started = first(r"Structure Hold: pass -?[\d.]+ m at")
+    done = first(r"Structure Hold: pass done")
+    stopped = first(r"Structure Hold: pass stopped")
+    # On PX4's clock from here: the module's path runs on it.
+    t_start = v.boot_at(started[0]) if started else math.inf
+    boot_engage = v.boot_at(t_engage)
+    # Where the moving point is: the trapezoid from the "pass" line on, cut where the
+    # module said it stopped.
+    stop_m = float(re.search(r"after (-?[\d.]+) m", stopped[1]).group(1)) if stopped else length
+    track: list[float] = []
+    for t, along, normal, across in rows:
+        ref = min(pass_profile(t - t_start, length, args.pass_speed)[0], stop_m)
+        lag = along - ref
+        track.append(lag)
+        if args.pass_up:
+            samples.hold_drift.append(math.hypot(normal, across))
+            samples.hold_alt_err.append(abs(lag))
+        else:
+            samples.hold_drift.append(math.hypot(lag, normal))
+            samples.hold_alt_err.append(abs(across))
+    tail = [r[1] for r in rows[-30:]] or [math.nan]
+    result["pass"] = {
+        "length_m": args.pass_len, "up": bool(args.pass_up), "speed_mps": args.pass_speed,
+        "t0_s": args.pass_t0, "expected_s": round(duration, 2),
+        "started_line": started[1] if started else None,
+        "start_after_engage_s": round(t_start - boot_engage, 2) if started else None,
+        "done_after_start_s": round(v.boot_at(done[0]) - t_start, 2) if done and started
+        else None,
+        "stopped_line": stopped[1] if stopped else None,
+        "end_along_m": round(sum(tail) / len(tail), 3),
+        "max_lag_m": round(max(abs(x) for x in track), 3) if track else None,
+        "max_standoff_change_m": round(max(abs(r[2]) for r in rows), 3) if rows else None,
+        "samples": len(rows),
+    }
+    checks["pass_started"] = started is not None
+    checks["pass_standoff_held"] = bool(rows) and max(abs(r[2]) for r in rows) <= args.drift_tol
+    if pole:
+        v.pole = None
+        want = args.pass_pole_m - args.keep_out_m
+        last = pole_d[-30:] or [math.nan]
+        result["pass"].update(pole_m=args.pass_pole_m, keep_out_m=args.keep_out_m,
+                              stopped_at_m=stop_m, pole_min_m=round(min(pole_d), 3),
+                              pole_last3s_mean_m=round(sum(last) / len(last), 3))
+        checks["pass_stopped_by_keep_out"] = stopped is not None and "keep-out" in stopped[1]
+        # The hold point stops when it comes inside the keep-out of the pole, and the
+        # keep-out's own push leaves it a little short of that.
+        checks["pass_stopped_short_of_pole"] = want - 0.5 <= stop_m <= want + 0.1
+        checks["pass_kept_off_pole"] = sum(last) / len(last) >= args.keep_out_m - args.wall_tol
+    else:
+        checks["pass_done"] = done is not None and started is not None \
+            and v.boot_at(done[0]) - t_start <= duration + args.pass_slack_s
+        checks["pass_reached_end"] = abs(sum(tail) / len(tail) - length) <= args.drift_tol
+    if buttress:
+        last = gaps[-30:] or [math.nan]
+        result["pass"].update(wall_m=args.wall_m, wall_step_m=args.pass_wall_step_m,
+                              wall_min_gap_m=round(min(gaps), 3),
+                              wall_last3s_mean_m=round(sum(last) / len(last), 3))
+        checks["pass_wall_guard_acted"] = any(
+            "wall guard moved" in t for t in v.texts_since(t_engage, mavlink.MAV_SEVERITY_WARNING))
+        checks["pass_kept_off_wall"] = sum(last) / len(last) >= args.wall_min - args.wall_tol
+    # The later engages of the sequence are plain holds again (read at the next engage).
+    v.set_param("SH_PASS_LEN", 0.0)
+
+
 def wall_guard_step(v: Vehicle, args: argparse.Namespace, hold: tuple[float, float, float],
                     result: dict) -> None:
     """Jump the virtual wall to inside SH_WALL_MIN of the hold point; expect a back-off."""
@@ -959,6 +1197,20 @@ def check_ulog(path: Path, result: dict) -> None:
         checks["keep_out_distance_logged"] = abs(
             float(max(status.data["keep_out_m"])) - result["keep_out"]["keep_out_m"]) < 1e-3
 
+    if "pass" in result and "pass_state" in status.data:
+        pass_states = set(int(x) for x in status.data["pass_state"])
+        offset = max(math.sqrt(float(a) ** 2 + float(b) ** 2 + float(c) ** 2) for a, b, c in zip(
+            status.data["pass_offset_ned[0]"], status.data["pass_offset_ned[1]"],
+            status.data["pass_offset_ned[2]"], strict=True))
+        result["ulog"]["pass_states_seen"] = sorted(pass_states)
+        result["ulog"]["max_pass_offset_m"] = round(offset, 3)
+        if result["pass"].get("stopped_line"):
+            checks["pass_stop_logged"] = PASS_STOPPED in pass_states \
+                and offset < abs(result["pass"]["length_m"]) - 0.5
+        else:
+            checks["pass_logged"] = PASS_DONE in pass_states \
+                and abs(offset - abs(result["pass"]["length_m"])) < 0.01
+
     # Handback latency: the first HANDBACK sample of the sequence's own trip (SH_TEST_FAULT)
     # to commander's first nav_state change after it. The ground checks' refused engage goes
     # through a handback too (trip 7, "landed"), earlier in the log: not this one.
@@ -978,10 +1230,59 @@ def check_ulog(path: Path, result: dict) -> None:
             checks["handback_within_tolerance"] = bool(latency <= result.get("handback_tol_s", 1.0))
 
 
+class RtfSampler:
+    """Gazebo's real-time factor every few seconds through the flight, as hover_test.py
+    records it: a flight that ran slow met its wind and its estimate faults late on our
+    clock, and a benchmark batch is only read next to this number. Does nothing in SIH
+    (no ``gz``, no ``PX4_GZ_WORLD``)."""
+
+    PATTERN = re.compile(r"real_time_factor:\s*([0-9.eE+-]+)")
+
+    def __init__(self, period_s: float = 3.0) -> None:
+        world = os.environ.get("PX4_GZ_WORLD")
+        self.topic = f"/world/{world}/stats" if world and shutil.which("gz") else None
+        self.period_s = period_s
+        self.values: list[float] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                out = subprocess.run(["gz", "topic", "-e", "-t", self.topic, "-n", "1"],
+                                     capture_output=True, text=True, timeout=5.0).stdout
+                found = self.PATTERN.search(out)
+                if found:
+                    self.values.append(float(found.group(1)))
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+            self._stop.wait(self.period_s)
+
+    def __enter__(self) -> RtfSampler:
+        if self.topic is not None:
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=6.0)
+
+    def summary(self) -> dict | None:
+        """None outside Gazebo; else mean, min and the number of samples."""
+        if self.topic is None:
+            return None
+        v = self.values
+        return {"mean": round(sum(v) / len(v), 3) if v else None,
+                "min": round(min(v), 3) if v else None, "samples": len(v)}
+
+
 def main() -> int:
     args = parse_args()
+    rtf = RtfSampler()
     try:
-        summary = fly(args)
+        with rtf:
+            summary = fly(args)
         if args.ulog is not None and args.ulog.exists():
             check_ulog(args.ulog, summary)
         elif args.ulog is not None:
@@ -989,6 +1290,8 @@ def main() -> int:
             summary["ulog_error"] = f"not found: {args.ulog}"
     except Exception as exc:  # report every failure in the summary, then fail the run
         summary = {"checks": {}, "error": f"{type(exc).__name__}: {exc}"}
+    if rtf.summary() is not None:
+        summary["real_time_factor"] = rtf.summary()
     summary["passed"] = bool(summary["checks"]) and all(summary["checks"].values()) \
         and "error" not in summary
     args.out.parent.mkdir(parents=True, exist_ok=True)

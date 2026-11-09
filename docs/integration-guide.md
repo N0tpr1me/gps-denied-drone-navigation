@@ -165,6 +165,10 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_KO_DIST` | -1.0 | -1 to 5 | m | Keep-out from obstacles PX4's collision-prevention sensors see (not the structure ahead, which keeps `SH_WALL_MIN`). -1 follows PX4's `CP_DIST` (off unless you set it); 0 off |
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
 | `SH_SHIFT_MAX` | 3.0 | 0 to 10 | m | Retreat cap: the wall guard and the keep-out each move the hold point at most this far in one hold, then stop and tell the pilot. Keep it above the biggest estimate jump your drone can meet (1.5 m with GPS on). 0 removes the cap |
+| `SH_PASS_LEN` | 0.0 | -10 to 10 | m | Surface pass: after the engage the hold point moves this far along the wall at the same standoff, then holds there. Positive to the right of the nose, negative to the left (up and down with `SH_PASS_DIR` 1). 0 no pass: a plain hold. Read at each engage |
+| `SH_PASS_DIR` | 0 | 0 or 1 | | Pass direction: 0 along the wall, 1 up or down it |
+| `SH_PASS_SPD` | 0.5 | 0.1 to 1 | m/s | Pass cruise speed; it speeds up and slows down at 0.5 m/s^2. Tested at 0.5 m/s |
+| `SH_PASS_T0` | 3.0 | 0 to 60 | s | Hold this long after the engage before the pass starts |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
 | `SH_HB_RANGE` | 1 | 0 or 1 | | Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |

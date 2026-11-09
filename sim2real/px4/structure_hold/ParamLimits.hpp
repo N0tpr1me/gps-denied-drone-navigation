@@ -83,6 +83,12 @@ static constexpr FloatRange SH_KO_DIST{-1.0f, 5.0f, -1.0f};
 // Retreat cap on both guards per hold; 0 = no cap
 static constexpr FloatRange SH_SHIFT_MAX{0.0f, 10.0f, 3.0f};
 
+// Surface pass (PassPath.hpp); SH_PASS_LEN 0 = no pass
+static constexpr FloatRange SH_PASS_LEN{-10.0f, 10.0f, 0.0f};
+static constexpr IntRange SH_PASS_DIR{0, 1, 0};
+static constexpr FloatRange SH_PASS_SPD{0.1f, 1.0f, 0.5f};
+static constexpr FloatRange SH_PASS_T0{0.0f, 60.0f, 3.0f};
+
 // Ground station (PilotStatus.hpp)
 static constexpr FloatRange SH_GCS_PER{0.0f, 60.0f, 10.0f};
 

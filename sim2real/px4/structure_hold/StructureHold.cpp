@@ -133,6 +133,10 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_ko_dist, param_limits::SH_KO_DIST, "SH_KO_DIST");
 	sanitizeParam(_param_shift_max, param_limits::SH_SHIFT_MAX, "SH_SHIFT_MAX");
 	sanitizeParam(_param_gcs_per, param_limits::SH_GCS_PER, "SH_GCS_PER");
+	sanitizeParam(_param_pass_len, param_limits::SH_PASS_LEN, "SH_PASS_LEN");
+	sanitizeParam(_param_pass_dir, param_limits::SH_PASS_DIR, "SH_PASS_DIR");
+	sanitizeParam(_param_pass_spd, param_limits::SH_PASS_SPD, "SH_PASS_SPD");
+	sanitizeParam(_param_pass_t0, param_limits::SH_PASS_T0, "SH_PASS_T0");
 
 	WatchdogLimits limits{};
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
@@ -189,6 +193,14 @@ void StructureHold::updateParams()
 	keep_out.wall_min_m = _param_wall_min.get();
 	keep_out.max_total_shift_m = _param_shift_max.get();
 	_keep_out.setLimits(keep_out);
+
+	// The surface pass (PassPath.hpp); read at the next engage.
+	PassLimits pass{};
+	pass.length_m = _param_pass_len.get();
+	pass.vertical = _param_pass_dir.get() == 1;
+	pass.speed_mps = _param_pass_spd.get();
+	pass.start_s = _param_pass_t0.get();
+	_pass.setLimits(pass);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -392,6 +404,10 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	float hold[3];
 	_setpoint.pos.copyTo(hold);
 	_policy.engage(hold, _setpoint.yaw);  // structure x = the heading at engage
+	// The surface pass, if one is set (SH_PASS_LEN); never on the bench.
+	_pass.engage(_setpoint.yaw, !_landed);
+	_pass_offset.zero();
+	_pass_us = 0;
 
 	if (_landed) {
 		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: engaged on the ground (SH_BENCH 1), props off only");
@@ -840,7 +856,14 @@ void StructureHold::applyKeepOut(const hrt_abstime now, const Vector3f &pos, con
 	_setpoint.pos.copyTo(hold);
 	const float normal[2] = {cosf(_setpoint.yaw), sinf(_setpoint.yaw)};
 	const float before[2] = {hold[0], hold[1]};
-	_keep_out_out = _keep_out.apply(pos_ned, normal, _wall_out.range_ok ? _wall_out.wall_m : -1.f, hold);
+	// A pass along the wall looks ahead to where its point would come to rest if it braked
+	// now (controlStep stops it when an obstacle is within the keep-out of that place).
+	const float reach = _pass.brakeDistance() + PASS_AHEAD_M;
+	const float ahead[2] = {_pass.direction()[0] * reach, _pass.direction()[1] * reach};
+	const bool look = _state == structure_hold_status_s::STATE_ENGAGED && _pass.moving()
+			  && !(fabsf(_pass.direction()[2]) > 0.f);
+	_keep_out_out = _keep_out.apply(pos_ned, normal, _wall_out.range_ok ? _wall_out.wall_m : -1.f, hold,
+					look ? ahead : nullptr);
 
 	if (_keep_out_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);
@@ -959,11 +982,13 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 		if (PX4_ISFINITE(_local_position.delta_heading) && _param_ctrl.get() == 1) {
 			_setpoint.yaw = _policy.rotateFrame(_local_position.delta_heading);
+			_pass.rotate(_local_position.delta_heading);
 			PX4_INFO("heading reset by %.1f deg: structure yaw now %.1f deg",
 				 (double)math::degrees(_local_position.delta_heading), (double)math::degrees(_setpoint.yaw));
 
 		} else if (PX4_ISFINITE(_local_position.delta_heading)) {
 			_setpoint.yaw = matrix::wrap_pi(_setpoint.yaw + _local_position.delta_heading);
+			_pass.rotate(_local_position.delta_heading);
 		}
 	}
 
@@ -980,8 +1005,39 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 	const Vector3f pos(_local_position.x, _local_position.y, _local_position.z);
 
+	// The surface pass moves the hold point first; the guards then act on the moved point,
+	// so its standoff floor and the keep-out hold along the whole pass.
+	Vector3f pass_vel = passStep(now);
+
 	// Measured floor under the hold point before either controller reads it.
 	applyWallGuard(now, pos, r);
+
+	if (_pass.moving() && !_pass.ending()) {
+		// What ends a pass early: an obstacle within the keep-out of where the point would
+		// come to rest, or one the keep-out already answers (pushing on against it would
+		// walk the point back until SH_SHIFT_MAX and then into it), a wall guard that has
+		// used up its retreat, and the ground under a pass down the wall. The point brakes
+		// to rest (PassPath::stop); passStep says so once it is there.
+		const char *why = nullptr;
+
+		if (_keep_out_out.shift_m > 0.f || _keep_out_out.no_room
+		    || (_keep_out_out.ahead_m >= 0.f && _keep_out_out.ahead_m < _keep_out.limits().keep_out_m)) {
+			why = "keep-out";
+
+		} else if (_wall_out.capped) {
+			why = "wall guard cap";
+
+		} else if (_pass.direction()[2] > 0.f && _local_position.dist_bottom_valid
+			   && _local_position.dist_bottom < PASS_FLOOR_M) {
+			why = "ground";
+		}
+
+		if (why != nullptr) {
+			_pass.stop();
+			_pass_stop_why = why;
+		}
+	}
+
 	pilotStep(now, MODE_NAME, r, position_error_m, false);
 
 	Vector3f vel(_local_position.vx, _local_position.vy, _local_position.vz);
@@ -1010,6 +1066,7 @@ void StructureHold::controlStep(const hrt_abstime now)
 		VehicleSample sample{};
 		pos.copyTo(sample.pos_ned);
 		vel.copyTo(sample.vel_ned);
+		pass_vel.copyTo(sample.hold_vel_ned);  // the velocity input is relative to it
 
 		for (int i = 0; i < 3; i++) {
 			for (int j = 0; j < 3; j++) {
@@ -1059,7 +1116,7 @@ void StructureHold::controlStep(const hrt_abstime now)
 		// Placeholder cascade: hold the captured setpoint.
 		HoldState st{};
 		st.pos = pos;
-		st.vel = vel;
+		st.vel = vel - pass_vel;  // velocity feed-forward along a pass
 		st.q = q;
 		_last_output = holdStep(_gains, st, _setpoint, _hover_thrust);
 		_fallback_active = false;
@@ -1070,6 +1127,45 @@ void StructureHold::controlStep(const hrt_abstime now)
 	_last_loop_time_us = static_cast<uint32_t>(hrt_absolute_time() - start);
 	_max_loop_time_us = math::max(_max_loop_time_us, _last_loop_time_us);
 	perf_end(_loop_perf);
+}
+
+Vector3f StructureHold::passStep(const hrt_abstime now)
+{
+	const float dt = _pass_us > 0 && now > _pass_us ? (now - _pass_us) * 1e-6f : 0.f;
+	_pass_us = now;
+
+	// A stale estimate (the fallback's own threshold) brakes the point and holds the pass
+	// back: the brake-and-hover fallback then brakes to a hover, and the fix that returns
+	// finds the point about where the vehicle stopped, not seconds of pass ahead of it.
+	const PassStep step = _pass.step(dt, _stale_s >= _param_fb_t.get());
+
+	if (step.started) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: pass %.1f m at %.1f m/s",
+				 (double)_pass.plan().length_m, (double)_pass.plan().speed_mps);
+	}
+
+	const Vector3f delta(step.delta_ned);
+
+	if (delta.norm_squared() > 0.f) {
+		_setpoint.pos += delta;
+		_pass_offset += delta;
+
+		if (_param_ctrl.get() == 1) {
+			float hold[3];
+			_setpoint.pos.copyTo(hold);
+			_policy.moveHold(hold);
+		}
+	}
+
+	if (step.finished) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: pass done");
+
+	} else if (step.stopped) {
+		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: pass stopped after %.1f m: %s",
+				    (double)_pass.travelled(), _pass_stop_why);
+	}
+
+	return Vector3f(step.vel_ned);
 }
 
 void StructureHold::guardedStep(const hrt_abstime now)
@@ -1394,6 +1490,11 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.keep_out_shift_m = _keep_out.totalShift();
 	status.keep_out_points = static_cast<uint8_t>(_keep_out_out.points);
 	status.keep_out_no_room = _keep_out_out.no_room;
+
+	if (_state == structure_hold_status_s::STATE_ENGAGED) {
+		status.pass_state = static_cast<uint8_t>(_pass.state());
+		_pass_offset.copyTo(status.pass_offset_ned);
+	}
 	const bool flying = _state == structure_hold_status_s::STATE_ENGAGED
 			    || _state == structure_hold_status_s::STATE_HOVER
 			    || _state == structure_hold_status_s::STATE_LANDING;
