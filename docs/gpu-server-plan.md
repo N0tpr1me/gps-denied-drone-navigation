@@ -175,6 +175,38 @@ and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
 safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
 version for Zain to re-sign, not an edit in place.
 
+## Week 3: one free card, scoring only (2026-11-09)
+
+The server we got is shared (`docs/gpu-server.md` "The server we got"): on the day this was
+written one GPU was free and the CPUs were too loaded for training. So the third queue,
+`training/queues/server_week3.yaml`, trains nothing: it scores the policies that already exist
+(v22 released, v24 the wall-range candidate) on the GPU mock, every job under 1 h on 1 GPU,
+about 12 GPU-hours in all. It needs nothing from the other queues and nothing needs a yes.
+
+```
+python -m training.queue training/queues/server_week3.yaml --dry-run --gpus 1
+python -m training.queue training/queues/server_week3.yaml --smoke
+python -m training.queue training/queues/server_week3.yaml --max-gpus 2
+```
+
+| Part | Jobs | GPU hours | What it decides |
+| --- | --- | --- | --- |
+| 1. open questions | `dust_heavy`, `dust_cloud`, `dark_dust`, `dust_table` | 1.6 | The first flights on the dust a real VIO measured (`docs/vio-render.md` "Next" 2; `eval/configs/fault_rates_dust_measured.yaml`): crash rate with a 95 % bound for v22, v24 and the PD. The numbers that replace the made-up `degrade` row in the failure table |
+| | `v24_check_fresh` | 0.8 | v24 against v22 in the release check on two unseen check seeds at four times the episodes: whether v24's 23 % lead is the policy's or the sample's |
+| | `runaway_false_trips` | 0.8 | The heavy-dust runaway check (`SH_WD_VIO_DV`, `docs/field-faults.md` "Heavy dust") at 16 times the flights: "0 false trips in 31 flight hours" becomes a bound over about 500, and the catch rate of slow runaways gets 4096 flights each |
+| | `heading_v24_range` | 0.8 | Whether v24's range input holds a steady 30 deg wrong heading, where v22 hits the wall in every mock episode. Gazebo's EKF2 never held a steady 30 deg and v22 held there (`docs/heading-error.md`), so this cell is the mock's to answer. Yes: v24 covers the steady case too; no: the module heading check moves up |
+| 2. v24's release pack | `v24_gate1_baro`, `v24_gate1_stress_baro_p1` to `p3` | 2.0 | v24's Gate 1 on the benchmark's barometer height (its 2026-11-01 runs fused vision height) |
+| | `v24_gate1_basalt_fit` | 0.6 | Whether v24 passes the cell of the Basalt-fitted estimate that v22 failed |
+| | `v24_fault_*` (nine), `v24_fault_table` | 2.8 | v24's failure table per FMEA fault, beside week 2's v22 table |
+| 3. v24's datasheet | `v24_datasheet_into`, `_along`, `_lee`, `v24_datasheet_table` | 2.8 | v24's hold datasheet, beside week 2's v22 one |
+
+Parts 2 and 3 only matter if v24 is released; they are queued so that a Gazebo win (the
+cloud's re-fly) is followed by a scored release pack, not another week. If the re-fly parks
+v24, run part 1 alone (`--only dust_heavy,dust_cloud,dark_dust,dust_table,v24_check_fresh,runaway_false_trips,heading_v24_range`).
+Not here, because other queues already have them: Route Follow's narrow pipes with five times
+the estimate jumps (`server_week1.yaml` `route_pipes*`, `route_gazebo.yaml`), seed luck of a
+training recipe (`server_week2.yaml` `seed_*`), and every Gazebo flight (the cloud).
+
 ## What needs Zain's yes, as one batch
 
 `launch.py` and the queue refuse these without `--approved`. Everything else in the queue is

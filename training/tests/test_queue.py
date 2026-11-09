@@ -64,6 +64,19 @@ def test_every_committed_queue_loads_and_plans():
         assert "GPUs busy" in table
 
 
+def test_every_committed_queue_set_applies_to_its_config():
+    # A `set` that points into a list (params.controllers.1) or names a config key that is not
+    # there would only fail on the server; launch's own override code catches it here.
+    for path in QUEUES.glob("*.yaml"):
+        for j in queue.load_queue(path).jobs:
+            if not (j.launch and j.set):
+                continue
+            cfg = yaml.safe_load((launch.REPO_ROOT / j.launch).read_text())
+            args = queue.set_args(j.set)
+            assert not any("\n" in a for a in args), j.id  # each ends up in a LOG.md row
+            launch.apply_overrides(cfg, args[1::2])
+
+
 def test_bad_queue_files_are_refused(tmp_path):
     with pytest.raises(ValueError, match="exactly one"):
         queue.load_queue(write_queue(tmp_path, [{"id": "a"}]))

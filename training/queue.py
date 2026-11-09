@@ -285,7 +285,9 @@ def expand_runs(text: str, run_dirs: dict[str, str]) -> str:
 def set_args(values: dict[str, Any]) -> list[str]:
     out = []
     for k, v in values.items():
-        out += ["--set", f"{k}={yaml.safe_dump(v, default_flow_style=True).strip()}"]
+        # One line whatever its length: the override goes into argv and the LOG.md row as is.
+        dumped = yaml.safe_dump(v, default_flow_style=True, width=float("inf")).strip()
+        out += ["--set", f"{k}={dumped}"]
         if out[-1].endswith("\n..."):
             out[-1] = out[-1][:-4]
     return out
