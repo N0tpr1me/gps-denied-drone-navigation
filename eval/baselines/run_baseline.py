@@ -154,7 +154,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                                "failsafes": sum(r["failsafe"] for r in rs),
                                "failsafes_in_hover": sum(r["failsafe_in_hover"] for r in rs)}
         for key in METRICS:
-            vals = [r[key] for r in rs if not math.isnan(r[key])]
+            vals = [r[key] for r in rs if not math.isnan(r.get(key, math.nan))]
             agg[f"{key}_mean"] = statistics.fmean(vals) if vals else math.nan
             # min clearance: the worst is the smallest; everything else the largest.
             worst = min if key.startswith("min_clearance") else max
