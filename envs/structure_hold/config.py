@@ -291,6 +291,67 @@ class RangeSensor:
 
 
 @dataclass(frozen=True)
+class SurfacePass:
+    """Surface passes: the hold point moves along the wall at a fixed standoff, the 5 m
+    passes of the product's Decided row (``docs/surface-passes.md``). Off by default.
+
+    Per episode, with probability ``prob``, the episode is a pass: the hold point waits
+    ``start_s`` after the engage (the settle), then moves ``length_m`` along the wall with a
+    trapezoidal speed profile (``speed_mps`` cruise, ``accel_mps2`` up and down), stops, and
+    holds there for the rest of the episode. A pass runs along the wall (world y, either way)
+    or, with ``vertical_prob``, up it (a pier or a column). ``legs`` above 1 flies a raster:
+    each next leg runs the other way, after a ``row_step_m`` step across the pass (up for a
+    horizontal pass, sideways for a vertical one) and a ``pause_s`` stop at every corner.
+    The standoff never changes: every segment lies in a plane parallel to the wall.
+
+    What the policy reads stays the same 21 to 23 inputs: the position error is to the
+    moving hold point and the velocity input is the estimate's velocity relative to the hold
+    point's (zero difference on a plain hold), so a released policy can fly passes as it is
+    and the module needs a subtraction, not a new input. Drawn from a generator of its own,
+    so switching passes on leaves every other draw as it was.
+    """
+
+    prob: float = 0.0
+    length_m: tuple[float, float] = (5.0, 5.0)
+    speed_mps: tuple[float, float] = (0.2, 1.0)
+    accel_mps2: float = 0.5
+    start_s: tuple[float, float] = (2.0, 4.0)
+    vertical_prob: float = 0.0
+    legs: tuple[int, int] = (1, 1)
+    row_step_m: tuple[float, float] = (0.5, 1.0)
+    pause_s: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name in ("length_m", "speed_mps", "start_s", "row_step_m"):
+            object.__setattr__(self, name, _range(getattr(self, name), name))
+        lo, hi = _range(self.legs, "legs")
+        object.__setattr__(self, "legs", (int(lo), int(hi)))
+        if not 0.0 <= self.prob <= 1.0 or not 0.0 <= self.vertical_prob <= 1.0:
+            raise ValueError("surface_pass prob and vertical_prob must lie in [0, 1]")
+        if self.length_m[0] < 0 or self.row_step_m[0] < 0 or self.start_s[0] < 0:
+            raise ValueError("surface_pass length_m, row_step_m and start_s must be >= 0")
+        if self.speed_mps[0] <= 0 or self.accel_mps2 <= 0 or self.pause_s < 0:
+            raise ValueError("surface_pass needs speed_mps > 0, accel_mps2 > 0, pause_s >= 0")
+        if self.legs[0] < 1 or self.legs[1] > 8:
+            raise ValueError("surface_pass legs must lie in 1..8")
+
+    @property
+    def active(self) -> bool:
+        return self.prob > 0
+
+    @property
+    def max_segments(self) -> int:
+        """Passes and row steps of the longest raster: 2 legs - 1."""
+        return 2 * self.legs[1] - 1
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> SurfacePass:
+        d = dict(d or {})
+        _check_keys(cls, d, "surface pass")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
 class Actuation:
     """How PX4's normalised commands become force and torque on the airframe, between the
     rate loop and the simulator. The defaults are the placeholder's: PX4's unit torque is
@@ -373,6 +434,12 @@ class StructureHoldConfig:
     episode_length_s: float = 20.0
     hold_distance: tuple[float, float] = (1.0, 3.0)  # m from the wall, per episode
     hold_height: tuple[float, float] = (2.0, 2.0)  # m above the origin
+    # A bridge deck over the hold (docs/bridge-holds.md): its underside this many metres
+    # above the episode's hold point, drawn per episode. None, the default, is open sky. The
+    # deck enters the wind as the disturbance model's second surface (its shelter and, with
+    # disturbance.surface2_shed_amp, its edge shedding in a wind across it, world y, the
+    # direction along the wall), and coming within contact_radius_m of it is a contact.
+    deck_clearance: tuple[float, float] | None = None
     start_offset_std_m: float = 0.2  # start position scatter around the hold point
     start_yaw_std_rad: float = 0.2  # start heading scatter about facing the wall (+x)
     # Mid-episode re-engages, for training: at this rate per second the hold point moves to
@@ -406,6 +473,8 @@ class StructureHoldConfig:
     sensor_noise: SensorNoise = field(default_factory=SensorNoise)
     # A forward rangefinder for the wall-range input (RangeSensor; off by default).
     range: RangeSensor = field(default_factory=RangeSensor)
+    # Surface passes: the hold point moves along the wall (SurfacePass; off by default).
+    surface_pass: SurfacePass = field(default_factory=SurfacePass)
     vision_offset_down_m: float = 0.0
     fusion: FusionConfig = field(default_factory=FusionConfig)
     # The estimator's heading off the true one (a compass near steel; envs/estimate/heading.py,
@@ -423,6 +492,11 @@ class StructureHoldConfig:
                 raise ValueError(f"{name}: min {lo} > max {hi}")
         if self.hold_distance[0] <= self.contact_radius_m:
             raise ValueError("hold_distance must start outside the contact radius")
+        if self.deck_clearance is not None:
+            lo, hi = self.deck_clearance
+            if lo > hi or lo <= self.contact_radius_m + 0.2:
+                raise ValueError("deck_clearance: need contact_radius_m + 0.2 < min <= max, "
+                                 f"got {self.deck_clearance}")
         if self.max_rate_rad_s <= 0:
             raise ValueError("max_rate_rad_s must be positive")
         if self.engage_obs_cap_s <= 0:
@@ -460,14 +534,15 @@ class StructureHoldConfig:
             "wall_yaw_torque": WallYawTorque.from_dict,
             "sensor_noise": SensorNoise.from_dict,
             "range": RangeSensor.from_dict,
+            "surface_pass": SurfacePass.from_dict,
             "fusion": FusionConfig.from_dict,
             "heading_error": HeadingErrorConfig.from_dict,
         }
         for key, build in nested.items():
             if key in d:
                 d[key] = build(d[key])
-        for key in ("hold_distance", "hold_height", "rate_lag_s"):
-            if key in d:
+        for key in ("hold_distance", "hold_height", "rate_lag_s", "deck_clearance"):
+            if d.get(key) is not None:
                 v = d[key]
                 d[key] = (float(v), float(v)) if isinstance(v, (int, float)) else tuple(
                     float(x) for x in v)

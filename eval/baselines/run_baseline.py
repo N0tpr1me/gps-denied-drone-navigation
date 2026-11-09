@@ -66,7 +66,9 @@ RUNNERS = {"estimate": ("sim2real.estimate_bridge.run_estimate", "estimate_summa
 DEFAULT_SCENARIOS = ("wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms")
 DEFAULT_SEEDS = (1, 2, 3)
 METRICS = ("p95_m", "rms_m", "max_m", "worst_toward_surface_m", "min_clearance_m",
-           "recovery_max_s")
+           "recovery_max_s",
+           # The deck over a hold under a bridge (docs/bridge-holds.md); NaN without one.
+           "worst_toward_surface2_m", "min_clearance_surface2_m")
 
 
 def git_commit() -> str:
@@ -152,10 +154,10 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                                "failsafes": sum(r["failsafe"] for r in rs),
                                "failsafes_in_hover": sum(r["failsafe_in_hover"] for r in rs)}
         for key in METRICS:
-            vals = [r[key] for r in rs if not math.isnan(r[key])]
+            vals = [r[key] for r in rs if not math.isnan(r.get(key, math.nan))]
             agg[f"{key}_mean"] = statistics.fmean(vals) if vals else math.nan
             # min clearance: the worst is the smallest; everything else the largest.
-            worst = min if key == "min_clearance_m" else max
+            worst = min if key.startswith("min_clearance") else max
             agg[f"{key}_worst"] = worst(vals) if vals else math.nan
         out[name] = agg
     return out

@@ -45,12 +45,27 @@ _FIELDS: dict[str, tuple[int, ...] | None] = {
     "shed_omega": (),
     "shed_phase": (),
     "shed_dir": (3,),
+    "has_surface2": (),
+    "surface2_point": (3,),
+    "surface2_normal": (3,),
+    "surface2_decay": (),
+    "surface2_floor": (),
+    "surface2_shed_amp": (),
+    "surface2_shed_omega": (),
+    "surface2_shed_phase": (),
+    "surface2_wake_length": (),
 }
 # Fields added with the near-wall flow (docs/near-wall-flow.md). Files written before it
 # lack them; they read as the flow switched off.
 _OPTIONAL = {"wall_deflect": 0.0, "wall_tangent": 0.0, "wall_recirc": 0.0,
              "wall_recirc_length": 1.0, "wake_length": 1.0,
-             "shed_amp": 0.0, "shed_omega": 0.0, "shed_phase": 0.0, "shed_dir": 0.0}
+             "shed_amp": 0.0, "shed_omega": 0.0, "shed_phase": 0.0, "shed_dir": 0.0,
+             # The second surface (docs/bridge-holds.md): files written before it read as
+             # no second surface.
+             "has_surface2": 0.0, "surface2_point": 0.0, "surface2_normal": 0.0,
+             "surface2_decay": 1.0, "surface2_floor": 1.0, "surface2_shed_amp": 0.0,
+             "surface2_shed_omega": 0.0, "surface2_shed_phase": 0.0,
+             "surface2_wake_length": 1.0}
 
 
 def write_params(path: str | Path, p: DisturbanceParams, env: int = 0) -> None:
@@ -106,4 +121,5 @@ def read_params(path: str | Path) -> DisturbanceParams:
             raise ValueError(f"{path}: field '{name}' does not have shape {shape}")
         arrays[name] = fields[name].reshape((1, *shape))
     arrays["has_wall"] = arrays["has_wall"] != 0.0
+    arrays["has_surface2"] = arrays["has_surface2"] != 0.0
     return DisturbanceParams(**arrays)

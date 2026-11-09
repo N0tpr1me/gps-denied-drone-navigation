@@ -5,6 +5,7 @@ from envs.structure_hold.config import (
     RewardWeights,
     SensorNoise,
     StructureHoldConfig,
+    SurfacePass,
     WallYawTorque,
 )
 from envs.structure_hold.env import (
@@ -30,6 +31,7 @@ __all__ = [
     "SensorNoise",
     "StructureHoldConfig",
     "StructureHoldEnv",
+    "SurfacePass",
     "TERM_REASONS",
     "WallYawTorque",
 ]

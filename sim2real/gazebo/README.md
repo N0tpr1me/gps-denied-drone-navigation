@@ -1,10 +1,12 @@
 # sim2real/gazebo
 
-The wall-and-slab test world for PX4 SITL and the adapter that applies the shared wind and
-near-wall force (`envs/disturbance`) to the simulated vehicle.
+The test worlds for PX4 SITL (a flat wall, a bridge deck, a bridge pier) and the adapter that
+applies the shared wind and near-wall force (`envs/disturbance`) to the simulated vehicle.
 
 ```
 worlds/wall_slab.sdf     wall at x = 0 (structure on +x), slab underside at z = 5 m
+worlds/bridge_deck.sdf   abutment at x = 0 and the deck it carries, underside at z = 4 m
+worlds/bridge_pier.sdf   a 1.5 m square pier, face at x = 0, under a deck at z = 6 m
 plugin/                  StructureHoldWind: gz-sim 8 world system (C++), built into the image
 scenarios/*.yaml         calm_0ms, wind_4ms, wind_8ms: spawn, wall, disturbance config, seed
 params_io.py             DisturbanceParams <-> the text file the plugin reads
@@ -54,10 +56,13 @@ python -m sim2real.gazebo.run_scenario wind_8ms --hover-s 60
 `px4.log`, and `wind_summary.json` (overall pass/fail). Exit code 0 means the hover passed
 and the trace matched the model.
 
-Scenario keys: `name`, `seed`, `spawn` (`x y z yaw_deg`, ENU, 1 to 3 m from the wall),
-`wall` (`point`, `normal_toward`, from the drone into the structure), `disturbance` (any
-`DisturbanceConfig` key), `wind_heading_deg` (direction the mean wind blows toward, 0 = +x,
-optional), `hover` (`altitude`, `hover_s`).
+Scenario keys: `name`, `seed`, `world` (a file in `worlds/`, default `wall_slab`), `spawn`
+(`x y z yaw_deg`, ENU, 1 to 3 m from the wall), `wall` (`point`, `normal_toward`, from the
+drone into the structure), `surface2` (optional: `point`, `normal_toward` and `across`, the
+second surface of the wind model, the deck in `bridge_deck`; docs/bridge-holds.md),
+`disturbance` (any `DisturbanceConfig` key), `wind_heading_deg` (direction the mean wind
+blows toward, 0 = +x, optional), `hover` (`altitude`, `hover_s`). The runners fly each
+scenario in its own world and score contacts with both surfaces.
 
 ## Notes
 
@@ -67,7 +72,8 @@ optional), `hover` (`altitude`, `hover_s`).
   loads PX4's `server.config` systems only for worlds with no `<plugin>` element, so the
   world declares the same stock systems itself, then the wind plugin. If PX4's
   server.config changes at a pin move, mirror it here. The slab is a static box, so the x500's sensors are not affected (no occlusion
-  modelled); the disturbance model does not yet include the slab either.
+  modelled); wall_slab's scenarios leave the slab out of the wind model (it is 2.5 m over
+  the hold). `bridge_deck`'s scenarios put its deck in as the second surface.
 - The plugin is a world system: it finds `x500_0/base_link` after PX4 spawns it. Other
   models need `<model_name>` / `<link_name>` in the world file.
 - Force is applied at the link origin (no near-wall torque in the model yet).

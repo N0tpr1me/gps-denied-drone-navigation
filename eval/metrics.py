@@ -22,6 +22,10 @@ Definitions (``e(t) = |p(t) - p_sp(t)|``, the 3-D position error in metres):
   sample is in contact when its centre is within ``contact_radius_m`` of the wall plane, or
   when the trace's own ``contact`` flag (from a simulator) is set. Each run of consecutive
   contact samples counts once.
+- With a second surface (``surface2``: the deck over a hold under a bridge;
+  ``docs/bridge-holds.md``), ``worst_toward_surface2_m`` and ``min_clearance_surface2_m``
+  are the same two numbers for it, and a sample within ``contact_radius_m`` of either
+  surface is in contact. Without one they are not reported.
 - ``recovery_s``: for each gust ``(start, end)``, the time from ``end`` until ``e`` is back
   within ``recovery_tol_m`` (10 cm) and stays there for ``recovery_hold_s``. 0 if it was
   already inside when the gust ended. ``inf`` if it never settles before the next gust
@@ -198,6 +202,7 @@ def compute_metrics(
     recovery_tol_m: float = RECOVERY_TOL_M,
     recovery_hold_s: float = RECOVERY_HOLD_S,
     contact_radius_m: float = CONTACT_RADIUS_M,
+    surface2: Surface | None = None,
 ) -> dict:
     """Score one trace. See the module docstring for every definition.
 
@@ -229,6 +234,11 @@ def compute_metrics(
     else:
         out["worst_toward_surface_m"] = math.nan
         out["min_clearance_m"] = math.nan
+    if surface2 is not None:
+        clearance2 = surface2.distance(pos)
+        out["worst_toward_surface2_m"] = float(max(((pos - sp) @ surface2.normal).max(), 0.0))
+        out["min_clearance_surface2_m"] = float(clearance2.min())
+        in_contact |= clearance2 <= contact_radius_m
     out["contacts"] = count_episodes(in_contact)
 
     ordered = sorted((float(a), float(b)) for a, b in gusts)

@@ -22,7 +22,7 @@ Observation (``num_obs`` = 23), everything the onboard module can know:
 | slice | what | units |
 | --- | --- | --- |
 | 0:3 | estimated position minus hold point, structure frame, clipped | m |
-| 3:6 | estimated velocity, structure frame | m/s |
+| 3:6 | estimated velocity minus the hold point's (0 unless on a pass), structure frame | m/s |
 | 6:9 | gravity direction in the body frame (attitude) | unit |
 | 9:11 | body x axis (heading) in the structure frame, x and y components | unit |
 | 11:14 | body rates / max_rate | - |
@@ -56,6 +56,12 @@ one torch generator (estimate corruption) and a second NumPy generator for the a
 constructor's ``seed``. The airframe draws having their own generator means a stressed
 airframe flies exactly the episodes the nominal one does.
 
+Surface passes (``cfg.surface_pass``, off by default, ``envs/structure_hold/passes.py``): the
+hold point moves along the wall at a fixed standoff. Position error, velocity input, reward and
+termination are all taken against the moving point, so a plain hold is a pass of length 0.
+``hold_vel`` is the hold point's velocity; ``step_hold`` the hold point that went with
+``step_pos``.
+
 ``term_reason`` holds, per env, why its last episode ended (``TERM_REASONS``), so a scorer can
 tell crashes apart after the env has already reset.
 """
@@ -81,6 +87,7 @@ from envs.sims.torch_quad import (
     quat_rotate_inverse,
 )
 from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.passes import PassPaths
 
 OBS = {
     "pos_err": slice(0, 3),
@@ -105,6 +112,9 @@ TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeou
 # The wall: a point on it and the normal pointing from the drone toward it (structure x).
 WALL_POINT = (0.0, 0.0, 0.0)
 WALL_NORMAL_TOWARD = (1.0, 0.0, 0.0)
+# A deck over the hold (cfg.deck_clearance) spans out from the wall, so the wind across it,
+# the one that sheds from its edges, blows along the wall: world y (bridge_deck.sdf too).
+DECK_ACROSS = (0.0, 1.0, 0.0)
 
 
 class StructureHoldEnv:
@@ -208,6 +218,8 @@ class StructureHoldEnv:
         # they scatter about; which envs re-engaged on the last step; and their own generator,
         # so turning them on leaves every episode's other draws as they were.
         self.base_hold = torch.zeros(n, 3, dtype=dt, device=dev)
+        # The deck underside's height over each env (cfg.deck_clearance), inf without one.
+        self.deck_z = torch.full((n,), math.inf, dtype=dt, device=dev)
         self.reengaged = torch.zeros(n, dtype=torch.bool, device=dev)
         self.reengage_count = 0
         self.reengage_rng = np.random.default_rng([int(seed), 0xE6A])
@@ -230,6 +242,13 @@ class StructureHoldEnv:
         self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
         self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
         self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
+        # Surface passes (cfg.surface_pass): the paths, the hold point's velocity, and the
+        # pass's own clock (rsl_rl's random episode phase moves episode_time, and a pass must
+        # still start from its beginning). step_hold is the hold point step_pos went with.
+        self.passes = PassPaths(cfg.surface_pass, n, seed, dev, dt)
+        self.hold_vel = torch.zeros(n, 3, dtype=dt, device=dev)
+        self.pass_time = torch.zeros(n, dtype=dt, device=dev)
+        self.step_hold = torch.zeros(n, 3, dtype=dt, device=dev)
         self.reset()
 
     # ------------------------------------------------------------ state helpers
@@ -259,6 +278,11 @@ class StructureHoldEnv:
         """Distance from the wall along its normal, positive on the free-air side, (N,)."""
         p = self.sim.state.pos if pos is None else pos
         return (self.wall_point - p) @ self.wall_normal
+
+    def deck_clearance(self, pos: torch.Tensor | None = None) -> torch.Tensor:
+        """Distance below the deck's underside, (N,); inf without a deck."""
+        p = self.sim.state.pos if pos is None else pos
+        return self.deck_z - p[:, 2]
 
     def _beam_cos(self) -> torch.Tensor:
         """Cosine between the body x axis (the rangefinder's beam) and the wall normal, (N,)."""
@@ -318,6 +342,12 @@ class StructureHoldEnv:
         # Never start inside the wall or the ground.
         start[:, 0] = np.minimum(start[:, 0], -(cfg.contact_radius_m + 0.2))
         start[:, 2] = np.maximum(start[:, 2], cfg.min_height_m + 0.2)
+        # The deck draws after everything above, and only when there is one, so a config
+        # without it keeps its random stream.
+        deck_z = np.full(n, math.inf)
+        if cfg.deck_clearance is not None:
+            deck_z = height + rng.uniform(*cfg.deck_clearance, size=n)
+            start[:, 2] = np.minimum(start[:, 2], deck_z - (cfg.contact_radius_m + 0.2))
         yaw = cfg.start_yaw_std_rad * rng.standard_normal(n)
 
         t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
@@ -329,6 +359,7 @@ class StructureHoldEnv:
         self.sim.reset(env_ids, state)
         self.hold_point[env_ids] = t(hold)
         self.base_hold[env_ids] = t(hold)
+        self.deck_z[env_ids] = t(deck_z)
         self.rate_pid.reset(env_ids)
         self.estimator.reset(self.sim.state.pos, self.sim.state.vel, env_ids)
         if self.fusion is not None:
@@ -338,9 +369,13 @@ class StructureHoldEnv:
             self.heading_latch[env_ids] = self.heading_err.delta[env_ids]
 
         # Wind: wall_normal here is the disturbance model's convention (into free air).
+        deck = {}
+        if cfg.deck_clearance is not None:
+            deck = dict(surface2_point=np.stack([np.zeros(n), np.zeros(n), deck_z], 1),
+                        surface2_normal=(0.0, 0.0, -1.0), surface2_across=DECK_ACROSS)
         new = wind.to_torch(
             sample_params(cfg.disturbance, n, rng, wall_point=WALL_POINT,
-                          wall_normal=tuple(-x for x in WALL_NORMAL_TOWARD)),
+                          wall_normal=tuple(-x for x in WALL_NORMAL_TOWARD), **deck),
             self.device, self.dtype,
         )
         if self.wind is None or n == self.num_envs:
@@ -365,6 +400,10 @@ class StructureHoldEnv:
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
         self.range_ref[env_ids] = self.clearance(self.hold_point[env_ids])
+        self.hold_vel[env_ids] = 0.0
+        self.pass_time[env_ids] = 0.0
+        if cfg.surface_pass.active:
+            self.passes.draw(env_ids)
         if cfg.range.active:
             self._reset_range(env_ids)
 
@@ -563,6 +602,9 @@ class StructureHoldEnv:
         self.episode_step += 1
         self.episode_time += cfg.dt
         self.engage_time += cfg.dt
+        self.pass_time += cfg.dt
+        if cfg.surface_pass.active:
+            self._move_hold_point()
 
         # What the estimator reports.
         finite = state.finite()
@@ -589,7 +631,8 @@ class StructureHoldEnv:
         clearance = self.clearance(state.pos)
         gravity_body = quat_rotate_inverse(state.quat, torch.tensor(
             [0.0, 0.0, -1.0], dtype=self.dtype, device=self.device).expand(self.num_envs, 3))
-        contact = clearance <= cfg.contact_radius_m
+        contact = (clearance <= cfg.contact_radius_m) | (
+            self.deck_clearance(state.pos) <= cfg.contact_radius_m)
         ground = state.pos[:, 2] <= cfg.min_height_m
         tilt = -gravity_body[:, 2] < self.cos_max_tilt
         box = err.norm(dim=-1) > cfg.max_pos_error_m
@@ -608,7 +651,9 @@ class StructureHoldEnv:
         # Reward on the TRUE state (the policy only ever sees the estimate).
         w = cfg.reward
         toward = (err @ self.wall_normal).clamp(0.0, 1.0)
-        approach = ((state.vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
+        # Speed is charged relative to the hold point's: on a pass, keeping up is not a cost.
+        rel_vel = state.vel - self.hold_vel
+        approach = ((rel_vel @ self.wall_normal) - w.toward_wall_vel_deadband_mps).clamp(
             0.0, 1.0)
         d_action = actions - self.last_action
         rates = actions[:, :3]
@@ -630,7 +675,7 @@ class StructureHoldEnv:
             - w.toward_wall * toward
             - w.toward_wall_vel * approach
             - w.height * (1.0 - torch.exp(-err[:, 2].abs() / w.height_scale_m))
-            - speed_w * state.vel.norm(dim=-1).clamp(max=5.0)
+            - speed_w * rel_vel.norm(dim=-1).clamp(max=5.0)
             - w.ang_vel * state.ang_vel.norm(dim=-1).clamp(max=10.0)
             - w.thrust * (thrust_n / weight_n - 1.0).abs().clamp(max=1.0)
             - w.action * (actions[:, :3] ** 2).sum(-1)
@@ -645,6 +690,7 @@ class StructureHoldEnv:
         self.episode_reward += self.reward_buf
         self.last_action = actions
         self.step_pos = state.pos.clone()
+        self.step_hold = self.hold_point.clone()
 
         extras: dict[str, Any] = {"time_outs": self.time_out_buf, "observations": {}}
         done_ids = self.done_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -657,11 +703,19 @@ class StructureHoldEnv:
             }
             extras["episode"] = ep
             self.reset_envs(done_ids)
-        self.reengaged = self._reengage(~self.done_buf)
+        # A pass is flown from one engage; re-engages are for plain holds.
+        self.reengaged = self._reengage(~self.done_buf & ~self.passes.active)
         if cfg.range.active:
             self._update_range()
         self._observe()
         return self.obs_buf, self.reward_buf, self.done_buf, extras
+
+    def _move_hold_point(self) -> None:
+        """Put the pass envs' hold point where their path is now, and its velocity."""
+        offset, vel = self.passes.at(self.pass_time)
+        on = self.passes.active[:, None]
+        self.hold_point = torch.where(on, self.base_hold + offset, self.hold_point)
+        self.hold_vel = torch.where(on, vel, torch.zeros_like(vel))
 
     def _reengage(self, eligible: torch.Tensor) -> torch.Tensor:
         """Mid-episode re-engages (``cfg.reengage_rate_hz``), for envs in ``eligible`` at
@@ -686,7 +740,8 @@ class StructureHoldEnv:
         hold = self.base_hold[ids] + torch.as_tensor(offset, dtype=self.dtype,
                                                      device=self.device)
         hold[:, 0] = hold[:, 0].clamp(max=-cfg.hold_distance[0])
-        hold[:, 2] = hold[:, 2].clamp(min=cfg.min_height_m + 0.5)
+        hold[:, 2] = torch.minimum(hold[:, 2].clamp(min=cfg.min_height_m + 0.5),
+                                   self.deck_z[ids] - (cfg.contact_radius_m + 0.5))
         self.hold_point[ids] = hold
         self.range_ref[ids] = self.clearance(hold)
         self.last_action[ids] = 0.0
@@ -704,7 +759,7 @@ class StructureHoldEnv:
         o = self.obs_buf
         o[:, OBS["pos_err"]] = self.to_latched(self.estimate_pos - self.hold_point).clamp(
             -cfg.obs_pos_clip_m, cfg.obs_pos_clip_m)
-        o[:, OBS["vel"]] = self.to_latched(self.estimate_vel)
+        o[:, OBS["vel"]] = self.to_latched(self.estimate_vel - self.hold_vel)
         o[:, OBS["gravity_body"]] = quat_rotate_inverse(state.quat, down)
         o[:, OBS["heading"]] = quat_rotate(self.believed_quat, fwd)[:, :2]
         rates = state.ang_vel
