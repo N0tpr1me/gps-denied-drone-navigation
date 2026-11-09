@@ -147,7 +147,11 @@ and now also writes `scored/benchmark_report.html` through `eval/partner_report.
 page reads every number from `session_summary.json`, so it can never disagree with the
 engineer's tables in `report.md`. It holds:
 
-- what was flown (drone, site, date, firmware, policy, position source, truth source);
+- what was flown (drone, site, date, firmware, policy, position source, truth source). The
+  truth is named under the title: motion capture, or RTK GPS with the share of the scored
+  hold time that had a fixed solution (`docs/rtk-truth.md`). If EKF2 fused GPS on any scored
+  hold of an RTK session, a warning that the truth was not independent sits above the
+  headline;
 - the headline: Structure Hold's mean p95 distance from the hold point against tuned PX4's,
   as a percentage, on the same drone and day;
 - four tiles: that change, holds with a wall contact, holds that ended early, and the
@@ -157,8 +161,9 @@ engineer's tables in `report.md`. It holds:
 - every hold's p95 as a dot (Structure Hold circles, tuned PX4 squares), so a single bad
   run cannot hide in a mean;
 - every handback in plain words ("hold ended after 18 s, position estimate jumped; handed to
-  Structure Hover"), every aborted or unscored run, and any run whose EKF-to-mocap fit is off
-  by more than 5 cm;
+  Structure Hover"), every aborted or unscored run, any run whose EKF-to-truth fit is off
+  by more than 5 cm, and on RTK any hold with a fixed solution for under 95 % of its time or
+  with GPS fused;
 - the set-up and how it was scored.
 
 It is one self-contained HTML file (no scripts or web fonts) that prints on one A4 page;
@@ -176,6 +181,16 @@ scored by `eval.partner_session`. The page said Structure Hold held 41 % tighter
 against 0.407 m, worst run 0.323 against 0.649 m), 0 contacts and 0 early ends on either
 side. Two holds per side on one wind: a check that the report works, not a result; the
 benchmark is `docs/baseline.md`.
+
+### Sample on RTK truth (2026-11-09, Gazebo, not a partner flight)
+
+The same check for an outdoor session: four holds from the RTK truth check
+(`docs/rtk-truth.md`; `rtk_truth_*` profiles, the scripted receiver logged and not fused,
+run 2 of each side with the fix lost for 15 s), written up as a `session.yaml` with
+`truth: rtk` and the wall as two surveyed points. The page named RTK GPS as the truth, fixed
+for 87 % of the scored hold time (worst hold 74 %), listed both run-2 holds as partly
+unscored, and said Structure Hold held 58 % tighter (p95 0.174 against 0.417 m). Two holds
+per side again: a check that the page works on RTK, not a result.
 
 Two things it found, both fixed in `eval/partner_session.py`:
 

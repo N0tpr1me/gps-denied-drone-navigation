@@ -145,6 +145,15 @@ def resample(trace: Trace, dt: float, t0: float, t1: float) -> tuple[np.ndarray,
     return tg, pos, trace.pos_sp[idx], contact
 
 
+def measured(t: np.ndarray, tg: np.ndarray, max_gap_s: float) -> np.ndarray:
+    """Which grid times ``tg`` lie between two trace samples no more than ``max_gap_s``
+    apart (or on a sample)."""
+    after = np.searchsorted(t, tg, side="left")
+    lo, hi = np.clip(after - 1, 0, len(t) - 1), np.clip(after, 0, len(t) - 1)
+    on_sample = (t[hi] == tg) | (t[lo] == tg)
+    return on_sample | ((t[hi] - t[lo] <= max_gap_s) & (t[lo] <= tg) & (tg <= t[hi]))
+
+
 def count_episodes(flags: np.ndarray) -> int:
     """Number of runs of consecutive True values."""
     f = np.asarray(flags, dtype=bool)
@@ -203,12 +212,15 @@ def compute_metrics(
     recovery_hold_s: float = RECOVERY_HOLD_S,
     contact_radius_m: float = CONTACT_RADIUS_M,
     surface2: Surface | None = None,
+    max_gap_s: float | None = None,
 ) -> dict:
     """Score one trace. See the module docstring for every definition.
 
     ``window`` limits scoring to (t0, t1), for example to skip take-off and settling.
     Without a ``surface``, the wall metrics are NaN and contacts come only from the
-    trace's contact flag (0 if it has none).
+    trace's contact flag (0 if it has none). ``max_gap_s`` leaves out every stretch where
+    the trace's own samples are further apart than that, for a truth that comes and goes
+    (RTK); ``scored_s`` is the time that was scored.
     """
     t0, t1 = window if window is not None else (trace.t[0], trace.t[-1])
     t0, t1 = max(t0, trace.t[0]), min(t1, trace.t[-1])
@@ -216,30 +228,41 @@ def compute_metrics(
         raise ValueError(f"window ({t0}, {t1}) is shorter than one grid step")
     tg, pos, sp, contact_flag = resample(trace, grid_dt_s, t0, t1)
     err = np.linalg.norm(pos - sp, axis=1)
+    # Grid points inside a gap of the trace were never measured: linear interpolation would
+    # draw a straight line through them, so they are left out of every number.
+    seen = np.ones(len(tg), dtype=bool) if max_gap_s is None else \
+        measured(trace.t, tg, max_gap_s)
+    if not seen.any():
+        raise ValueError(f"no truth sample within {max_gap_s} s of another in the window "
+                         f"({t0:.2f}, {t1:.2f})")
 
     out: dict = {
         "duration_s": float(tg[-1] - tg[0]),
-        "rms_m": float(np.sqrt(np.mean(err**2))),
-        "p95_m": float(np.percentile(err, 95)),
-        "max_m": float(err.max()),
+        "scored_s": float(seen.sum() * grid_dt_s) if max_gap_s is not None
+        else float(tg[-1] - tg[0]),
+        "rms_m": float(np.sqrt(np.mean(err[seen]**2))),
+        "p95_m": float(np.percentile(err[seen], 95)),
+        "max_m": float(err[seen].max()),
     }
+    err = np.where(seen, err, np.inf)  # for recovery: an unmeasured moment is not recovered
 
     in_contact = np.zeros(len(tg), dtype=bool) if contact_flag is None else contact_flag.copy()
     if surface is not None:
         toward = (pos - sp) @ surface.normal
         clearance = surface.distance(pos)
-        out["worst_toward_surface_m"] = float(max(toward.max(), 0.0))
-        out["min_clearance_m"] = float(clearance.min())
+        out["worst_toward_surface_m"] = float(max(toward[seen].max(), 0.0))
+        out["min_clearance_m"] = float(clearance[seen].min())
         in_contact |= clearance <= contact_radius_m
     else:
         out["worst_toward_surface_m"] = math.nan
         out["min_clearance_m"] = math.nan
     if surface2 is not None:
+        toward2 = (pos - sp) @ surface2.normal
         clearance2 = surface2.distance(pos)
-        out["worst_toward_surface2_m"] = float(max(((pos - sp) @ surface2.normal).max(), 0.0))
-        out["min_clearance_surface2_m"] = float(clearance2.min())
+        out["worst_toward_surface2_m"] = float(max(toward2[seen].max(), 0.0))
+        out["min_clearance_surface2_m"] = float(clearance2[seen].min())
         in_contact |= clearance2 <= contact_radius_m
-    out["contacts"] = count_episodes(in_contact)
+    out["contacts"] = count_episodes(in_contact & seen)
 
     ordered = sorted((float(a), float(b)) for a, b in gusts)
     rec = []
