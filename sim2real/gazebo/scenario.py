@@ -1,7 +1,9 @@
 """Scenario files for the wall-and-slab world.
 
 A scenario is one YAML file (``sim2real/gazebo/scenarios/*.yaml``) with the spawn pose, the
-wall, the ``envs.disturbance`` config, the seed, and the hover to fly. ``sample_scenario``
+wall, the ``envs.disturbance`` config, the seed, the hover to fly and, optionally, a payload
+fixed under the x500 (``payload: {mass_kg, offset_down_m}``; the SITL image adds it to the
+model before PX4 spawns it, ``sim2real/docker/add_payload.py``). ``sample_scenario``
 draws the episode's disturbance exactly as ``envs/structure_hold`` does (same
 ``sample_params``, same seed, one env), so a Gazebo run and a torch_quad run with the same
 scenario see identical wind.
@@ -45,6 +47,19 @@ class Hover:
 
 
 @dataclass(frozen=True)
+class Payload:
+    """A rigid payload fixed under the vehicle's base_link: a 0.10 x 0.10 x 0.05 m box of
+    ``mass_kg`` whose centre sits ``offset_down_m`` below it. Mass 0 means none."""
+
+    mass_kg: float = 0.0
+    offset_down_m: float = 0.05
+
+    def __post_init__(self) -> None:
+        if self.mass_kg < 0 or self.offset_down_m < 0:
+            raise ValueError("payload mass_kg and offset_down_m must be >= 0")
+
+
+@dataclass(frozen=True)
 class Scenario:
     name: str
     seed: int = 0
@@ -54,6 +69,7 @@ class Scenario:
     disturbance: DisturbanceConfig = field(default_factory=DisturbanceConfig)
     wind_heading_deg: float | None = None
     hover: Hover = field(default_factory=Hover)
+    payload: Payload = field(default_factory=Payload)
 
     @property
     def wall_clearance(self) -> float:
@@ -66,6 +82,7 @@ class Scenario:
         d = dict(d)
         known = {
             "name", "seed", "spawn", "wall", "disturbance", "wind_heading_deg", "hover",
+            "payload",
         }
         unknown = set(d) - known
         if unknown:
@@ -89,6 +106,7 @@ class Scenario:
             disturbance=DisturbanceConfig.from_dict(d.get("disturbance")),
             wind_heading_deg=None if heading is None else float(heading),
             hover=Hover(**(d.get("hover") or {})),
+            payload=Payload(**(d.get("payload") or {})),
         )
 
 
@@ -115,3 +133,12 @@ def sample_scenario(sc: Scenario) -> DisturbanceParams:
         h = float(sc.wind_heading_deg)
         cfg = replace(cfg, mean_heading_deg=(h, h))
     return sample_params(cfg, 1, sc.seed, wall_point=sc.wall_point, wall_normal=normal)
+
+
+def payload_environment(sc: Scenario) -> dict[str, str]:
+    """The SITL image's environment for the scenario's payload (``sim2real/docker/
+    entrypoint.sh`` hands it to ``add_payload.py``); empty without one."""
+    if sc.payload.mass_kg <= 0:
+        return {}
+    return {"STRUCTURE_HOLD_PAYLOAD_KG": repr(float(sc.payload.mass_kg)),
+            "STRUCTURE_HOLD_PAYLOAD_OFFSET_M": repr(float(sc.payload.offset_down_m))}

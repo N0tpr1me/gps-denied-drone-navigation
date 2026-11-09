@@ -79,6 +79,10 @@ Mac itself needs extra MAVLink forwarding, which later tasks add when they need 
 
 ## Notes
 
+- `STRUCTURE_HOLD_PAYLOAD_KG` (and `STRUCTURE_HOLD_PAYLOAD_OFFSET_M`, default 0.05) makes
+  the entrypoint fix a payload under the x500 in its model file before PX4 spawns it
+  (`add_payload.py`); the Gazebo runners set them from a scenario's `payload` block. The
+  model keeps its name, so `x500_0` is still what the plugin and the bridge look up.
 - GPS is on, as in stock SITL. `sim2real/estimate_bridge` turns it off and feeds EKF2 a
   corrupted external-vision estimate (`hover-test --local-position-only`, bridge started by
   the entrypoint when `ESTIMATE_BRIDGE_PROFILE` is set).

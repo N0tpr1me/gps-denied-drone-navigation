@@ -25,7 +25,9 @@ against PD: paired bootstrap 95 % intervals of the p95 ratio and of the crash-ra
 difference. The verdicts follow ``docs/gate1.md``; ``rules`` in the config sets them.
 
 Inputs (``params``): ``controllers`` (list of ``{name, policy, fallback, yaw_guard}``; the PD
-yardstick is always added as ``pd``), ``gate_controller`` (the one judged), ``seeds``,
+yardstick is always added as ``pd``), ``policies`` (``{name: path}``, more controllers after
+those, so a queue can add a policy it just trained with ``--set params.policies.NAME=PATH``),
+``gate_controller``  (the one judged), ``seeds``,
 ``num_envs`` (episodes per cell and seed), ``base_env`` (a ``StructureHoldConfig`` mapping
 applied to every cell), ``cells`` (list of ``{name, env, envelope, headline}``; ``env`` is
 merged over ``base_env``), ``bootstrap`` (resamples), ``rules``.
@@ -300,7 +302,9 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
     seeds = [int(s) for s in p.get("seeds", HELD_OUT_SEEDS)]
     num_envs = int(p.get("num_envs", 1024))
     rules = {**DEFAULT_RULES, **(p.get("rules") or {})}
-    specs = [dict(c) for c in p["controllers"]] + [{"name": "pd", "policy": None}]
+    specs = ([dict(c) for c in p.get("controllers") or []]
+             + [{"name": str(k), "policy": v} for k, v in (p.get("policies") or {}).items()]
+             + [{"name": "pd", "policy": None}])
     names = [s["name"] for s in specs]
     if len(set(names)) != len(names):
         raise ValueError(f"controller names must be unique: {names}")

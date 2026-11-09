@@ -453,7 +453,8 @@ def run(cfg: dict[str, Any], device: str, writer: Any) -> dict[str, Any]:
     window_s = float(p.get("window_s", 40.0))
     thr = float(p.get("wobble_threshold", 0.1))
     rules = {**DEFAULT_RULES, **(p.get("rules") or {})}
-    specs = [dict(c) for c in p["controllers"]]
+    specs = ([dict(c) for c in p.get("controllers") or []]
+             + [{"name": str(k), "policy": v} for k, v in (p.get("policies") or {}).items()])
     names = [s["name"] for s in specs]
     ref = str(p["reference"])
     if ref not in names:

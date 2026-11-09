@@ -1,0 +1,102 @@
+# Policy v27 candidate: bring your own drone (docs/airframe-sizes.md). v22 continued from its
+# own ONNX on a much wider spread of airframes, so one policy holds on a 300 g quad, the x500
+# and the x500 with a payload after an airframe fit rather than a retrain. Same inputs (21),
+# same reward and estimate as v22, so the released module header could take it unchanged.
+#
+# Why ratios and not absolute sizes: the module maps the policy's thrust through the drone's
+# own hover thrust and its rate loop is the drone's own autotuned PX4 one (autotune aims at
+# the same rise time on any airframe), so what changes from drone to drone is thrust over
+# weight, rotor lag, rate-loop authority (inertia against torque), the hover-thrust error and
+# wind push per kilogram. Each is spread around the x500 to cover the three scored airframes
+# (eval/configs/airframe_sizes.yaml) and a margin:
+#   - thrust/weight x0.75 to x1.6 of the x500's 1.69: 1.27 (x500 + ~35 % payload) to 2.7
+#     (the 300 g class at 2.6); below about 1.2 the module's 0.9 thrust clamp cannot hover;
+#   - mass x0.7 to x1.6 (payload, battery), inertia x0.6 to x1.6, rotor lag 8 to 40 ms;
+#   - drag 0.8 to 2.0 times the fitted x500 drag (k_quad), so with the mass spread the wind
+#     pushes 0.5 to 2.9 times as hard per kilogram (the 300 g class: 1.6 times, its frontal
+#     area against its mass);
+#   - PX4's hover-thrust estimate off by up to 20 %, as v22.
+# GPU-sized as v26_wind: 4096 drones, 800 iterations plus the warm-up, one part, under 1 h.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v27_airframes.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_v27_airframes.yaml --device cuda
+name: structure_hold_ppo_v27_airframes
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  init_actor_onnx: training/policies/structure_hold_v22.onnx  # released (PR #93)
+  critic_warmup: 200
+  resume_std: 0.05  # as v12 to v22
+  iterations: 800
+  num_obs: 21
+  num_steps_per_env: 48
+  history: 15
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.05
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # as v22
+      k_quad: [0.02264, 0.05661]  # N/(m/s)^2: 0.8 to 2.0 x NOMINAL_K_QUAD (v22: 0.8 to 1.2)
+    reward:
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.7, 1.6]  # v22: [0.85, 1.2]
+      inertia_scale: [0.6, 1.6]  # v22: [0.75, 1.35]
+      thrust_to_weight_scale: [0.75, 1.6]  # v22: [0.9, 1.1]
+      motor_tau_s: [0.008, 0.04]  # v22: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it, on the
+      estimate:              # same wide airframe spread as training
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 200
+    select_envs: 256
+smoke:
+  critic_warmup: 2
+  num_obs: 21
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0], k_quad: [0.02264, 0.05661]}
+    airframe_rand: {mass_scale: [0.7, 1.6], inertia_scale: [0.6, 1.6],
+                    thrust_to_weight_scale: [0.75, 1.6], motor_tau_s: [0.008, 0.04],
+                    hover_thrust_error: [-0.2, 0.2]}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

@@ -118,7 +118,8 @@ def test_a_policy_from_another_airframe_flies_through_the_module_thrust_mapping(
     torch.testing.assert_close(seen[-1], torch.tensor([-0.5, 0.0]))  # its own action
 
 
-@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml"])
+@pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml",
+                                    "airframe_sizes.yaml"])
 def test_smoke_run_writes_report(tmp_path, config):
     run_dir = tmp_path / "run"
     out = subprocess.run(
@@ -130,3 +131,18 @@ def test_smoke_run_writes_report(tmp_path, config):
     report = json.loads((run_dir / "report.json").read_text())
     assert report["cells"] and "verdict" in report
     assert "| Cell |" in (run_dir / "report.md").read_text()
+
+
+def test_policies_by_name_join_the_controllers(tmp_path):
+    """A queue adds the policy it just trained with --set params.policies.NAME=PATH."""
+    out = subprocess.run(
+        [sys.executable, "-m", "training.launch", "--config", "eval/configs/airframe_sizes.yaml",
+         "--smoke", "--device", "cpu", "--runs-dir", str(tmp_path), "--quiet",
+         "--set", "params.policies.v19=training/policies/structure_hold_v19.onnx"],
+        cwd=REPO, capture_output=True, text=True, timeout=600)
+    assert out.returncode == 0, out.stdout + out.stderr
+    (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
+    report = json.loads((run_dir / "report.json").read_text())
+    assert [c["name"] for c in report["controllers"]] == ["v22", "v19", "pd"]
+    cells = {c["name"]: c for c in report["cells"]}
+    assert {"x500", "x500_payload50", "small_300g"} <= set(cells)

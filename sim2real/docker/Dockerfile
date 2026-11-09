@@ -46,7 +46,7 @@ RUN make px4_sitl_default \
 RUN python3 -m pip install --break-system-packages "mavsdk==${MAVSDK_VERSION}" \
     && rm -rf /root/.cache/pip
 
-COPY docker/entrypoint.sh docker/hover_test.py /opt/sitl/
+COPY docker/entrypoint.sh docker/hover_test.py docker/add_payload.py /opt/sitl/
 RUN chmod +x /opt/sitl/entrypoint.sh
 
 # Wall-and-slab world and the StructureHoldWind system plugin (sim2real/gazebo). PX4 only
