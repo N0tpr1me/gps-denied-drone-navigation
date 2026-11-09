@@ -24,6 +24,13 @@ The 5 m surface passes (`docs/surface-passes.md`) have a queue of their own,
 `training/queues/surface_passes.yaml` (2026-11-09): two seeds of the pass training on 2 GPUs,
 chains of sub-1 h parts, then `hold_pass_gate`. It runs on its own or beside this one.
 
+The barometer-height successor (`docs/baro-successor.md`) has one too,
+`training/queues/baro_successor.yaml` (2026-11-09): v22's recipe on barometer height, three
+seeds on 2 GPUs (0.9 h each), then each judged against v22 in the Gazebo-like check (0.8 h
+each), about 5.1 GPU-hours, every job under an hour. It is parked: the looser barometer
+holds it was written for turned out to be a scoring offset, and the seed-repeatability
+retrains already show what the barometer gives in the check, so run it only if asked.
+
 ## How the queue works
 
 ```
