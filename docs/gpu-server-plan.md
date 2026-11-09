@@ -122,6 +122,37 @@ the wind evidence are all in `experiments/LOG.md`.
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - The 5 m surface passes once the env has them (see above).
 
+## Week 2: the evidence buyers ask for (approved 2026-11-09)
+
+Zain approved the eight-item plan for the server's second week on 2026-11-09 (the research
+behind it: what inspection drone makers ask for, what the market research found missing, and
+what one card can prove in under an hour). Nothing in it waits on the first week's results.
+The first three items are one queue, `training/queues/server_week2.yaml`, every job under 1 h
+on 1 GPU and the whole queue capped at 2 GPUs at once (Zain's limit on the shared machine);
+it was smoke-tested on the cloud CPUs:
+
+```
+python -m training.queue training/queues/server_week2.yaml --dry-run --gpus 2
+python -m training.queue training/queues/server_week2.yaml --smoke
+python -m training.queue training/queues/server_week2.yaml --max-gpus 2
+```
+
+| Item | GPU hours | What it proves to a buyer | Where |
+| --- | --- | --- | --- |
+| 1. the hold datasheet | 3 x 0.9 | the wind at which Structure Hold and the PD break, per direction, distance and estimate quality: the number every datasheet quotes, which nobody publishes for hold accuracy; then the edge cells in Gazebo | `docs/hold-datasheet.md` |
+| 2. failure rates per fault | 9 x 0.3 | a 95 % bound on the crash rate behind every FMEA row (20,480 episodes each), and the Gazebo field faults from 3 seeds to 8 | `docs/fault-rates.md` |
+| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check | `docs/gazebo_check.md` |
+| 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
+| 5. deck and pier undersides | about 4 | holds under a surface, the pier scenario the kit does not fly yet | own thread |
+| 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | own thread |
+| 7. Route Follow on the GPU | about 5 | the v2 recipe at full batch, so the second capability has a server number | own thread |
+| 8. a real VIO in the loop | about 10, over 1 h | Basalt on EuRoC frames feeding the estimate instead of the model; needs Zain's yes per run and Isaac parity first | own thread |
+
+Items 4 to 8 need an environment or a world change before they can be queued; each is its
+own thread and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
+safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
+version for Zain to re-sign, not an edit in place.
+
 ## What needs Zain's yes, as one batch
 
 `launch.py` and the queue refuse these without `--approved`. Everything else in the queue is
