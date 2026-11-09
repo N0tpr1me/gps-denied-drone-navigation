@@ -123,6 +123,42 @@ What it says:
 - The mock says nothing yet about tuned PX4, whose position loop is looser again; the Gazebo
   batches (`gz_heading_tuned`, `gz_heading_v22`) are the comparison that counts.
 
+## Candidates trained in the cloud (2026-11-09)
+
+The GPU server was full, so `heading_s0` and `heading_s1` ran in the cloud container on 4 CPU
+cores with `structure_hold_ppo_heading_cloud.yaml` (the same recipe on 1024 drones, about
+25 min each), then `gazebo_check_heading_candidates.yaml` judged them against v22 (32 min).
+A third try, `heading_s1b`, continued `heading_s1` 400 iterations with the wrong heading on
+35 % of episodes instead of 70 %, to win back v22's tight hold on a true heading. Runs in
+`experiments/LOG.md`; yardstick v22 (the PD's numbers are in the table above).
+
+| Cell | v22 crash / p95 | `heading_s0` | `heading_s1` | `heading_s1b` |
+| --- | --- | --- | --- | --- |
+| `calm_clean` | 0 % / 0.055 m | 0 % / 0.067 m | 0 % / 0.081 m | 0 % / 0.068 m |
+| `head_none` (true heading) | 0 % / 0.173 m | 0 % / 0.231 m | 0 % / 0.237 m | 0 % / 0.193 m |
+| `head_off15` | 2.3 % / 0.186 m | 0 % / 0.236 m | 0 % / 0.242 m | 0 % / 0.195 m |
+| `head_off30` | 100 % / 1.12 m | 1.6 % / 0.228 m | 0 % / 0.243 m | 0 % / 0.198 m |
+| `head_off45` | 100 % / 1.20 m | 50.8 % / 0.482 m | 28.9 % / 0.314 m | 46.1 % / 0.434 m |
+| `head_drift` | 76.6 % / 0.581 m | 0.8 % / 0.233 m | 0 % / 0.251 m | 0 % / 0.197 m |
+| `head_steps` | 50.8 % / 0.400 m | 11.8 % / 0.252 m | 3.2 % / 0.273 m | 5.5 % / 0.206 m |
+| `head_off30_wind8` | 93.0 % / 0.943 m | 1.6 % / 0.218 m | 0.8 % / 0.226 m | 0 % / 0.192 m |
+| Verdict against v22 | reference | fails `head_none` slack | fails both true-heading cells | fails the fast ring |
+
+**No candidate passes, so none goes to Gazebo yet.** Training on a wrong heading works: every
+candidate holds through 30 degrees and the drift with almost no crashes, where v22 hits the
+wall. The price is paid when the compass is right. `heading_s0` and `heading_s1` hold about
+35 % looser on a true heading (0.23 against 0.17 m), outside the check's 2 cm slack.
+`heading_s1b` wins most of that back (0.193 m, inside the slack) but works its rate commands
+harder: its 2.2 to 6 Hz roll and pitch rate content on a true heading is about half again
+v22's (median 0.022 against 0.015 rad/s on `head_none`, 0.014 against 0.009 in calm air),
+and that fast ring is what made earlier policies fly worse in Gazebo than in the mock
+(`docs/gazebo_check.md`). It is the same trade the phase margin predicts: a loop that tolerates
+a turned frame gives up some tightness or some smoothness.
+
+Next, in order: a recipe that keeps the smoothness (`heading_s1b` continued with a heavier
+`action_band` weight, one sub-hour part), and the module-side heading check under What is not
+done, which keeps v22 as it is and catches the wrong heading instead of riding it out.
+
 ## Server runs (`training/queues/heading_error.yaml`)
 
 | Job | What | Hours | Go / no-go |
