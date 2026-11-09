@@ -1,0 +1,59 @@
+# Basalt and the fit pooled over rendered seeds from earlier runs (docs/vio-render.md):
+# - Isaac Sim renders (vio_render_wall_isaac.yaml, images kept, Basalt not run yet): Basalt
+#   runs here, on the host where Docker runs it; the queue sets params.from_run
+#   (training/queues/vio_render.yaml).
+# - per-seed NumPy runs (vio_render_wall.yaml, Basalt already run, images deleted): their
+#   output is pooled as it is.
+#   python -m training.launch --config eval/configs/vio_render_pool.yaml --device cpu \
+#       --set "params.from_run=runs/<seed 1 run>,runs/<seed 2 run>,runs/<seed 3 run>"
+name: vio_render_pool
+entrypoint: eval.vio_render.render
+seed: 1
+expected_hours: 0.35  # Basalt on 3 seeds x 11 conditions, ~30 s each (pooling only: 1 min)
+gpus: 1
+params:
+  renderer: raster  # not used when from_run is set
+  from_run: null  # set it: the render run folders, comma separated
+  seeds: [1, 2, 3]
+  workers: 1
+  scene: {kind: wall, width_m: 10.0, height_m: 5.0, floor_z_m: -2.0, contrast: 0.6}
+  rig: {width: 640, height: 480, hfov_deg: 90.0, baseline_m: 0.08, pitch_deg: 10.0}
+  # A 1.5 m hold in 4 m/s blowing into the wall with gusts and turbulence: 3 s on the floor
+  # (Basalt starts there), 6 s take-off and approach, 70 s of hold (60 s drift windows).
+  flight: {hold_dist_m: 1.5, wind_mps: [4.0, 0.0], ground_s: 3.0, approach_s: 6.0,
+           hold_s: 70.0}
+  camera: {}
+  # The levels: fog by meteorological visibility (20 m light, 8 m thick, 4 m dense);
+  # dust by visible grains per m^3 plus the haze of the fine part; light as a share of a
+  # lit hall (0.05 dusk or a dim tunnel, 0.01 a dark one with no lamp).
+  conditions:
+    - {name: clear}
+    - {name: fog_20m, fog_visibility_m: 20.0}
+    - {name: fog_8m, fog_visibility_m: 8.0}
+    - {name: fog_4m, fog_visibility_m: 4.0}
+    - {name: dust_light, dust_per_m3: 200.0, haze_visibility_m: 30.0}
+    - {name: dust_medium, dust_per_m3: 600.0, haze_visibility_m: 15.0}
+    - {name: dust_heavy, dust_per_m3: 2000.0, haze_visibility_m: 8.0}
+    # Heavy dust arriving 21 s into the hold (kicked up, blown in) over 5 s: the VIO has
+    # started and settled in clear air, as it would before a hold.
+    - {name: dust_cloud, dust_per_m3: 2000.0, haze_visibility_m: 8.0, dust_start_s: 30.0,
+       dust_ramp_s: 5.0}
+    - {name: dim_0.05, light_level: 0.05}
+    - {name: dark_0.01, light_level: 0.01}
+    - {name: dark_dust, light_level: 0.02, dust_per_m3: 800.0, haze_visibility_m: 15.0}
+  basalt: {run: true, image: dronenav-basalt}
+  fit: {skip_start_s: 10.0, hover_speed_max_mps: 0.3, walk_match_s: 20.0,
+        cap_horizon_s: 60.0}
+# Smoke: no Isaac renders exist yet, so it runs the whole pipeline on the NumPy renderer.
+smoke:
+  renderer: raster
+  from_run: null
+  workers: auto
+  seeds: [1]
+  flight: {hold_dist_m: 1.5, wind_mps: [4.0, 0.0], ground_s: 3.0, approach_s: 6.0,
+           hold_s: 15.0}
+  conditions:
+    - {name: clear}
+    - {name: fog_8m, fog_visibility_m: 8.0}
+    - {name: dark_dust, light_level: 0.02, dust_per_m3: 800.0, haze_visibility_m: 15.0}
+  fit: {skip_start_s: 10.0, walk_match_s: 5.0, cap_horizon_s: 10.0}

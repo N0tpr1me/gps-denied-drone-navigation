@@ -1,0 +1,50 @@
+# The Isaac Sim half of the real-VIO run (docs/vio-render.md): render the same flights,
+# scene and conditions as vio_render_wall.yaml with Isaac Sim's RTX renderer, keep the images;
+# Basalt runs afterwards on the host (vio_render_pool.yaml, params.from_run). Runs
+# inside the pinned Isaac Lab image on one GPU, only after the Isaac parity check passed:
+#   bash eval/vio_render/isaac_render.sh --gpu N [--set params.seeds=[1]]
+# The scene, rig, flight and conditions blocks must stay identical to vio_render_wall.yaml
+# (eval/tests/test_vio_render.py checks it), so the two renderers differ in nothing else.
+name: vio_render_wall_isaac
+entrypoint: eval.vio_render.render
+seed: 1
+expected_hours: 0.9  # per seed: ~10 min of RTX, ~30 min of fog/dust/camera on one core
+gpus: 1
+params:
+  renderer: isaac
+  seeds: [1]
+  workers: 1
+  keep_images: true
+  scene: {kind: wall, width_m: 10.0, height_m: 5.0, floor_z_m: -2.0, contrast: 0.6}
+  rig: {width: 640, height: 480, hfov_deg: 90.0, baseline_m: 0.08, pitch_deg: 10.0}
+  # A 1.5 m hold in 4 m/s blowing into the wall with gusts and turbulence: 3 s on the floor
+  # (Basalt starts there), 6 s take-off and approach, 70 s of hold (60 s drift windows).
+  flight: {hold_dist_m: 1.5, wind_mps: [4.0, 0.0], ground_s: 3.0, approach_s: 6.0,
+           hold_s: 70.0}
+  camera: {}
+  # The levels: fog by meteorological visibility (20 m light, 8 m thick, 4 m dense);
+  # dust by visible grains per m^3 plus the haze of the fine part; light as a share of a
+  # lit hall (0.05 dusk or a dim tunnel, 0.01 a dark one with no lamp).
+  conditions:
+    - {name: clear}
+    - {name: fog_20m, fog_visibility_m: 20.0}
+    - {name: fog_8m, fog_visibility_m: 8.0}
+    - {name: fog_4m, fog_visibility_m: 4.0}
+    - {name: dust_light, dust_per_m3: 200.0, haze_visibility_m: 30.0}
+    - {name: dust_medium, dust_per_m3: 600.0, haze_visibility_m: 15.0}
+    - {name: dust_heavy, dust_per_m3: 2000.0, haze_visibility_m: 8.0}
+    # Heavy dust arriving 21 s into the hold (kicked up, blown in) over 5 s: the VIO has
+    # started and settled in clear air, as it would before a hold.
+    - {name: dust_cloud, dust_per_m3: 2000.0, haze_visibility_m: 8.0, dust_start_s: 30.0,
+       dust_ramp_s: 5.0}
+    - {name: dim_0.05, light_level: 0.05}
+    - {name: dark_0.01, light_level: 0.01}
+    - {name: dark_dust, light_level: 0.02, dust_per_m3: 800.0, haze_visibility_m: 15.0}
+  basalt: {run: false}
+smoke:
+  seeds: [1]
+  flight: {hold_dist_m: 1.5, wind_mps: [4.0, 0.0], ground_s: 1.0, approach_s: 1.0,
+           hold_s: 1.0}
+  conditions:
+    - {name: clear}
+    - {name: dark_dust, light_level: 0.02, dust_per_m3: 800.0, haze_visibility_m: 15.0}
