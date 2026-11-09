@@ -98,6 +98,34 @@ def test_runaway_position_and_velocity_agree_with_each_other_then_hold():
     assert np.abs(verr[k6 + 1:]).max() == pytest.approx(0.0)
 
 
+def test_runaway_with_a_speed_cap_runs_on_at_it():
+    f = {"kind": "runaway", "at_s": 2.0, "duration_s": 4.0, "accel_mps2": 0.5,
+         "max_speed_mps": 0.5, "direction": [0.0, 1.0, 0.0]}
+    t, pos, out = fly([f])
+    _, _, clean = fly([])
+    perr = np.array([s.est_pos - c.est_pos for s, c in zip(out, clean, strict=True)])
+    verr = np.array([s.est_vel - c.est_vel for s, c in zip(out, clean, strict=True)])
+    k25, k4, k6 = (int(round(x / DT)) for x in (2.5, 4.0, 6.0))
+    assert verr[k25] == pytest.approx([0.0, 0.25, 0.0])  # still accelerating
+    assert verr[k4] == pytest.approx([0.0, 0.5, 0.0])    # at the cap from 3 s
+    assert perr[k4] == pytest.approx([0.0, 0.75, 0.0])   # 0.25 m to the cap, then 1 s at 0.5 m/s
+    assert perr[-1] == pytest.approx([0.0, 1.75, 0.0])   # held after the window
+    assert np.abs(verr[k6 + 1:]).max() == pytest.approx(0.0)
+    # The cap is carried in the profile only when set, so older profiles read as before.
+    assert "max_speed_mps" in parse_field_faults([f])[0].to_dict()
+    del f["max_speed_mps"]
+    assert "max_speed_mps" not in parse_field_faults([f])[0].to_dict()
+
+
+def test_shipped_prearm_runaway_profile():
+    """The VIO runs off on the floor from the bridge's first seconds, before any arming."""
+    p = load_profile("field_runaway_prearm")
+    assert p.fault_anchor == "start"
+    (f,) = p.field_faults
+    assert f.kind == "runaway" and f.at_s <= 5.0 and f.max_speed_mps == pytest.approx(2.8)
+    assert p.estimate.jump_rate_hz == 0 and p.estimate.dropout_rate_hz == 0
+
+
 DEGRADE = {"kind": "degrade", "at_s": 2.0, "duration_s": 6.0, "ramp_s": 2.0, "noise_m": 0.05,
            "vel_noise_mps": 0.2, "walk_mps": 0.1, "loss_hz": 0.5, "loss_s": 0.4,
            "range_noise_m": 0.05, "range_loss_frac": 0.2, "range_short_frac": 0.1}
@@ -203,6 +231,8 @@ def test_profile_round_trips_field_faults():
     {"kind": "silence", "at_s": 1, "duration_s": 2, "noise_m": 0.1},  # degrade only
     {"kind": "runaway", "at_s": 1, "duration_s": 2},  # no acceleration
     {"kind": "drift", "at_s": 1, "duration_s": 2, "rate_mps": 0.1, "accel_mps2": 1},
+    {"kind": "drift", "at_s": 1, "duration_s": 2, "rate_mps": 0.1, "max_speed_mps": 1},
+    {"kind": "runaway", "at_s": 1, "duration_s": 2, "accel_mps2": 0.5, "max_speed_mps": -1},
 ])
 def test_bad_field_faults_are_rejected(bad):
     with pytest.raises(ValueError):

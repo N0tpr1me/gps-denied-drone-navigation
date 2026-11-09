@@ -37,7 +37,10 @@ on PX4 v1.17.0. The code is the authority: the parameter table below is checked 
 
 The module never replaces PX4's estimator, rate controller, mixer, failsafes or arming
 checks. It is a flight mode like Position mode, registered through PX4's external mode
-interface, and commander can take the vehicle out of it at any time.
+interface, and commander can take the vehicle out of it at any time. Through the same
+interface it adds one arming check of its own (`SH_WD_GND_V`, 0 turns it off): while the
+vehicle sits disarmed and at rest and the VIO reports that it is moving, commander refuses
+to arm, in every mode.
 
 ## What the drone must provide
 
@@ -174,6 +177,7 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WD_FRZ_T` | 1.0 | 0 to 10 | s | A VIO fix that has not moved for this long trips. 0 off |
 | `SH_WD_VIO_DV` | 0.8 | 0 to 10 | m/s | VIO runaway: the VIO's velocity change over 3 s may differ from the IMU's by this much. Checks only an ODOMETRY velocity in `MAV_FRAME_LOCAL_NED` or `MAV_FRAME_BODY_FRD` (`LOCAL_FRD` is not checked). Replay your own healthy logs first (`python -m eval.vio_runaway replay <ulog>`) and keep it at least twice their largest value. 0 off |
 | `SH_WD_EV_CUT` | 1 | 0 or 1 | | On a VIO runaway caught while a Structure mode flies or hands back, clear `EKF2_EV_CTRL`'s position and velocity bits (yaw kept) so EKF2 stops fusing the VIO, which it otherwise follows with its attitude; the old value goes back when the VIO restarts (`reset_counter`) or on disarm. The change is a normal parameter write, so PX4 saves it; if the module stops mid-flight it puts it back. 0 leaves EKF2 alone |
+| `SH_WD_GND_V` | 0.3 | 0 to 5 | m/s | Pre-arm VIO check: with the vehicle disarmed and at rest (the land detector's `at_rest`, IMU only), a VIO whose velocity averages more than this over 1 s, 2 s in a row, blocks arming in every mode through an arming check the module registers with commander (no mode attached, name "Structure Hold VIO"), with a critical message repeated every 15 s. Any velocity frame is checked (a speed is the same in all). Arming is allowed again after 10 s under the limit at rest, or 5 s after the VIO goes silent; a runaway caught by `SH_WD_VIO_DV` while disarmed blocks and clears the same way. Never acts once armed. 0 = off |
 | `SH_RST_HOLD` | 0.0 | 0 to 60 | s | Refuse an engage this long after an EKF2 xy reset. 0 off |
 | `SH_GCS_PER` | 10.0 | 0 to 60 | s | Period of the one-line status sent to the ground station while a mode flies (`docs/pilot-status.md`). 0 off; the engage line and near-limit warnings are sent regardless |
 | `SH_FIX_SRC` | 0 | 0 to 2 | | What counts as a fix: 0 auto (VIO odometry if present, else local position), 1 VIO odometry, 2 local position |
@@ -217,6 +221,9 @@ Inspector).
 | Critical | `Structure Hold: wall guard has moved the hold point <s> m back this hold (SH_SHIFT_MAX), not moving it further` | The retreat cap: the guard stops moving the point; the pilot takes over |
 | Critical | `Structure Hold: keep-out has moved the hold point <s> m this hold (SH_SHIFT_MAX), not moving it further` | The same cap on the keep-out |
 | Critical | `Structure Hover: position lost, holding <d> m from the wall on the rangefinder` | `SH_HB_RANGE` 1 only |
+| Critical | `Structure Hold: VIO velocity ran <v> m/s from the IMU's (SH_WD_VIO_DV), VIO not trusted until it restarts` | The VIO runaway check, in any mode and on the ground |
+| Critical | `Structure Hold: EKF2 stops fusing the VIO (EKF2_EV_CTRL <a> to <b>) until it restarts or disarm` | `SH_WD_EV_CUT` 1, a runaway caught while a Structure mode flies or hands back |
+| Critical | `Structure Hold: arming blocked, the VIO reports motion with the vehicle on the ground (SH_WD_GND_V)` | The pre-arm VIO check, disarmed only; repeated every 15 s while it lasts |
 | Warning | `Structure Hold: wall guard moved the hold point <s> m back, to <d> m from the wall` | The guard pushed the hold point |
 | Warning | `Structure Hold: keep-out moved the hold point <s> m, to <d> m from the nearest obstacle` | The keep-out pushed the hold point (first push of each engage) |
 | Warning | `Structure Hold: keep-out <d> m is on but no obstacle data is coming in` | At engage, with the keep-out on and no fresh `obstacle_distance` or side range |
@@ -225,6 +232,8 @@ Inspector).
 | Info | `Structure Hold: locked out until disarm` | After a latched trip |
 | Info | `Structure Hold: handing back to <mode>` | Each handback target in turn |
 | Info | `Structure Hover: position back, holding on the estimate` | `SH_HB_RANGE` 1 only |
+| Info | `Structure Hold: EKF2 fuses the VIO again (EKF2_EV_CTRL <a>)` | The VIO restarted or the vehicle disarmed after the cut |
+| Info | `Structure Hold: arming allowed again, the VIO is still or silent` | The pre-arm block lifted |
 
 | Severity | Message | When |
 | --- | --- | --- |

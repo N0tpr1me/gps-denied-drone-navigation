@@ -209,6 +209,20 @@ What it does today:
   under about 0.3 m/s^2 can stay under the limit. `structure_hold_status` logs
   `vio_imu_dv` and `vio_runaway`; `runaway_replay.cpp` runs the same class over a text
   stream for the Python parity test.
+- **Pre-arm VIO check** (`SH_WD_GND_V`, m/s, default 0.3, 0 = off; `StillFix` in
+  `Watchdog.hpp`; `docs/field-faults.md` "Before take-off"). A VIO started in drifting dust
+  can run off while the drone still sits on the ground, and EKF2 fuses it. While the vehicle
+  is disarmed and the land detector has it at rest (its IMU-only `at_rest` flag), the module
+  averages the VIO's velocity over 1 s slots, in whatever frame it is sent; two slots in a
+  row over the limit and it answers commander's arming check with a refusal, so PX4 will
+  not arm in any mode, stock modes included. The check is a fourth registration with
+  commander, an arming check with no mode attached ("Structure Hold VIO"), which is how
+  PX4 applies an external component's answer to every mode; it only ever blocks arming and
+  always answers yes once armed. The block lifts after ten slots under the limit at rest,
+  or 5 s after the VIO goes silent; slots in which the vehicle was not at rest are dropped.
+  A runaway `SH_WD_VIO_DV` catches while disarmed blocks and clears the same way.
+  `structure_hold_status` logs `arming_blocked`; `sitl_test.py --prearm` flies it in SIH
+  with a scripted VIO.
 - **Publishes `structure_hold_status`** every control tick while engaged (state, trip
   reason, setpoint, error, commanded rates and thrust, controller, fallback active, yaw
   guarded, stale time, action flown, loop time), logged by default. `structure_hold status`
@@ -376,6 +390,13 @@ that sees one pole to the right of the hold point, sets the keep-out to 1 m thro
 `CP_DIST` (`--keep-out-param sh` for `SH_KO_DIST`), puts the pole 1.6 m away (nothing may
 move), then 0.5 m away: the vehicle must settle at least 0.85 m from it, still in Structure
 Hold, with a "keep-out" warning. First runs (2026-11-02): settled 1.00 and 1.02 m away.
+`--prearm` sends a scripted VIO (MAVLink `ODOMETRY` at 30 Hz) before take-off: still, then
+running off at 0.5 m/s^2 to 2.8 m/s, still again, running again and then silent. Arming in
+the stock mode must be accepted on the still VIO, refused once it runs, still refused 6 s
+after it stops, accepted after 10 s still and 5 s after silence; the normal flight follows.
+First run (2026-11-09): refused 1.9 and 2.1 s after the VIO started to run, allowed 11.0 s
+after it was still and 5.1 s after it went silent. SIH's EKF2 does not fuse this VIO; what
+EKF2 and stock PX4 do with it is the Gazebo flight in `docs/field-faults.md`.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
 Structure Land, `commander mode ext3` hovers in Structure Hover, `commander mode posctl` disengages,
