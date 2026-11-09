@@ -1685,7 +1685,7 @@ hold runner on `vio_at_engage`, as in the sections above.
 | `tuned_v2_cloud` | tuned PX4, `EKF2_HGT_REF` 0 | `px4_tuned_v2.params` | calm, 4, 8 m/s | `164116`, `170256` |
 | `v22_cloud` | v22, `EKF2_HGT_REF` 0 | `px4_tuned_v2.params` | calm, 4, 8 m/s | `173135`, `175659` |
 | `tuned_v2_hgt1_cloud` | tuned PX4, `EKF2_HGT_REF` 1 | `px4_tuned_v2_hgt1.params` | calm, 4, 8 m/s | `213759`, `215909` |
-| `v22_hgt1_cloud` | v22, `EKF2_HGT_REF` 1 | `px4_tuned_v2_hgt1.params` | calm, 4, 8 m/s | @@V22H1_BATCHES@@ |
+| `v22_hgt1_cloud` | v22, `EKF2_HGT_REF` 1 | `px4_tuned_v2_hgt1.params` | calm, 4, 8 m/s | `223440`, `230152` |
 | `v22_vision_cloud` | v22 on vision height | `px4_tuned_v1.params` | 4 m/s | `182210` |
 | `tuned_v2_wind12` | tuned PX4 at datasheet wind | `px4_tuned_v2.params` | 10, 12 m/s | `184057`, `185511` |
 | `v22_wind12` | v22, `--rangefinder` | `px4_tuned_v2.params` | 10, 12 m/s | `190923`, `192618` |
@@ -1705,8 +1705,20 @@ python -m eval.height_split --per-seed runs/pooled_tuned_v2_cloud_seeds1-8.json 
 All 184 flights were flown and scored: 0 crashes, 0 wall contacts, 0 failsafes in the
 scored hold. Real time: every run folder's `bridge.log` prints the sim time every 10 s of
 wall time; over all flights every 10 s stretch ran at a real-time factor of 0.98 or above,
-except one stretch at 0.96 (tuned PX4, 10 m/s, seed 2), which was flown again
-(@@REFLY@@).
+except one stretch at 0.96 (tuned PX4, 10 m/s, seed 2). That flight was flown again at
+1.00: 0.181 m with the offset out against the first flight's 0.177 m, and 0.423 against
+0.340 m as scored, because its height offset on the ground came out at 0.317 instead of
+0.227 m. The first flight stays in the table; the pair shows in one flight what this
+section is about.
+
+After the hold (printed, not scored, as before): seed 3 without the rangefinder went wrong
+in the scripted sequence after the hold on all six of its flights in `v22_cloud` and
+`v22_hgt1_cloud`, as it has since 2026-10-28. Stock Position follows that seed's estimate
+jump toward the wall (closest 0.12 to 0.31 m, vehicle centre), and on two of them (old
+setting, 4 and 8 m/s) Structure Land then tripped on tilt and the sequence timed out
+waiting for the disarm (`post_hold_fail`). With the rangefinder the closest approach after
+the hold was 0.64 m or more on every flight of `v22_range_cloud`, `v24_range_cloud` and
+`v22_wind12`.
 
 ### As scored today (`EKF2_HGT_REF` 0, the benchmark's set-up)
 
@@ -1753,19 +1765,24 @@ Mean over 8 seeds, m:
 | v22, `EKF2_HGT_REF` 0 | calm | 0.325 | 0.183 | 0.250 | +0.180 (+0.014 to +0.443) | 0.086 | **0.198** |
 | | 4 m/s | 0.328 | 0.177 | 0.283 | +0.206 (+0.097 to +0.331) | 0.093 | **0.195** |
 | | 8 m/s | 0.286 | 0.182 | 0.232 | +0.175 (+0.054 to +0.314) | 0.092 | **0.195** |
-@@V22H1_SPLIT_ROWS@@
+| v22, `EKF2_HGT_REF` 1 | calm | 0.210 | 0.181 | 0.141 | −0.051 (−0.167 to +0.137) | 0.080 | **0.195** |
+| | 4 m/s | 0.229 | 0.177 | 0.173 | −0.018 (−0.258 to +0.183) | 0.091 | **0.195** |
+| | 8 m/s | 0.253 | 0.184 | 0.182 | +0.018 (−0.277 to +0.166) | 0.102 | **0.203** |
 
 What the table says:
 
 - **The horizontal error does not care about the setting**: tuned PX4 0.39 m on both, to
   the millimetre. The whole difference between the settings is vertical.
 - **With the offset out the two settings give one number**: tuned PX4 0.407 / 0.403 /
-  0.406 m on 0 and 0.408 / 0.405 / 0.406 m on 1. Flight by flight (same seed, same
+  0.406 m on 0 and 0.408 / 0.405 / 0.406 m on 1; v22 0.198 / 0.195 / 0.195 m on 0 and
+  0.195 / 0.195 / 0.203 m on 1. For tuned PX4, flight by flight (same seed, same
   scenario, the two settings) the offset-out p95 differs by 0.004 m on average and 0.011 m
   at most, and the horizontal p95 by 0.003 m (0.009 m at most), while the as-scored p95
   differs by up to 0.30 m. The drone flew the same path; the frame it was scored in moved.
 - **The 2026-11-02 table is reproduced** on the old setting: tuned PX4 0.449 / 0.437 /
-  0.422 m here against 0.424 / 0.443 / 0.433 m then@@V22H1_REPRO@@. Its offsets happened to average
+  0.422 m here against 0.424 / 0.443 / 0.433 m then, v22 0.210 / 0.229 / 0.253 m against
+  0.234 / 0.250 / 0.246 m (−53 / −48 / −40 % against −45 / −44 / −43 %; v22's flights are not
+  repeatable to better than that, seed for seed). Its offsets happened to average
   near zero, so it read close to the true hold error; it was still scattered by them
   (single flights moved by 0.1 to 0.25 m either way).
 - **v22's margin as scored is squeezed by the same constant.** Adding the same 0.2 m to
