@@ -1233,26 +1233,29 @@ def check_ulog(path: Path, result: dict) -> None:
 class RtfSampler:
     """Gazebo's real-time factor every few seconds through the flight, as hover_test.py
     records it: a flight that ran slow met its wind and its estimate faults late on our
-    clock, and a benchmark batch is only read next to this number. Does nothing in SIH
-    (no ``gz``, no ``PX4_GZ_WORLD``)."""
+    clock, and a benchmark batch is only read next to this number. The first ``settle_s``
+    are not counted: Gazebo reports a factor near zero while it is still starting, long
+    before the takeoff. Does nothing in SIH (no ``gz``, no ``PX4_GZ_WORLD``)."""
 
     PATTERN = re.compile(r"real_time_factor:\s*([0-9.eE+-]+)")
 
-    def __init__(self, period_s: float = 3.0) -> None:
+    def __init__(self, period_s: float = 3.0, settle_s: float = 20.0) -> None:
         world = os.environ.get("PX4_GZ_WORLD")
         self.topic = f"/world/{world}/stats" if world and shutil.which("gz") else None
         self.period_s = period_s
+        self.settle_s = settle_s
         self.values: list[float] = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self) -> None:
+        began = time.monotonic()
         while not self._stop.is_set():
             try:
                 out = subprocess.run(["gz", "topic", "-e", "-t", self.topic, "-n", "1"],
                                      capture_output=True, text=True, timeout=5.0).stdout
                 found = self.PATTERN.search(out)
-                if found:
+                if found and time.monotonic() - began >= self.settle_s:
                     self.values.append(float(found.group(1)))
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 pass

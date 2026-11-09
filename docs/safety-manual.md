@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.9, ready for sign-off (section 8); 1.0 to 1.8 were not signed |
+| Version | 1.10, ready for sign-off (section 8); 1.0 to 1.9 were not signed |
 | Date | 2026-11-09 |
-| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`) and the VIO runaway trip of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md` and `docs/field-faults.md` |
+| Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`), the VIO runaway trip of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`) and the surface pass of 1.10 (`SH_PASS_LEN`, off by default): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md`, `docs/field-faults.md` and `docs/surface-passes.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
 
@@ -42,6 +42,11 @@ in flight). It commands body rates and total thrust to PX4's own rate controller
 classical watchdog, with no learning in it, checks every control step and hands control back
 to stock PX4 modes when anything is wrong.
 
+With `SH_PASS_LEN` set (it is 0, off, by default) the hold becomes a **surface pass**: after a
+few seconds at the engage point the hold point moves that far in a straight line along the
+structure, or up or down it, at the same standoff, and then holds at the end. The same policy
+flies it; the path is plain arithmetic with no learning in it (`docs/surface-passes.md`).
+
 It is not: a navigation system, VIO or SLAM, obstacle avoidance, a planner, a landing
 system for unknown ground, or a replacement for the pilot. It cannot make a bad position
 estimate good. It is built to stay safe while the estimate is bad for a short time, and to
@@ -63,6 +68,7 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
 | Distance from the structure | Engage 1 to 3 m from it, facing it (nose within 35 deg of square to the wall) | Gate 1 and Gate 2 scenarios |
 | Wind | Mean wind up to 8 m/s with gusts. The mock trains every direction; Gazebo flew 0, 4 and 8 m/s straight into the wall, the hardest case | `docs/gate1.md`, `docs/baseline.md` |
 | Estimate faults trained on | Delay 50 to 150 ms, noise, slow bias drift, jumps, dropouts up to 3 s | `envs/estimate`, `docs/decisions.md` |
+| Surface pass (`SH_PASS_LEN`, off by default) | One straight line of up to 10 m along the face, or up or down it, at 0.1 to 1 m/s, at the standoff of the engage. Flown in simulation at 5 m and 0.5 m/s. The face must be flat and the line clear for the whole length: the wall guard keeps `SH_WALL_MIN` on the rangefinder along it, and the keep-out stops the pass before an obstacle the collision-prevention sensors see, but **without those sensors nothing on board sees an obstacle on the line** (F47). The pilot watches the whole pass | `docs/surface-passes.md`, `sitl_test.py --pass-len` |
 | Height above ground | Tested 2 to 3.5 m. Engaging on the ground is refused | `sitl_test.py` ground-engage check |
 | Visibility | The VIO must keep tracking: dust, fog, steam or darkness that make it noisier and walk off are simulated (F36, F37) but only up to a VIO that still runs, with its noise about 5 cm, losses under a second and a walk of 0.1 m/sqrt(s). A VIO that stops is F4. A VIO that runs away (heavy dust) trips the hold and is taken out of EKF2, but the drone then coasts along the structure until the pilot stops it (F46): stop the hold when the VIO degrades | `docs/field-faults.md` (degrade, heavy dust) |
 
@@ -83,6 +89,10 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
   not help in dust or fog, which reflect them.
 - Within 2 m of the ground or a loose surface where the rotors throw up dust or spray,
   unless the VIO and the rangefinder are known to work in it.
+- For a surface pass (`SH_PASS_LEN` not 0): along a face that is not flat for the whole
+  length, with anything on or near the line of the pass (a pipe, a ledge, a cable, a
+  person), or where the pilot cannot see the whole line. Obstacle sensors in PX4's collision
+  prevention are a backstop for this, not a licence (F47).
 - In mean wind above 8 m/s, in rain or icing, or on an airframe it has not been fitted to.
 - With a VIO whose latency is unknown or above about 150 ms.
 - With people closer than 5 m, or between the drone and the structure.
@@ -99,6 +109,7 @@ Each layer works without the one above it. Only the first contains learning.
 | Brake-and-hover fallback | After `SH_FB_T` (0.5 s) without a fresh fix, brakes to a level hover (`docs/fallback.md`). Off for v22, which flies dropouts itself (`SH_FB_EN` -1 follows the policy's own setting); `SH_FB_EN` 1 turns it on | No |
 | Watchdog | In Structure Hold it trips on: a test fault, an invalid estimate (EKF2 flags or a NaN), a stale estimate (`SH_WD_EST_TO`, 5 s), a frozen fix (`SH_WD_FRZ_T`, 1 s), a VIO velocity that runs away from the IMU's (`SH_WD_VIO_DV`, 0.8 m/s over 3 s; it also counts the horizontal estimate as lost, so the handback skips Position mode), tilt (`SH_WD_TILT`, 45 deg), hold error (`SH_WD_POS_ERR`, 2 m). In Structure Hover on the rangefinder alone it trips when the range is lost for 0.5 s. A trip latches until disarm | No |
 | Handback order | Decided rows, pinned by `test_handback.cpp`. Next to a measured wall: Structure Hover (with `SH_HB_RANGE` 1 also when the position estimate is gone). Otherwise Position mode (Altitude mode if there is no horizontal estimate), then Hold, then Land, with Land asked for again until it takes. A trip in Structure Land goes to stock Land first | No |
+| Surface pass | Off by default (`SH_PASS_LEN` 0). The hold point moves along a straight line parallel to the wall at a limited speed and acceleration (`PassPath.hpp`); every layer below acts on the moved point. It waits while the position fix is stale (`SH_FB_T`, 0.5 s) and goes on when it is fresh. It brakes to a stop, for the rest of the hold, when an obstacle is within the keep-out of where it would come to rest, when the wall guard has used up its retreat cap, or within 1 m of the ground on a pass down; the pilot is told | No |
 | Wall guard | The hold point never comes closer than `SH_WALL_MIN` (0.7 m) to the wall the rangefinder measures, whatever the estimate says. It moves the point back at most `SH_SHIFT_MAX` (3 m) in one hold, then stops and says so | No |
 | Keep-out | With collision-prevention sensors, the hold point (in all three modes) never comes closer than the keep-out to an obstacle they see; the structure ahead keeps `SH_WALL_MIN` instead. It only moves the point away, it does not avoid or plan, and at most `SH_SHIFT_MAX` (3 m) in one hold | No |
 | Guarded modes | Structure Hover and Structure Land: PX4's own position controller, with the wall guard on its target point, and a back-off away from the wall when the vehicle itself is inside `SH_WALL_MIN` on the measured range (PX4's loop carried past the point). With `SH_HB_RANGE` 1, Structure Hover holds the wall distance on the rangefinder alone while the position estimate is gone | No |
@@ -122,6 +133,9 @@ Each layer works without the one above it. Only the first contains learning.
 | `Structure Hold: wall guard has moved the hold point X m back this hold (SH_SHIFT_MAX), not moving it further` | critical | The wall guard used up its retreat cap (3 m): a rangefinder stuck reading short, or a wall that really keeps coming. The hold point stays where it is | Take Position mode; back away and land. Check the rangefinder after landing |
 | `Structure Hold: keep-out has moved the hold point X m this hold (SH_SHIFT_MAX), not moving it further` | critical | The keep-out used up its retreat cap: an obstacle kept coming (a person walking up). The hold point stays where it is | Take Position mode and fly away from the obstacle |
 | `Structure Hold: keep-out X m is on but no obstacle data is coming in` | warning | At engage: the keep-out is set but no lidar scan or side range is arriving | Check the obstacle sensors, or set `SH_KO_DIST` 0 if the drone has none |
+| `Structure Hold: pass X m at Y m/s` | info | A surface pass starts (`SH_PASS_LEN` X: positive to the right of the nose or up, negative to the left or down) | Watch the line of the pass; take Position mode to stop it |
+| `Structure Hold: pass done` | info | The hold point has reached the end of the pass and holds there | Continue the hold, or disengage |
+| `Structure Hold: pass stopped after X m: <reason>` | warning | The pass ended early and the hold point stays where it stopped. `<reason>` is `keep-out` (an obstacle on or near the line), `wall guard cap` (the wall kept coming closer, `SH_SHIFT_MAX`) or `ground` (a pass down the wall came within 1 m of the ground) | Do not start the pass again on the same line. Take Position mode and fly clear |
 | `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | warning | The brake-and-hover fallback started or ended (only if `SH_FB_EN` turns it on) | Watch the drift; take over if the fix does not come back |
 | `Structure Hold: policy produced a non-finite action` | critical | The last-step check replaced the output. It should never happen | Take Position mode and land; send the log |
 | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | warning | Bench-test setting left on | Props off. Set `SH_BENCH` 0 before any flight |
@@ -205,6 +219,17 @@ height, F27 over three seeds.
 | F44 | False obstacle points | Dust, spray, the drone's own props or legs in the lidar's view | A false push away from nothing | 2 | Bins at or below the sensor's minimum or at its maximum are ignored; scans over 0.5 s old are ignored | Moves away from the false point only | 2 | U |
 | F45 | Keep-out set but no obstacle data | Sensor unplugged, wrong MAVLink routing | No keep-out | 3 | Warning at engage | Holds as without the keep-out | As F36 without sensors | U |
 
+### Surface pass (`SH_PASS_LEN`, off by default)
+
+| # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| F47 | Something on the line of the pass | A pipe, bracket, cable, scaffold or person the pilot did not see | The drone flies into it at up to 1 m/s | 4 | Keep-out look-ahead on the collision-prevention sensors: an obstacle within the keep-out of where the hold point would come to rest | The pass brakes to a stop and stays there; warning. SIH, pole on the line at 3.5 m, keep-out 1 m, 0.5 m/s: stopped after 2.4 m, the drone came no closer than 0.92 m. Without obstacle sensors nothing catches it | **2 with obstacle sensors, 4 without**: the line must be clear and in the pilot's sight | U, S (`--pass-len 5 --keep-out --pass-pole-m 3.5`) |
+| F48 | The face steps toward the drone along the pass | A buttress, a thicker pier section, a face not parallel to the pass | Closer than the standoff, contact | 4 | Wall guard on the forward rangefinder, on the moving point | The hold point is moved back to `SH_WALL_MIN` and the pass goes on at the new standoff; warning. SIH, a 0.5 m step half way along a pass 1 m off the wall: settled 0.79 m from the stepped face, closest 0.57 m as the step came into the beam. A step the beam does not see before the rotors reach it (a ledge beside the nose) is not caught | 3: flat faces only (envelope) | S (`--pass-len -5 --wall --pass-wall-step-m 0.5`) |
+| F49 | The face falls away, or the pass is not parallel to it | Engaged with the nose not square to the wall (the pass runs at right angles to the heading at engage); a curved face | The standoff grows along the pass: 0.09 m per metre for each 5 deg | 2 | Nothing: the guard only stops the point coming closer | Flies the line it was given; the camera ends further from the surface | 2: square up before engaging | none |
+| F50 | Position fix lost or stale during a pass | VIO dropout while the point moves | The point runs on ahead of a drone that cannot see it; on the fix's return the drone chases it | 3 | The pass waits while the fix is older than `SH_FB_T` (0.5 s) | The hold point brakes at 0.5 m/s^2, waits, and goes on when the fix is fresh; the stale-estimate trip and the handback are as in a plain hold (F3, F4) | 2 | U (`test_pass_path`: held back mid pass, never past its length) |
+| F51 | A pass down the wall reaches the ground | `SH_PASS_LEN` longer than the height | Descends into the ground | 3 | PX4's distance to the ground under 1 m, when PX4 has one (a downward rangefinder) | The pass stops; warning. Without a valid ground distance nothing stops it but the pilot | 3: keep a pass down shorter than the height above ground, less 1 m | none |
+| F52 | `SH_PASS_LEN` left set from an earlier flight | Operator error | Every engage flies off along the wall after `SH_PASS_T0` (3 s) | 3 | The pass line in the ground station at the start of each pass; the parameter is clamped to 10 m | Flies the pass | 3: check `SH_PASS_LEN` in the pre-flight parameter list; 0 for a plain hold | S (the line is checked in every pass run) |
+
 ### Controller and module
 
 | # | Failure | Cause | Effect if not caught | Sev | How it is caught | What the drone does | Residual | Evidence |
@@ -259,6 +284,8 @@ match the drone, and a policy trained on it being released for that drone.
 | `SH_WD_TILT` | 45 deg | 30 deg for first flights | Earlier trips while building trust |
 | `SH_KO_DIST` | -1 | Keep -1 and set PX4's `CP_DIST` if the drone has collision-prevention sensors | F41 |
 | `SH_SHIFT_MAX` | 3.0 m | Keep 3 m; never below the biggest estimate jump the drone can meet (1.5 m with GPS on) | F37, F43 |
+| `SH_PASS_LEN` | 0 m | 0 unless the flight is a planned pass on a clear, flat face in the pilot's sight; set it back to 0 afterwards | F47 to F52 |
+| `SH_PASS_SPD` | 0.5 m/s | Keep 0.5 m/s, the speed tested | F47 |
 | `SH_RST_HOLD` | 0 s | Operator choice | F9 (stock PX4 has the same settling problem) |
 | `SH_BENCH` | 0 | Always 0 in flight | Bench test only (`docs/bench-test.md`) |
 
@@ -281,6 +308,11 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   or a slow drift is not caught; a runaway before take-off is warned about but does not
   block arming in stock modes; `SH_WD_EV_CUT` writes `EKF2_EV_CTRL` in flight (restored on
   the VIO restart, disarm or module stop).
+- The surface pass (F47 to F52) is tested in unit tests and in PX4 SIH with a simulated
+  rangefinder and lidar; its Gazebo flights (`docs/surface-passes.md`) have neither sensor,
+  so they score the pass itself, not its guards. F49 and F51 have no test. A pass has not
+  been flown faster than 0.5 m/s outside the mock, and the policy flying it (v22) was not
+  trained on a moving hold point.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
 - The keep-out (F41 to F45) is tested in unit tests and one SIH lidar case, not in Gazebo
@@ -317,6 +349,7 @@ signed again. Record each one below.
 | 1.7 | 2026-11-02 | this PR | Section 3, guarded modes: a back-off on the measured range when the vehicle itself is inside `SH_WALL_MIN`; the keep-out no longer moves the hold point by rounding at the wall floor (it used up its warning) | |
 | 1.8 | 2026-11-03 | `c5003f2` | Retreat cap on the wall guard and the keep-out (`SH_SHIFT_MAX`, 3 m per hold, decision row 2026-11-03): sections 3, 4 (two critical messages) and 6, F37 and F43 | |
 | 1.9 | 2026-11-09 | this PR | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7 | |
+| 1.10 | 2026-11-09 | this PR | Surface pass in the module (`SH_PASS_LEN`, `SH_PASS_DIR`, `SH_PASS_SPD`, `SH_PASS_T0`, off by default; Proposed decision row 2026-11-09): section 1, section 2 envelope row and do-not-use item, section 3 layer, section 4 three messages, F47 to F52, section 6 two rows, section 7 | |
 
 ## Change control
 

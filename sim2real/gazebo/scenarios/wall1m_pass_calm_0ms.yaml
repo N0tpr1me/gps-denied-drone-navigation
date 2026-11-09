@@ -14,6 +14,6 @@ disturbance:
 # The hold: 3 s still, 11 s for the 5 m (0.5 m/s, 0.5 m/s^2), 16 s still at the end.
 hover: {altitude: 2.5, hover_s: 30.0}
 # Every controller starts its hold when PX4's clock (the simulation's) reads engage_at_s:
-# both runners are airborne and settled by then (the module's flight 54 to 56 s after boot,
-# stock PX4's sooner).
+# both runners are airborne and settled before then, and wait for it, so the two meet the
+# same gusts at the same point of the pass.
 pass: {length_m: 5.0, speed_mps: 0.5, start_s: 3.0, engage_at_s: 60.0}

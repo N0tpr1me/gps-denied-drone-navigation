@@ -19,6 +19,8 @@ one. All are STATUSTEXT, and all are in the flight log.
 | When | Severity | Message |
 | --- | --- | --- |
 | A mode starts flying | info | `Structure Hold: engaged, 1.52 m from the wall` (or `no wall range`, or `wall guard off` when `SH_WALL_MIN` is 0); the same for Structure Hover and Structure Land |
+| A surface pass starts moving, and reaches its end (`SH_PASS_LEN`, `docs/surface-passes.md`) | info | `Structure Hold: pass 5.0 m at 0.5 m/s`, then `Structure Hold: pass done` |
+| A surface pass ended early | warning | `Structure Hold: pass stopped after 2.4 m: keep-out` (or `wall guard cap`, `ground`) |
 | Every `SH_GCS_PER` seconds (10 s) while a mode flies | info | `Structure Hold: 0.08 m off the hold point, 1.49 m from the wall, fix 0.02 s old` |
 | The same, in Structure Hover on the rangefinder alone | info | `Structure Hover: on the rangefinder, 1.31 m from the wall, holding 1.30 m` |
 | No position fix for half of `SH_WD_EST_TO` | warning | `Structure Hold: no position fix for 2.5 s, watchdog hands back at 5.0 s` |
