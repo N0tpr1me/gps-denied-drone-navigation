@@ -20,11 +20,9 @@ AMD Threadripper Pro. Nothing below depends on the exact count: the queue fills 
 | 10 to 12 m/s wind (`docs/market-research.md` row 15) | Gazebo cells at datasheet winds, 16 flights per controller; the cloud flies one or two at a time |
 | Bigger Gazebo batches, Isaac-trained policies, seed sweeps | Each needs a few GPU-hours or tens of CPU-cores for an hour; the Mac and the cloud each managed one such job a day |
 
-Not on the server, and not in the queue: the 5 m surface passes. They are in the product's
-Decided row but not in the env yet (nothing in `envs/structure_hold` moves the hold point
-along the wall), so they need a week of env, reward and yardstick work in the cloud first;
-`docs/market-research.md` row 12 sizes it at 3 to 6 weeks. The training that follows will be
-the same shape as `route_pipes` below and slots into the queue file when it exists.
+The 5 m surface passes (`docs/surface-passes.md`) have a queue of their own,
+`training/queues/surface_passes.yaml` (2026-11-09): two seeds of the pass training on 2 GPUs,
+chains of sub-1 h parts, then `hold_pass_gate`. It runs on its own or beside this one.
 
 ## How the queue works
 
@@ -120,7 +118,8 @@ the wind evidence are all in `experiments/LOG.md`.
   mock score is seed luck; today nobody knows.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
-- The 5 m surface passes once the env has them (see above).
+- If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
+  same moving setpoint, the pass's real yardstick (`docs/surface-passes.md`).
 - Heading error near steel (`training/queues/heading_error.yaml`, `docs/heading-error.md`): two
   heading-trained candidates (0.9 GPU-h each, side by side), their check against v22 (0.8 h),
   and 80 Gazebo flights of v22 and tuned PX4 with EKF2's heading 30 deg off or drifting
@@ -135,6 +134,37 @@ pipes recipe with dust-spoiled rangefinders and a degraded VIO (`route_degraded`
 lane stock PX4 Mission mode through the four Gazebo route worlds (`gz_route_clean` first as
 the plumbing go/no-go, then 8 seeds each on `route_vio`, `route_drift`, `route_degrade`).
 Run it with `--max-gpus 2`; `--dry-run --gpus 2` shows the plan.
+
+## Week 2: the evidence buyers ask for (approved 2026-11-09)
+
+Zain approved the eight-item plan for the server's second week on 2026-11-09 (the research
+behind it: what inspection drone makers ask for, what the market research found missing, and
+what one card can prove in under an hour). Nothing in it waits on the first week's results.
+The first three items are one queue, `training/queues/server_week2.yaml`, every job under 1 h
+on 1 GPU and the whole queue capped at 2 GPUs at once (Zain's limit on the shared machine);
+it was smoke-tested on the cloud CPUs:
+
+```
+python -m training.queue training/queues/server_week2.yaml --dry-run --gpus 2
+python -m training.queue training/queues/server_week2.yaml --smoke
+python -m training.queue training/queues/server_week2.yaml --max-gpus 2
+```
+
+| Item | GPU hours | What it proves to a buyer | Where |
+| --- | --- | --- | --- |
+| 1. the hold datasheet | 3 x 0.9 | the wind at which Structure Hold and the PD break, per direction, distance and estimate quality: the number every datasheet quotes, which nobody publishes for hold accuracy; then the edge cells in Gazebo | `docs/hold-datasheet.md` |
+| 2. failure rates per fault | 9 x 0.3 | a 95 % bound on the crash rate behind every FMEA row (20,480 episodes each), and the Gazebo field faults from 3 seeds to 8 | `docs/fault-rates.md` |
+| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check | `docs/gazebo_check.md` |
+| 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
+| 5. deck and pier undersides | about 0.3 | holds under a bridge deck and in a pier's wake, a second surface in the wind model and two Gazebo worlds | `training/queues/bridge_holds.yaml`, `docs/bridge-holds.md` |
+| 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | `training/queues/heading_error.yaml`, `docs/heading-error.md` |
+| 7. Route Follow on the GPU | about 5 | the pipes recipe with degraded sensors and stock PX4 Mission mode through the Gazebo route worlds, so the second capability has a server number | `training/queues/route_gazebo.yaml` (above) |
+| 8. a real VIO in the loop | about 10, over 1 h | Basalt on EuRoC frames feeding the estimate instead of the model; needs Zain's yes per run and Isaac parity first | own thread |
+
+Items 4 and 8 need an environment change before they can be queued; each is its own thread
+and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
+safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
+version for Zain to re-sign, not an edit in place.
 
 ## What needs Zain's yes, as one batch
 
@@ -163,6 +193,7 @@ v24 release, if its re-fly wins, is a separate decision card.
 | `gz_v22_baseline` | 40 % or more below tuned, 0 crashes | A regression on main since the Mac batches; bisect before any new policy flies |
 | `gz_v24_refly` vs `gz_v22_range` | v24 tighter on mean p95 and worst toward the wall, 0 crashes | v24 parked; the lift rule stands as the gate |
 | `route_pipes_stress` | Best seed: narrow-pipe crashes under 11 %, beats both PDs on all 13 cells | More jumps in training did not help; next try is a rangefinder-weighted reward, not more iterations |
+| `hold_pass_gate` | PASS against the PD on the pass cells, lower p95 than v22 in every cell | v22 as it is stays the pass controller to beat; look at the start and stop of each pass (a pass-velocity input is the next idea) |
 | `gz_wind12_v22` | Holds at 10 and 12 m/s with 0 crashes, tighter than tuned | Switch on `hold_wind_finetune` |
 
 ## Where the numbers go

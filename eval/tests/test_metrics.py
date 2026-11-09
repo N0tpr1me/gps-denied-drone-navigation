@@ -94,6 +94,21 @@ def test_contacts_count_episodes():
     assert m["min_clearance_m"] == pytest.approx(0.1)
 
 
+def test_second_surface_scores_its_own_clearance_and_contacts():
+    # A deck 0.8 m above the hold; the drone rises 0.6 m (0.2 m under it) once, the wall
+    # 1 m east is never approached.
+    deck = Surface(point=[0.0, 0.0, 0.8], normal=[0.0, 0.0, 1.0])
+    t = np.linspace(0, 3, 301)
+    z = np.interp(t, [0, 1, 1.5, 2, 3], [0.0, 0.0, 0.6, 0.0, 0.0])
+    pos = np.stack([np.zeros_like(t), np.zeros_like(t), z], axis=1)
+    m = compute_metrics(Trace(t, pos, HOLD), WALL, surface2=deck)
+    assert m["worst_toward_surface2_m"] == pytest.approx(0.6)
+    assert m["min_clearance_surface2_m"] == pytest.approx(0.2)
+    assert m["min_clearance_m"] == pytest.approx(1.0)  # still the wall's
+    assert m["contacts"] == 1
+    assert "min_clearance_surface2_m" not in compute_metrics(Trace(t, pos, HOLD), WALL)
+
+
 def test_contacts_from_simulator_flag():
     t = np.linspace(0, 1, 101)
     flag = np.zeros_like(t, dtype=bool)
