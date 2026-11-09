@@ -22,9 +22,12 @@ from a wall, pier or deck in gusts, without GPS, on the drone's own position est
 stock rate controller. A classical watchdog hands control back to stock PX4 on any fault,
 and a forward rangefinder keeps the hold point off the wall (the wall guard). The pilot
 can always take over by switching to Position mode. In our PX4 SITL benchmark (Gazebo,
-8 seeds, gusts up to 8 m/s) it held with a 54 to 55 % lower p95 error than properly tuned
-stock PX4, with no crashes (`docs/baseline.md`). This pack is how we find out whether that
-holds on a real drone.
+8 seeds, gusts up to 8 m/s, on barometer height as step 2 of this pack sets it) it held to
+about 0.3 m at the 95th percentile, 34 to 46 % tighter than properly tuned stock PX4 (0.49
+to 0.53 m), with no crashes (`docs/baseline.md`, re-flown 2026-11-09). On vision height, which
+this pack and the safety manual do not allow in flight, it holds to about 0.2 m; the 54 to
+55 % in earlier copies of this pack was that set-up. This pack is how we find out whether
+the barometer-height result holds on a real drone.
 
 ## The steps, and who does what
 

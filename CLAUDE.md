@@ -173,9 +173,14 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
-- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds): on barometer height (`px4_tuned_v2.params`,
-  Decided 2026-11-01) v22 mean p95 -43 to -45 %, 0 crashes; on the earlier vision-height
-  set-up v22 -54 to -55 %, v19 -47 to -48 % (`docs/baseline.md`). Crash is judged on the 60 s
+- Gate 2 (Gazebo SITL vs tuned PX4, 8 seeds, calm / 4 / 8 m/s): on barometer height
+  (`px4_tuned_v2.params` with `EKF2_HGT_REF` 0, re-flown in the cloud 2026-11-09) tuned PX4
+  mean p95 0.49 / 0.51 / 0.53 m, v22 0.33 / 0.33 / 0.29 m, 34 to 46 % tighter, 0 crashes
+  (`docs/baseline.md`). In plain words: v22 holds about 0.3 m on barometer height and about
+  0.2 m on vision height. Quote only the barometer numbers. Older figures are older set-ups:
+  -43 to -45 % was flown 2026-11-02 with `EKF2_HGT_REF` 1 (the old setting), and v22's
+  -54 to -55 % and v19's -47 to -48 % on vision height, which the safety manual does not
+  allow in flight. Why the barometer numbers are looser is in `docs/baseline.md`. Crash is judged on the 60 s
   hold only; seed 6 is the hard seed. The mock fusion has a barometer-height option
   (`fusion.height_source: baro`, numbers from EKF2 on Gazebo hovers; `docs/baseline.md`
   "The mock fusion on barometer height"); `gz_x500_sitl`, and with it the release check,
