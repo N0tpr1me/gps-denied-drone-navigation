@@ -215,10 +215,22 @@ def apply_overrides(cfg: dict[str, Any], overrides: list[str]) -> list[str]:
             node = cfg["params"]
             *parents, leaf = key.split(".")[1:]
             for name in parents:
-                if not isinstance(node.get(name), dict):
+                # A number steps into a list that is already there (``params.controllers.1
+                # .policy``: the queue points a check at the policy a training job exported);
+                # anything else makes or enters a mapping.
+                if isinstance(node, list) and name.isdigit():
+                    node = node[int(name)]
+                    continue
+                if not isinstance(node.get(name), dict | list):
                     node[name] = {}
                 node = node[name]
-            node[leaf] = value
+            if isinstance(node, list):
+                if not leaf.isdigit() or int(leaf) >= len(node):
+                    raise Refused(f"--set {key}: {leaf!r} is not an index into a list of "
+                                  f"{len(node)}")
+                node[int(leaf)] = value
+            else:
+                node[leaf] = value
         else:
             raise Refused(f"--set {key}: only params.* and seed can be overridden")
         applied.append(f"{key}={raw.strip()}")
