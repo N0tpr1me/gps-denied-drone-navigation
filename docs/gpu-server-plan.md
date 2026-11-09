@@ -158,11 +158,11 @@ python -m training.queue training/queues/server_week2.yaml --max-gpus 2
 | 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check | `docs/gazebo_check.md` |
 | 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
 | 5. deck and pier undersides | about 4 | holds under a surface, the pier scenario the kit does not fly yet | own thread |
-| 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | own thread |
+| 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | `training/queues/heading_error.yaml`, `docs/heading-error.md` |
 | 7. Route Follow on the GPU | about 5 | the pipes recipe with degraded sensors and stock PX4 Mission mode through the Gazebo route worlds, so the second capability has a server number | `training/queues/route_gazebo.yaml` (above) |
 | 8. a real VIO in the loop | about 10, over 1 h | Basalt on EuRoC frames feeding the estimate instead of the model; needs Zain's yes per run and Isaac parity first | own thread |
 
-Items 4 to 6 and 8 need an environment or a world change before they can be queued; each is
+Items 4, 5 and 8 need an environment or a world change before they can be queued; each is
 its own thread and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
 safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
 version for Zain to re-sign, not an edit in place.
