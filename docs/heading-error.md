@@ -17,9 +17,10 @@ while the vision positions stay in their own frame. Two things follow:
    With no lag in the loop that would still converge up to 90 degrees, but the turn eats the
    loop's phase margin degree for degree, so a real loop starts to circle much sooner and the
    circle grows until something limits it (the "toilet bowl" PX4 users know from GPS flights
-   with a bad compass). How far a loop goes depends on its margin: the mock's PD yardstick
-   settles at 10 degrees, slowly circles out from about 20, holds a circle over a metre wide at
-   30 and touches the wall at 45. Stock PX4's Position mode and Structure Hold both have this;
+   with a bad compass). How far a loop goes depends on its margin, so a tighter loop gives out
+   sooner: on the benchmark x500 in the mock the PD yardstick still holds at 30 degrees and
+   hits the wall at 45, while v22, which holds more than twice as tight, already circles into the
+   wall at 30 (results below). Stock PX4's Position mode and Structure Hold both have this;
    nothing in either knows the heading is wrong. Where tuned PX4's margin runs out is what the
    Gazebo batches measure.
 2. Structure Hold takes the heading at engage as the wall's normal (`docs/integration-guide.md`).
@@ -49,8 +50,8 @@ moved since. `env.believed_quat` is the attitude the module believes it has; the
 steers its thrust with it, as PX4's own attitude loop would, so the PD meets the same turned
 frame as the policy. Its own random stream: turning it on changes no other draw. The tests
 (`envs/structure_hold/tests/test_heading_env.py`) pin that the module's body-frame error is the
-true one turned by the current error, and that the PD still settles at 10 degrees and circles
-out at 30.
+true one turned by the current error, and that the PD on the default airframe (slower than the
+x500 preset) still settles at 10 degrees and circles out at 30.
 
 ## In Gazebo (`sim2real/estimate_bridge/vision_yaw.py`)
 
@@ -85,7 +86,42 @@ yaw rates the difference is far below the error.
 
 ## v22 and the PD in the mock (2026-11-09, cloud)
 
-_Results go here once the check has run (`eval/configs/gazebo_check_heading.yaml`)._
+`eval/configs/gazebo_check_heading.yaml` on CPU in 14 minutes (run
+`20261109-161657_gazebo_check_heading_s7001_bba529b`, `experiments/LOG.md`): 2 seeds x 64
+episodes per cell, 60 s holds 1 m from the wall on the x500 preset, 4 m/s wind and
+`vio_default` unless the cell says otherwise. Yardstick: the cascaded PD in the same envs,
+reading the same wrong heading.
+
+| Cell | v22 crash | v22 p95 | PD crash | PD p95 |
+| --- | --- | --- | --- | --- |
+| `calm_clean` (no wind, clean, true heading) | 0 % | 0.055 m | 0 % | 0.046 m |
+| `head_none` (true heading) | 0 % | 0.173 m | 12.5 % | 0.392 m |
+| `head_off15` | 2.3 % | 0.186 m | 12.5 % | 0.363 m |
+| `head_off30` | **100 %** | 1.12 m | 13.3 % | 0.364 m |
+| `head_off45` | 100 % | 1.20 m | 100 % | 0.765 m |
+| `head_drift` (1 deg/s from 10 s to 30 deg) | **76.6 %** | 0.581 m | 13.3 % | 0.352 m |
+| `head_steps` (10 to 30 deg steps, about one every 20 s) | 50.8 % | 0.400 m | 32.8 % | 0.433 m |
+| `head_off30_wind8` (30 deg, 8 m/s into the wall) | 93.0 % | 0.943 m | 14.8 % | 0.388 m |
+
+Crash is any contact with the wall (0.40 m radius) or leaving the box in the hold; the PD's
+12 to 15 % in every cell are the estimate jumps of `vio_default`, which it rides out worse than
+v22 with or without a heading error.
+
+What it says:
+
+- **v22 is fragile to a wrong heading.** It is fine at 15 degrees, and at 30 degrees it circles
+  into the wall in every episode, also in calm air with a clean estimate (checked by hand, 16
+  episodes: off the hold by 1.6 m within 10 s). The PD, more than twice as loose, still holds
+  at 30 degrees and goes at 45. That is the phase-margin picture above: the policy's tight,
+  fast loop has the least to give.
+- A slow drift is as bad once it passes about 20 degrees: three quarters of the drift episodes
+  end on the wall, and the steps cell, where the error comes and goes, crashes half.
+- So the server's first job is the right one: train v22 on a wrong heading
+  (`heading_s0`, `heading_s1`) and see if a candidate keeps its tightness on the true heading
+  while holding through 30 degrees. If none can, the classical answer, a heading check in the
+  module, moves up (What is not done, below).
+- The mock says nothing yet about tuned PX4, whose position loop is looser again; the Gazebo
+  batches (`gz_heading_tuned`, `gz_heading_v22`) are the comparison that counts.
 
 ## Server runs (`training/queues/heading_error.yaml`)
 

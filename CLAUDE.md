@@ -210,6 +210,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   no module code was added (safety manual 1.3). PX4 v1.17's `EKF2_HGT_REF` 1 is GPS height,
   not barometer (0); the benchmark set said 1 until 2026-11-02 and flew on the barometer only
   because there was no GPS; it says 0 now (`eval/log_health.py` warns on 1).
+- Heading error near steel (2026-11-09, `docs/heading-error.md`): in the mock v22 holds a
+  15 deg wrong heading but circles into the wall at 30 deg (100 % crash, the PD holds); the
+  server queue `training/queues/heading_error.yaml` trains two heading candidates and flies
+  v22 and tuned PX4 on the `field_heading_*` Gazebo profiles.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), a Gazebo re-fly of the wall-range candidate v24, the bench test on a partner's flight controller, Isaac Lab parity on the GPU
