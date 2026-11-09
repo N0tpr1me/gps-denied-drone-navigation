@@ -120,6 +120,10 @@ the wind evidence are all in `experiments/LOG.md`.
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
   same moving setpoint, the pass's real yardstick (`docs/surface-passes.md`).
+- Heading error near steel (`training/queues/heading_error.yaml`, `docs/heading-error.md`): two
+  heading-trained candidates (0.9 GPU-h each, side by side), their check against v22 (0.8 h),
+  and 80 Gazebo flights of v22 and tuned PX4 with EKF2's heading 30 deg off or drifting
+  (about 1.4 CPU-h). Every job under an hour, at most two GPUs: no separate yes needed.
 
 ### Route Follow toward a real test (its own queue, any time)
 

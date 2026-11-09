@@ -70,7 +70,9 @@ def acceleration_to_action(env: StructureHoldEnv, obs: torch.Tensor, acc: torch.
     z_des_world = f_world / f_norm
 
     # Attitude: rotate the desired thrust axis into the body frame and steer body z onto it.
-    quat = env.state.quat  # attitude is observed directly (gravity_body, heading)
+    # The attitude as the observation knows it (gravity_body, heading): the true one, or with
+    # a heading error the one in the module's latched frame, as PX4's own loops would use.
+    quat = env.believed_quat
     z_des_body = quat_rotate_inverse(quat, z_des_world)
     z_body = torch.zeros(n, 3, dtype=obs.dtype, device=obs.device)
     z_body[:, 2] = 1.0
