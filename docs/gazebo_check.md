@@ -403,3 +403,27 @@ From PR #65's re-fly on (v19 and tuned PX4, 8 seeds, PR #67) the replays fly the
 | 3 | 0.26 / 0.26 | 0.24 / 0.28 | 0.25 (0.22 toward) | 0.30 (0.26 toward) |
 
 Seeds 2 and 3 sit within 0.02 m of Gazebo; seed 1 is 0.04 m tighter in the mock. On seed 3's drift the mock is 0.04 to 0.05 m short of Gazebo (v10 has not flown the corrected stream, so the v19 against v10 ranking there is unchecked); v20's edge over v19 there stays at 0.02 m. The Gazebo columns of the check config now give v19's corrected numbers; the seed rows of v10, v12 and v18 are from the old stream.
+
+## Seed repeatability (2026-11-09)
+
+Week 2's item 3 (`docs/gpu-server-plan.md`): v22's recipe (`training/configs/structure_hold_ppo_v22.yaml`, v19's actor grown to 21 inputs, a 200-iteration critic warm-up and 1000 iterations) trained again on seeds 1, 2 and 3, then the three beside the released v22 in the check (`eval/configs/gazebo_check_seeds.yaml`, v22 the reference, 128 episodes per cell and controller). It ran in the cloud container on 4 CPU cores at commit `63a05e0`: `20261109-185248_structure_hold_ppo_v22_s1_63a05e0` (27 min, iteration 950 selected, selection p95 0.180 m), `20261109-191954_structure_hold_ppo_v22_s2_63a05e0` (26 min, iteration 950, 0.200 m), `20261109-194610_structure_hold_ppo_v22_s3_63a05e0` (27 min, iteration 1199, 0.150 m), and the check `20261109-201321_gazebo_check_seeds_s7001_63a05e0`. The check took 61 min against its 45 min budget because another thread's test suite shared the four cores for part of it; it is a scoring run and nothing in it depends on wall time. Against the plan's wording this is the mock half only; the Isaac half waits on Isaac parity.
+
+One thing to hold in mind before the numbers: v22 itself (seed 0, 2026-10-30) trained with the fusion on vision height, and `gz_x500_sitl`, which the recipe and the check both fly, has been on barometer height since 2026-11-03 (Decided). The three re-trainings therefore trained on the fusion the check now flies and v22 did not, so the gap between the three and v22 mixes the height source with the seed. The spread between the three is the seed-luck number.
+
+Rough-estimate cells pooled (512 episodes each; no crash anywhere, wobble 0 % for all four):
+
+| controller | p95 (m) | lift (m) | ring (median rms) | fast ring (median, rad/s) | toward the wall (m) | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| v22 (seed 0, vision-height training) | 0.176 | −0.013 | 0.0034 | 0.017 | 0.057 | reference |
+| v22 recipe, seed 1 | 0.158 | −0.000 | 0.0033 | 0.018 | 0.070 | beats v22 (p95 ratio 0.90, interval 0.87 to 0.92; failed: none) |
+| v22 recipe, seed 2 | 0.166 | +0.004 | 0.0034 | 0.013 | 0.063 | does not beat v22 (ratio 0.94, interval 0.91 to 0.98): fails `seed1_jump_p95_not_worse` only, 0.269 against 0.183 m |
+| v22 recipe, seed 3 | 0.161 | −0.008 | 0.0044 | 0.015 | 0.091 | does not beat v22 (ratio 0.91, interval 0.89 to 0.93): fails `ring_not_higher` (+29 %) and `seed3_events_p95_not_worse`, 0.234 against 0.216 m |
+
+Hold p95 in the replay cells, v22 / seed 1 / seed 2 / seed 3: Gazebo seed 1's faults 0.183 / 0.170 / 0.269 / 0.116 m; seed 2's 0.163 / 0.140 / 0.141 / 0.161; seed 3's 0.216 / 0.207 / 0.204 / 0.234, with 0.201 / 0.187 / 0.186 / 0.216 m toward the wall. Calm clean estimate 0.055 / 0.049 / 0.051 / 0.047 m. The re-engage cells are the same to within 2 % for all four (3.1 % crash on the hold / stock / re-engage cell, 94.5 to 96.9 % on the 1.4 m jump cell, no re-engage failure), as they should be: those cells are the fallback's and the fusion's, not the policy's.
+
+What it says:
+
+- Seed luck in the pooled score is about 5 %: 0.158 to 0.166 m end to end, p95 ratio intervals that overlap (0.87 to 0.92, 0.91 to 0.98, 0.89 to 0.93). Lift sits within 0.012 m, ring within 30 % (0.0033 to 0.0044), toward the wall 0.063 to 0.091 m.
+- Seed luck in the verdict is larger than that. Two of the three fail, each on a cell the other two pass: seed 2 on the seed 1 replay alone (0.269 m where the other seeds hold 0.116 to 0.170; one jump at 35 s decides it), seed 3 on the ring rule and the seed 3 replay. The 128-episode replay cells and the ring rule move between seeds of the same recipe by more than a candidate usually differs from the reference on them.
+- For judging candidates: a pooled p95 gain inside about 10 % of the reference, or a pass or fail that rests on one replay cell or on the ring rule by less than about 30 %, is within one seed's luck and says nothing about the recipe. The releases so far were outside it (v9, v10, v11, v19 at ratios 0.72 to 0.82; v24 against v22 at 0.77 on the server the same day); v20's 0.96 was inside it. A candidate whose case rests on a margin inside the band should be trained on three seeds and judged on all three before anything is said about it, and a replay-cell failure by one seed is a watch item, not a verdict, until a second seed repeats it.
+- All three re-trainings hold 6 to 10 % tighter than v22 in the pooled cells and sit at the hold point where v22 sits 0.013 m below it. The likeliest reason is the height source, not the seed (above): the recipe trained on the barometer fusion lands where the check flies. That is a reason to retrain the release on the barometer fusion before the next Gazebo re-fly, and the mock has not predicted Gazebo on its own before, so it is a Proposed step, not a release.
