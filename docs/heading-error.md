@@ -123,6 +123,70 @@ What it says:
 - The mock says nothing yet about tuned PX4, whose position loop is looser again; the Gazebo
   batches (`gz_heading_tuned`, `gz_heading_v22`) are the comparison that counts.
 
+## v22 and tuned PX4 in Gazebo (2026-11-09, cloud)
+
+The queue's three CPU-lane jobs (`gz_heading_tuned`, `gz_heading_v22`, `gz_heading_v22_range`),
+flown in a cloud container one flight at a time (`--jobs 1`, 16-flight batches in seed halves,
+pooled with `run_baseline --pool`), 80 flights. Gazebo's real-time factor stayed at 1.00
+(15 s samples; the stock runner's own minimum 0.93 to 1.00); two tuned drift flights with a
+short dip to 0.61 and 0.84 were flown again and the re-flies count. Wind into the wall, 1 m,
+8 seeds per cell, `px4_tuned_v2.params` with `vision_yaw.params` over it. Yardstick: tuned PX4
+in Position mode, the same profile. "Heading error" is what EKF2 really had over the scored
+hold (EKF2's heading minus Gazebo's, mean over the flights that held).
+
+| Batch | Flights | Held 60 s, no contact | Failed | p95 of the holds (mean / worst) | Heading error in the holds |
+| --- | --- | --- | --- | --- | --- |
+| tuned, 30 deg, 4 m/s | 8 | 3 | 5 wall contact | 0.61 / 0.68 m | 14 deg |
+| tuned, 30 deg, 8 m/s | 8 | 3 | 5 wall contact | 0.53 / 0.59 m | 14 deg |
+| **v22**, 30 deg, 4 m/s | 8 | 5 | 1 stock crash before engage, 2 watchdog trips | 0.32 / 0.50 m | 22 deg |
+| **v22**, 30 deg, 8 m/s | 8 | 4 | 3 stock crashes before engage, 1 watchdog trip | 0.48 / 0.95 m | 22 deg |
+| v22 + rangefinder, 30 deg, 4 m/s | 8 | 5 | 2 stock crashes before engage, 1 watchdog trip | 0.42 / 0.70 m | 22 deg |
+| v22 + rangefinder, 30 deg, 8 m/s | 8 | 5 | 1 stock crash before engage, 2 watchdog trips | 0.35 / 0.59 m | 22 deg |
+| tuned, drift to 30 deg, 4 m/s | 8 | 3 | 5 wall contact | 0.59 / 0.63 m | 0 to 25 deg (mean 6) |
+| **v22**, drift to 30 deg, 4 m/s | 8 | **8** | 0 | 0.23 / 0.32 m | 0 to 30 deg (mean 9) |
+| tuned, no error (control) | 8 | 8 | 0 | 0.24 / 0.36 m | 0 |
+| **v22**, no error (control) | 8 | 8 | 0 | 0.23 / 0.34 m | 0 |
+
+What it says:
+
+- **In Gazebo v22 holds a wrong heading better than tuned PX4, not worse.** The drift batch is
+  the clean comparison, since both start on the true heading and the error grows during the
+  hold: v22 held all 8 flights at 0.23 m p95 while the error reached 29 to 30 deg; tuned PX4
+  hit the wall in 5 of 8. With 30 deg from takeoff tuned PX4 hit the wall in 10 of 16; v22
+  held 9 of 16 at a third to a half of tuned PX4's p95, and every v22 failure began in stock
+  PX4 (below). No v22 hold touched the wall.
+- **The 30 deg batches mostly test stock PX4's takeoff.** The hold runner takes off and
+  hovers in Position mode before it engages, on the same wrong heading. In 4 of 16 flights
+  (3 of 16 with the rangefinder) stock PX4 circled into the wall before Structure Hold was
+  asked to engage; in 3 of 16 (3 with the rangefinder) it was already wandering, 0.7 to 2 m
+  off its hover point and moving, when the runner engaged. v22 then tilted past 34 deg to
+  catch it and the watchdog (`SH_WD_POS_ERR` or `SH_WD_TILT`) handed back within a second.
+  A pilot would not engage there; the runner engages on a timer. Every flight that engaged
+  from a steady hover held for the full 60 s.
+- **The rangefinder changes nothing here**: 10 of 16 against 9 of 16, the same failure kinds,
+  holds within the seed spread. The wall guard had nothing to do because no hold drifted
+  toward the wall.
+- **Gazebo's EKF2 does not hold a steady 30 deg.** It fuses the vision positions and
+  velocities in the true frame, which make the heading observable whenever the vehicle
+  accelerates, and pulls its heading back toward the truth through its gyro bias (checked by
+  hand on the first flight: EKF2's corrected yaw rate disagreed with Gazebo's by about
+  2 deg/s while the vision yaw said 30 deg). Over v22's holds the error averaged 22 deg
+  (0 to 31); over tuned PX4's surviving holds 14 deg, as a vehicle that moves more gives EKF2
+  more to correct with. A compass-fused EKF2 next to steel does the same, so this is likely
+  closer to the field than the mock's fixed error, but it means these batches are milder than
+  the mock's `head_off30` cell, where v22 crashed every episode. The drift reaches 30 deg only
+  for the last 10 s of the hold (the mock's `head_drift` cell has 20 s), also milder.
+- So the mock's verdict (v22 more fragile than a loose loop) did not carry to Gazebo at these
+  sizes. It still stands for a steady 30 deg and above, which Gazebo did not produce. The
+  server's heading candidates (`heading_check`) are still worth their GPU hour, and a
+  candidate goes through these same batches (`gz_heading_candidate`) before any release.
+- The control batches agree with each other (0.23 and 0.24 m): taking the heading from the
+  vision yaw changes neither controller by itself. They are not comparable to the
+  `vio_at_*` benchmark (the field profiles turn the VIO's jumps and dropouts off).
+
+Runs: `experiments/LOG.md` (2026-11-09, heading batches). Run folders stay in the cloud
+container (`runs/` is not committed).
+
 ## Server runs (`training/queues/heading_error.yaml`)
 
 | Job | What | Hours | Go / no-go |
@@ -139,8 +203,10 @@ At most two GPUs at once and every job under an hour, so nothing here needs a se
 ## What is not done
 
 - No module change. A heading check in the module (EKF2's heading against the rangefinder's
-  wall angle, or a yaw innovation trip) would be the classical answer; it waits until Gazebo
-  shows how far v22 and tuned PX4 go wrong.
+  wall angle, or a yaw innovation trip) would be the classical answer. Gazebo (above) shows
+  v22 holding where tuned PX4 hits the wall at the error sizes EKF2 actually reaches there,
+  so it is not urgent; an engage check that refuses a vehicle already moving fast would have
+  saved the three watchdog trips.
 - The compass itself is not simulated in Gazebo (the reasons above). A partner's flight next to
   real steel is the check that the vision-yaw stand-in moved EKF2 the way a compass does.
 - Steps of the compass are in the mock only.
