@@ -3,6 +3,7 @@ route, and a flight is scored the way the mock scores an episode."""
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import xml.etree.ElementTree as ET
@@ -15,6 +16,8 @@ from sim2real.route_follow.run_mission import (
     ORIGIN,
     mission_json,
     mission_window,
+    pool,
+    rtf_of,
     score_route,
 )
 from sim2real.route_follow.world import (
@@ -151,3 +154,47 @@ def test_drifted_end_is_not_a_crash() -> None:
     assert not m["completed"] and not m["crash"] and not m["contact"]
     m = score_route(t, pos, rw, (0.0, float(t[-1])), mission_finished=False)
     assert m["crash"]
+
+
+def _flight(root, route: str, seed: int, rtf: list[float] | None) -> dict:
+    run = root / f"{route}_{seed}"
+    run.mkdir()
+    metrics = {"crash": False, "contact": False, "completed": True, "cross_track_p95_m": 0.1,
+               "min_clearance_m": 1.0, "planned_s": 20.0}
+    report = {"route": route, "seed": seed, "run": str(run), "ok": True, "metrics": metrics}
+    (run / "route_summary.json").write_text(json.dumps(report))
+    if rtf is not None:
+        (run / "rtf_samples.txt").write_text(
+            "".join(f"2026-11-09T17:00:{i:02d}Z {v}\n" for i, v in enumerate(rtf)) + "junk\n")
+    return {"route": route, "seed": seed, "run": str(run)}
+
+
+def test_rtf_of(tmp_path) -> None:
+    assert rtf_of(tmp_path)["rtf_n"] == 0 and math.isnan(rtf_of(tmp_path)["rtf_min"])
+    _flight(tmp_path, "tunnel_bend", 1, [1.0, 0.98, 0.5])
+    r = rtf_of(tmp_path / "tunnel_bend_1")
+    assert r["rtf_n"] == 3 and r["rtf_min"] == 0.5
+    assert r["rtf_mean"] == pytest.approx((1.0 + 0.98 + 0.5) / 3)
+
+
+def test_pool_merges_seed_halves(tmp_path) -> None:
+    routes = ["tunnel_bend", "pipe_narrow"]
+    parts = []
+    for seeds in ([3, 4], [1, 2]):
+        d = tmp_path / f"part_{seeds[0]}"
+        d.mkdir()
+        rows = [_flight(tmp_path, r, s, [1.0, 0.99] if s != 2 else [1.0, 0.7])
+                for r in routes for s in seeds]
+        d.joinpath("batch.json").write_text(json.dumps(
+            {"label": "x", "profile": "route_vio", "params": "p", "commit": "c",
+             "routes": routes, "seeds": seeds, "rows": rows}))
+        parts.append(d)
+    out = tmp_path / "pooled"
+    pooled = pool(parts, out)
+    assert [(r["route"], r["seed"]) for r in pooled["rows"]] == [
+        (r, s) for r in routes for s in (1, 2, 3, 4)]
+    assert pooled["aggregate"]["pipe_narrow"]["n"] == 4
+    assert pooled["aggregate"]["tunnel_bend"]["rtf_min"] == pytest.approx(0.7)
+    assert "Below real time" in (out / "table.md").read_text()
+    with pytest.raises(ValueError, match="repeat"):
+        pool([parts[0], parts[0]], tmp_path / "again")
