@@ -200,7 +200,11 @@ What it does today:
   `reset_counter` changes or disarm: Structure Hold trips (`estimate_runaway`, trip 10),
   an engage is refused, Structure Hover holds on the rangefinder (`SH_HB_RANGE` 1) or trips,
   and the handback counts the horizontal estimate as lost (Altitude mode, never Position
-  mode). Velocity in NED is used as sent, `BODY_FRD` is turned by the attitude, other
+  mode). EKF2 keeps fusing a runaway and turns its attitude to follow it, so with
+  `SH_WD_EV_CUT` 1 (default) the module clears `EKF2_EV_CTRL`'s position and velocity bits
+  while one of its modes is in charge, and restores them on the VIO restart, on disarm or
+  when it stops; Structure Hover then starts from the wind lean of 8 s before
+  (`WindFeedForward::lagged`), not the one learned chasing the runaway. Velocity in NED is used as sent, `BODY_FRD` is turned by the attitude, other
   frames are not checked. EKF2's tilt takes up a slow runaway (about 2.5 s), so a runaway
   under about 0.3 m/s^2 can stay under the limit. `structure_hold_status` logs
   `vio_imu_dv` and `vio_runaway`; `runaway_replay.cpp` runs the same class over a text
