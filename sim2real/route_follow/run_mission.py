@@ -94,20 +94,26 @@ METRICS = ("cross_track_p95_m", "cross_track_max_m", "track_p95_m", "min_clearan
 # "<utc time> <rtf>", written by whatever watches the containers, e.g. every 15 s). Numbers
 # are comparable only at real time (the GPU server's load dropped Gazebo to 0.5 to 0.8 and
 # moved tuned PX4's error by a fifth), so a flight whose worst sample is under this is flagged.
+# Samples in the first RTF_SKIP_S after the first one are dropped: Gazebo reports near zero
+# while it starts, long before PX4 arms and the mission (the scored window) begins.
 RTF_FLAG = 0.9
+RTF_SKIP_S = 20.0
 
 
 def rtf_of(run_dir: Path) -> dict[str, Any]:
     """Mean, worst and count of a flight's real-time-factor samples (NaN, 0 when none)."""
     f = run_dir / "rtf_samples.txt"
-    vals = []
+    samples = []
     if f.exists():
         for line in f.read_text().splitlines():
             parts = line.split()
             try:
-                vals.append(float(parts[-1]))
+                t = datetime.fromisoformat(parts[0].replace("Z", "+00:00")).timestamp()
+                samples.append((t, float(parts[-1])))
             except (IndexError, ValueError):
                 continue
+    t0 = samples[0][0] if samples else 0.0
+    vals = [v for t, v in samples if t >= t0 + RTF_SKIP_S]
     return {"rtf_mean": statistics.fmean(vals) if vals else math.nan,
             "rtf_min": min(vals) if vals else math.nan, "rtf_n": len(vals)}
 

@@ -165,13 +165,16 @@ def _flight(root, route: str, seed: int, rtf: list[float] | None) -> dict:
     (run / "route_summary.json").write_text(json.dumps(report))
     if rtf is not None:
         (run / "rtf_samples.txt").write_text(
-            "".join(f"2026-11-09T17:00:{i:02d}Z {v}\n" for i, v in enumerate(rtf)) + "junk\n")
+            "".join(f"2026-11-09T17:{15 * i // 60:02d}:{15 * i % 60:02d}Z {v}\n"
+                    for i, v in enumerate(rtf))
+            + "junk\n")
     return {"route": route, "seed": seed, "run": str(run)}
 
 
 def test_rtf_of(tmp_path) -> None:
     assert rtf_of(tmp_path)["rtf_n"] == 0 and math.isnan(rtf_of(tmp_path)["rtf_min"])
-    _flight(tmp_path, "tunnel_bend", 1, [1.0, 0.98, 0.5])
+    # The first sample (Gazebo starting) and anything within 20 s of it are dropped.
+    _flight(tmp_path, "tunnel_bend", 1, [0.002, 0.3, 1.0, 0.98, 0.5])
     r = rtf_of(tmp_path / "tunnel_bend_1")
     assert r["rtf_n"] == 3 and r["rtf_min"] == 0.5
     assert r["rtf_mean"] == pytest.approx((1.0 + 0.98 + 0.5) / 3)
@@ -183,7 +186,7 @@ def test_pool_merges_seed_halves(tmp_path) -> None:
     for seeds in ([3, 4], [1, 2]):
         d = tmp_path / f"part_{seeds[0]}"
         d.mkdir()
-        rows = [_flight(tmp_path, r, s, [1.0, 0.99] if s != 2 else [1.0, 0.7])
+        rows = [_flight(tmp_path, r, s, [0.0, 1.0, 0.99] if s != 2 else [0.0, 1.0, 0.7])
                 for r in routes for s in seeds]
         d.joinpath("batch.json").write_text(json.dumps(
             {"label": "x", "profile": "route_vio", "params": "p", "commit": "c",
