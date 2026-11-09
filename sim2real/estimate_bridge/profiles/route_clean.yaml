@@ -1,0 +1,6 @@
+# Route Follow in Gazebo (sim2real/route_follow): the plumbing check, no corruption at all.
+# A Mission flight on it says what stock PX4 does with a perfect position, the floor under
+# every other route profile (the mock's "perfect estimate" stress cell).
+name: route_clean
+seed: 1
+estimate: clean
