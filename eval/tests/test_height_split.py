@@ -3,7 +3,12 @@ import math
 import numpy as np
 import pytest
 
-from eval.height_split import ground_offset, height_estimate_error, split_error
+from eval.height_split import (
+    fixed_point_error,
+    ground_offset,
+    height_estimate_error,
+    split_error,
+)
 
 
 def climb(t: np.ndarray, lift_at: float = 10.0, height: float = 2.5) -> np.ndarray:
@@ -71,3 +76,28 @@ def test_height_estimate_error_separates_the_offset_from_what_happened_in_the_ai
     assert still["est_drift_m"] == pytest.approx(0.0, abs=1e-9)
     assert still["est_std_m"] == pytest.approx(0.0, abs=1e-9)
     assert still["est_from_ground_m"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_setpoint_that_follows_an_estimate_reset_is_scored_from_where_the_hold_began():
+    # Stock PX4 after an EKF2 reset: the drone stays put, the setpoint jumps 1 m sideways
+    # half-way. Against the moving setpoint that reads as a 1 m error; against the point
+    # the hold began at, the drone never left. The frame's height offset comes out too.
+    n = 1000
+    pos = np.tile([0.0, 0.0, 2.5], (n, 1))
+    sp = np.tile([0.0, 0.0, 2.8], (n, 1))
+    sp[n // 2:, 1] = 1.0
+    f = fixed_point_error(pos, sp, 0.3)
+    assert f["setpoint_moved_m"] == pytest.approx(1.0)
+    assert f["p95_fixed_no_offset_m"] == pytest.approx(0.0, abs=1e-9)
+    assert split_error(pos - sp, 0.3)["p95_no_offset_m"] == pytest.approx(1.0)
+
+
+def test_a_fixed_hold_point_changes_nothing_for_a_hold_that_has_one():
+    rng = np.random.default_rng(3)
+    pos = np.array([0.0, 0.0, 2.5]) + 0.1 * rng.standard_normal((500, 3))
+    sp = np.tile([0.0, 0.0, 2.7], (500, 1))
+    f = fixed_point_error(pos, sp, 0.2)
+    assert f["setpoint_moved_m"] == 0.0
+    same = split_error(pos - sp, 0.2)["p95_no_offset_m"]
+    assert f["p95_fixed_no_offset_m"] == pytest.approx(same)
+    assert math.isnan(fixed_point_error(pos, sp, math.nan)["p95_fixed_no_offset_m"])

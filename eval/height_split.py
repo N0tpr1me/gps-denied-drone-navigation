@@ -14,9 +14,17 @@ off (``docs/baseline.md``, "What moved tuned PX4 from 0.43 to 0.51 m").
 Per flight this prints the 95th percentile of the error as scored, of its horizontal and
 vertical parts, the estimator's height minus the truth on the ground before lift-off, and
 the vertical and total p95 with that one number taken out. Whatever the estimate does after
-lift-off (drift, jumps, a frozen height) stays in: that is real hold error. A diagnostic
-read-out of flown batches, not a run and not the scorer; the headline numbers stay
-``eval.metrics``' until ``docs/decisions.md`` says otherwise.
+lift-off (drift, jumps, a frozen height) stays in: that is real hold error.
+
+The last column scores against a FIXED hold point, the setpoint at the start of the scored
+window, with the offset out. Structure Hold's hold point is fixed already, so nothing
+changes for it. Stock PX4 moves its setpoint when EKF2 resets (it holds the jumped
+estimate rather than fly back), and the stock runner scores against that moving setpoint;
+the hold runner and ``eval/partner_session.py`` score against a fixed point. The column
+puts both controllers on the fixed one.
+
+A diagnostic read-out of flown batches, not a run and not the scorer; the headline numbers
+stay ``eval.metrics``' until ``docs/decisions.md`` says otherwise.
 
     python -m eval.height_split runs/pooled_tuned_seeds1-8.json runs/pooled_v22_seeds1-8.json
     python -m eval.height_split --per-seed runs/<batch>/batch.json
@@ -39,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LIFT_M = 0.2             # truth height above its first sample that counts as off the ground
 GROUND_SPAN_S = (3.0, 0.5)  # the offset is the mean from 3 s to 0.5 s before lift-off
 FIELDS = ("p95_m", "h_p95_m", "v_p95_m", "ground_offset_m", "v_p95_no_offset_m",
-          "p95_no_offset_m")
+          "p95_no_offset_m", "p95_fixed_no_offset_m", "setpoint_moved_m")
 SMOOTH_S = 5.0           # "slow" drift of the height estimate: the range of its 5 s mean
 EST_FIELDS = ("est_mean_m", "est_std_m", "est_drift_m", "est_from_ground_m")
 
@@ -97,6 +105,20 @@ def split_error(err: np.ndarray, offset_m: float) -> dict[str, float]:
     return out
 
 
+def fixed_point_error(pos: np.ndarray, sp: np.ndarray, offset_m: float) -> dict[str, float]:
+    """p95 of the true position against the setpoint at the START of the window (one fixed
+    point for the whole hold) with the ground offset out, and how far the setpoint itself
+    travelled from there (0 for Structure Hold; a metre and more when stock PX4 follows an
+    EKF2 reset)."""
+    err = pos - sp[0]
+    out = {"p95_fixed_no_offset_m": math.nan,
+           "setpoint_moved_m": float(np.max(np.linalg.norm(sp - sp[0], axis=1)))}
+    if math.isfinite(offset_m):
+        out["p95_fixed_no_offset_m"] = float(np.percentile(
+            np.linalg.norm(err + np.array([0.0, 0.0, offset_m]), axis=1), 95))
+    return out
+
+
 def flight_split(run: Path) -> dict[str, float]:
     """One flight folder of either runner: the stock hover (``metrics.json``, setpoint from
     the log) or a Structure Hold flight (``hold.json``, the module's hold point)."""
@@ -123,7 +145,7 @@ def flight_split(run: Path) -> dict[str, float]:
     eo = np.argsort(te)
     up_est = np.interp(t, te[eo], ned_to_enu(est["x"], est["y"], est["z"])[eo, 2])
     offset = ground_offset(t, up_truth, up_est)
-    return {**split_error(pos - sp, offset),
+    return {**split_error(pos - sp, offset), **fixed_point_error(pos, sp, offset),
             **height_estimate_error(t, up_truth, up_est, (float(window[0]), float(window[1])),
                                     offset)}
 
@@ -146,8 +168,9 @@ def batch_split(batch_file: Path) -> dict[str, Any]:
 def table(split: dict[str, Any], per_seed: bool) -> str:
     lines = [f"`{split['label']}` (`{split['params']}`), mean over seeds; m", "",
              "| scenario | n | p95 as scored | horizontal p95 | vertical p95 | height offset "
-             "on the ground, mean (min to max) | vertical p95, offset out | p95, offset out |",
-             "|---|---|---|---|---|---|---|---|"]
+             "on the ground, mean (min to max) | vertical p95, offset out | p95, offset out "
+             "| p95, offset out, fixed hold point | setpoint moved, worst |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     scenarios = list(dict.fromkeys(r["scenario"] for r in split["rows"]))
     for sc in scenarios:
         rows = [r for r in split["rows"] if r["scenario"] == sc]
@@ -157,7 +180,9 @@ def table(split: dict[str, Any], per_seed: bool) -> str:
             f"| {sc} | {len(rows)} | {mean['p95_m']:.3f} | {mean['h_p95_m']:.3f} "
             f"| {mean['v_p95_m']:.3f} | {mean['ground_offset_m']:+.3f} "
             f"({np.nanmin(off):+.3f} to {np.nanmax(off):+.3f}) "
-            f"| {mean['v_p95_no_offset_m']:.3f} | {mean['p95_no_offset_m']:.3f} |")
+            f"| {mean['v_p95_no_offset_m']:.3f} | {mean['p95_no_offset_m']:.3f} "
+            f"| {mean['p95_fixed_no_offset_m']:.3f} "
+            f"| {max(r['setpoint_moved_m'] for r in rows):.2f} |")
     lines += ["", "EKF2 height minus true height over the scored hold, mean over seeds; m", "",
               "| scenario | mean | std within a hold | slow drift (range of the "
               f"{SMOOTH_S:.0f} s mean), mean (worst) | mean minus the offset on the ground |",
@@ -171,13 +196,15 @@ def table(split: dict[str, Any], per_seed: bool) -> str:
             f"| {mean['est_from_ground_m']:+.3f} |")
     if per_seed:
         lines += ["", "| scenario | seed | p95 as scored | horizontal p95 | vertical p95 "
-                  "| height offset on the ground | vertical p95, offset out | p95, offset out |",
-                  "|---|---|---|---|---|---|---|---|"]
+                  "| height offset on the ground | vertical p95, offset out | p95, offset out "
+                  "| p95, offset out, fixed hold point | setpoint moved |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for r in split["rows"]:
             lines.append(
                 f"| {r['scenario']} | {r['seed']} | {r['p95_m']:.3f} | {r['h_p95_m']:.3f} "
                 f"| {r['v_p95_m']:.3f} | {r['ground_offset_m']:+.3f} "
-                f"| {r['v_p95_no_offset_m']:.3f} | {r['p95_no_offset_m']:.3f} |")
+                f"| {r['v_p95_no_offset_m']:.3f} | {r['p95_no_offset_m']:.3f} "
+                f"| {r['p95_fixed_no_offset_m']:.3f} | {r['setpoint_moved_m']:.2f} |")
     return "\n".join(lines)
 
 

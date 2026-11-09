@@ -1663,6 +1663,12 @@ That is the whole 0.43 to 0.51. With the offset taken out, tuned PX4 scores 0.41
 either setting and v22 0.20 m, and the true flight paths of paired flights agree to a
 centimetre.
 
+A second scoring difference came out of the same work and points the other way: tuned PX4
+is scored against a setpoint that PX4 itself moves after an estimate reset, Structure Hold
+against a fixed hold point. Put both on a fixed point, with the offset out, and tuned PX4
+is 0.33 m and v22 0.20 m: **about 40 % tighter, like for like**. As scored today it is 34
+to 46 %; the scorer is not changed here, both corrections are one Proposed row for Zain.
+
 It is not the image (v22 on vision height on the cloud image scores the Mac's number), not
 machine load (every flight ran at real time) and not a tuning gap (below).
 
@@ -1765,8 +1771,9 @@ What the table says:
 - **v22's margin as scored is squeezed by the same constant.** Adding the same 0.2 m to
   both controllers' vertical error takes more, in per cent, from the one with the smaller
   error. As scored v22 is 34 to 46 % tighter than tuned PX4; with the offset out 0.198 /
-  0.195 / 0.195 m against 0.407 / 0.403 / 0.406 m, **51 to 52 % tighter**, which is what
-  the vision-height benchmark said (−54 to −55 %, where the offset is zero).
+  0.195 / 0.195 m against 0.407 / 0.403 / 0.406 m, 51 to 52 % tighter, which is what
+  the vision-height benchmark said (−54 to −55 %, where the offset is zero). That is not
+  yet like for like: see the moving setpoint below.
 
 ### Where the offset comes from
 
@@ -1790,6 +1797,58 @@ vision fix is the height and starts at the truth.
 EKF2 frame to the motion-capture frame per run (`align_estimate`), a constant shift
 included. With Gazebo truth nothing does.
 
+### A second difference between the two runners: PX4's moving setpoint
+
+Looking for the offset turned up a second thing the two runners do differently, and this
+one works against tuned PX4. The hold runner scores Structure Hold against one fixed hold
+point for the whole hold. The stock runner scores tuned PX4 against PX4's own setpoint,
+and PX4 moves that setpoint when EKF2 resets: it holds the jumped estimate rather than fly
+back. On seeds 1 and 6 the setpoint travels 1.2 to 1.5 m during the hold (0.1 to 0.2 m on
+the other six), and the true position is then scored against a point the drone was never
+asked to return to. `eval/partner_session.py` scores a partner's flights against the
+setpoint at the start of the hold for both controllers (`docs/eval-kit.md` noted the
+difference on its sample). `eval.height_split`'s last column does the same for a Gazebo
+batch: tuned PX4 against its setpoint at the start of the scored window, offset out.
+
+| tuned PX4, mean p95 over 8 seeds (m) | calm | 4 m/s | 8 m/s | 10 m/s | 12 m/s |
+|---|---|---|---|---|---|
+| as scored (moving setpoint, offset in) | 0.494 | 0.514 | 0.529 | 0.502 | 0.492 |
+| offset out, moving setpoint | 0.407 | 0.403 | 0.406 | 0.408 | 0.411 |
+| offset out, fixed hold point | **0.327** | **0.325** | **0.329** | **0.331** | **0.336** |
+| the same on `EKF2_HGT_REF` 1 | 0.327 | 0.324 | 0.326 | | |
+
+Per seed, calm (4 and 8 m/s are within 0.03 m of it): 0.650, 0.158, 0.337, 0.167, 0.218,
+0.738, 0.231, 0.120 m. Seeds 1 and 6 are still tuned PX4's bad seeds, at 0.65 and 0.74 m
+of real movement instead of 0.90 and 1.10 m; the other six barely change.
+
+Structure Hold's numbers do not change (its hold point is fixed already), so on the same
+footing for both controllers, a fixed hold point and the height offset out:
+
+| scenario | tuned PX4 | v22 | change |
+|---|---|---|---|
+| calm | 0.327 | 0.198 | **−39 %** |
+| 4 m/s | 0.325 | 0.195 | **−40 %** |
+| 8 m/s | 0.329 | 0.195 | **−41 %** |
+| 10 m/s (v22 with the rangefinder) | 0.331 | 0.192 | −42 % |
+| 12 m/s (v22 with the rangefinder) | 0.336 | 0.216 | −36 % |
+
+This is the like-for-like number: how far each drone really was from where it was asked to
+stay. It also applies backwards. Every tuned-PX4 table in this file was scored against the
+moving setpoint, so the −54 to −55 % of the vision-height benchmark carries the same
+advantage for Structure Hold; those flights (Mac, `runs/` not kept in the cloud) were not
+re-scored here.
+
+### An independent check from the RTK truth work
+
+`docs/rtk-truth.md` ("Checked in Gazebo", `eval/rtk_check.py` `ekf_frame_offset_m`, PR
+#164) scored six cloud flights on `wall1m_wind_4ms` through the partner path, which fits
+EKF2's frame to the truth over the take-off. It measured the same thing from the other
+side: an EKF2-against-world height offset of 0.04 to 0.27 m that varies by seed, adds up
+to 0.03 m to p95 and 0.06 m to rms on those flights (v22 seed 1: 0.202 m as scored, 0.178 m
+with the offset fitted out; one discarded flight 0.348 against 0.174 m), and it notes the
+moving-setpoint difference between the runners as well. Two tools, two sets of flights,
+one finding.
+
 ### Is tuned PX4 still properly tuned on barometer height?
 
 Yes. It is not settling off height; it holds the height it was given, and the height it
@@ -1812,9 +1871,9 @@ for a re-tune, so the tuned set is unchanged and no decision row proposes changi
 Tuned PX4's 0.41 m is horizontal: seeds 1 and 6 (0.9 and 1.1 m), where PX4 moves its own
 setpoint after the estimate jumps, as in every table above.
 
-What a buyer should hear: the comparison is fair on either scoring, because both
-controllers carry the same offset; scored as today the margin is understated (34 to 46 %),
-with the offset removed it is 51 to 52 %.
+What a buyer should hear: nothing needs tuning, and the offset is the same for both
+controllers. The number to stand behind is the like-for-like one above, about 40 %
+tighter than tuned PX4 (0.20 against 0.33 m), with no crash for either.
 
 ### EKF2's height against the truth during the hold (for the mock and the next policy)
 
@@ -1884,7 +1943,9 @@ scenarios:
 | wall1m_wind_8ms | 0.377 (0.535) → **0.257 (0.453), −32 %** | 0.091 (0.174) → 0.056 (0.098), −38 % | 0.318 → 0.196, −38 % | 0.196 → 0.185, −6 % | −0.014 → +0.016 | 0/8 → 0/8 |
 
 Against tuned PX4 v24 is 44 / 47 / 51 % tighter as scored (v22 with the rangefinder 31 /
-39 / 29 %) and 70 to 75 % less toward the wall. It is also smoother: rate roughness 1.35 /
+39 / 29 %) and 70 to 75 % less toward the wall; like for like (offset out, fixed hold
+point for tuned PX4) v24 is 45 / 44 / 44 % tighter and v22 with the rangefinder 38 / 38 /
+40 %. It is also smoother: rate roughness 1.35 /
 1.59 / 1.97 against v22's 2.2, thrust roughness 0.09 against 0.16, and it stays further
 from the wall at its closest (0.89 to 0.91 m against 0.83 to 0.85 m). Its mean lift is
 +0.3 to +1.6 cm, inside the soft rule (under 5 cm); the worst single seed sits 0.16 to
@@ -1907,11 +1968,15 @@ until then.
   0.325 m (−34 %), 0.514 → 0.328 m (−36 %), 0.529 → 0.286 m (−46 %); toward the wall −64 /
   −60 / −50 %; 0 crashes for either.
 - **With the pre-take-off height offset out**: 0.407 → 0.198 m, 0.403 → 0.195 m, 0.406 →
-  0.195 m (−51 / −52 / −52 %).
-- **Proposed** (`docs/decisions.md`, 2026-11-09): the Gazebo scorers remove the height
-  offset the estimator had on the ground before lift-off, as `eval/partner_session.py`
-  already does for a partner's flights, so that a number means hold error and not where
-  the barometer happened to start. Until Zain decides, `eval.metrics` is unchanged and the
-  as-scored numbers are the benchmark.
+  0.195 m (−51 / −52 / −52 %). This still scores tuned PX4 against its moving setpoint.
+- **Like for like, offset out and a fixed hold point for both**: 0.327 → 0.198 m, 0.325 →
+  0.195 m, 0.329 → 0.195 m (−39 / −40 / −41 %).
+- **Proposed** (`docs/decisions.md`, 2026-11-09): the Gazebo scorers (a) remove the height
+  offset the estimator had on the ground before lift-off and (b) score both controllers
+  against the setpoint at the start of the hold, as `eval/partner_session.py` already does
+  for a partner's flights, so that a number means how far the drone was from where it was
+  asked to stay. (a) moves the headline up, (b) moves it down; together it lands at about
+  40 %. Until Zain decides, `eval.metrics` is unchanged and the as-scored numbers are the
+  benchmark.
 - The tuned parameters are unchanged. `EKF2_HGT_REF` stays 0, as `eval/log_health.py`
   asks.
