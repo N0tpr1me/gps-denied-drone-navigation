@@ -9,11 +9,17 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from envs.disturbance import DisturbanceConfig  # noqa: E402
+from envs.disturbance import NOMINAL_K_QUAD, DisturbanceConfig  # noqa: E402
 from envs.estimate import EstimateCorruptionConfig  # noqa: E402
 from envs.sims.torch_quad import GRAVITY, quat_rotate  # noqa: E402
 from envs.structure_hold import NUM_ACTIONS, StructureHoldConfig, StructureHoldEnv  # noqa: E402
-from envs.structure_hold.airframes import airframe_config, gz_x500, px4_allocation  # noqa: E402
+from envs.structure_hold.airframes import (  # noqa: E402
+    airframe_config,
+    gz_x500,
+    gz_x500_sitl,
+    px4_allocation,
+    small_300g,
+)
 from envs.structure_hold.config import Actuation, AirframeRandomization  # noqa: E402
 
 
@@ -190,3 +196,65 @@ def test_gz_x500_sitl_hovers_and_its_estimate_follows_the_truth():
         env.step(hover_action(env))
     assert (env.sim.state.pos[:, 2] - z0).abs().max() < 0.02
     assert (env.estimate_pos - env.sim.state.pos).norm(dim=1).max() < 0.02
+
+
+def test_small_300g_has_its_published_numbers_and_the_x500s_tuned_loop():
+    x, s3 = gz_x500(), small_300g()
+    q = s3["quad"]
+    # Starling 2: 285 g, 4 x 185 g of thrust (thrust/weight 2.6).
+    assert q["mass"] == pytest.approx(0.285)
+    assert q["max_thrust"] == pytest.approx(4 * 0.185 * GRAVITY)
+    assert q["max_thrust"] / (q["mass"] * GRAVITY) == pytest.approx(2.6, abs=0.01)
+    assert 3e-4 < q["inertia"][0] < 1e-3 and q["inertia"][2] > q["inertia"][0]
+    assert q["motor_tau"] == pytest.approx(0.012)
+
+    # Autotune's equal rise time: rate P x torque per unit / inertia is the x500's, per axis.
+    def loop(c):
+        return (np.asarray(c["rate_pid"]["p"]) * np.asarray(c["actuation"]["torque_per_unit"])
+                / np.asarray(c["quad"]["inertia"]))
+
+    np.testing.assert_allclose(loop(s3), loop(x), rtol=1e-9)
+    ratio = np.asarray(s3["rate_pid"]["p"]) / np.asarray(x["rate_pid"]["p"])
+    np.testing.assert_allclose(np.asarray(s3["rate_pid"]["i"]),
+                               np.asarray(x["rate_pid"]["i"]) * ratio, rtol=1e-9)
+    # Only the vehicle differs from the benchmark's PX4 pieces.
+    sitl = gz_x500_sitl()
+    assert s3["dt"] == sitl["dt"] and s3["fusion"] == sitl["fusion"]
+    assert s3["rate_pid"]["gyro_cutoff_hz"] == sitl["rate_pid"]["gyro_cutoff_hz"]
+    assert s3["vision_offset_down_m"] == 0.02
+    # Drag scaled by frontal area: 230 mm against the x500's 492 mm diagonal.
+    lo, hi = s3["disturbance"]["k_quad"]
+    assert (lo, hi) == pytest.approx((0.8 * NOMINAL_K_QUAD * 0.2185, 1.2 * NOMINAL_K_QUAD * 0.2185),
+                                     rel=1e-3)
+
+
+def test_small_300g_hovers_through_the_module_mapping_and_round_trips():
+    # The preset's drag stands unless a config spells k_quad itself (calm() spells it all).
+    assert StructureHoldConfig.from_dict({"airframe": "small_300g"}).disturbance.k_quad[1] < (
+        0.3 * NOMINAL_K_QUAD)
+    cfg = calm("small_300g")
+    assert StructureHoldConfig.from_dict(asdict(cfg)) == cfg
+    env = StructureHoldEnv(cfg, num_envs=3, seed=0)
+    env.reset()
+    z0 = env.sim.state.pos[:, 2].clone()
+    for _ in range(int(2.0 / env.cfg.dt)):
+        env.step(hover_action(env))
+    assert (env.sim.state.pos[:, 2] - z0).abs().max() < 0.02
+    assert (env.estimate_pos - env.sim.state.pos).norm(dim=1).max() < 0.02
+
+
+def test_small_300g_rate_loop_answers_like_the_x500s():
+    """Same loop gain, faster rotors: a roll-rate step reaches 63 % about as fast."""
+    def rise(name):
+        env = StructureHoldEnv(calm(name), num_envs=1, seed=0)
+        env.reset()
+        a = hover_action(env)
+        a[:, 0] = 0.25
+        for k in range(1, 100):
+            env.step(a)
+            if env.sim.state.ang_vel[0, 0] >= 0.63 * 0.25 * env.cfg.max_rate_rad_s:
+                return k * env.cfg.dt
+        return float("inf")
+
+    t_x500, t_small = rise("gz_x500_sitl"), rise("small_300g")
+    assert t_small <= t_x500 + 0.013 and t_small > 0.5 * t_x500

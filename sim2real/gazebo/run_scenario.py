@@ -28,7 +28,7 @@ from pathlib import Path
 import yaml
 
 from sim2real.gazebo.params_io import write_params
-from sim2real.gazebo.scenario import load_scenario, sample_scenario
+from sim2real.gazebo.scenario import load_scenario, payload_environment, sample_scenario
 from sim2real.gazebo.verify_trace import verify
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -86,16 +86,18 @@ def make_run_dir(runs_dir: Path, name: str) -> Path:
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
-                   name: str) -> list[str]:
-    return [
+                   name: str, env: dict[str, str] | None = None) -> list[str]:
+    cmd = [
         "docker", "run", "--rm", "--name", name,
         "-v", f"{out}:/out",
         "-e", f"PX4_GZ_WORLD={WORLD}",
         "-e", f"PX4_GZ_MODEL_POSE={pose}",
         "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
         "-e", "STRUCTURE_HOLD_WIND_TRACE=/out/wind_trace.csv",
-        image, "hover-test", "--altitude", str(altitude), "--hover-s", str(hover_s),
     ]
+    for k, v in (env or {}).items():
+        cmd += ["-e", f"{k}={v}"]
+    return cmd + [image, "hover-test", "--altitude", str(altitude), "--hover-s", str(hover_s)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,11 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         "image": args.image, "world": WORLD, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hover_s": hover_s, "disturbance": params_summary(params),
+        "payload": sc.payload.__dict__,
     }
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
-                         args.container_name)
+                         args.container_name, payload_environment(sc))
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     hover_status = subprocess.run(cmd).returncode

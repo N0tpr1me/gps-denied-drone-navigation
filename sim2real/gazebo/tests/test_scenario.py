@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 
 from envs.disturbance import disturbance_force, wind_velocity
-from sim2real.gazebo.scenario import SCENARIO_DIR, Scenario, load_scenario, sample_scenario
+from sim2real.gazebo.scenario import (
+    SCENARIO_DIR,
+    Scenario,
+    load_scenario,
+    payload_environment,
+    sample_scenario,
+)
 
 NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
          "wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
@@ -89,3 +95,28 @@ def test_unknown_keys_are_rejected():
         Scenario.from_dict({"name": "x", "wind": {}})
     with pytest.raises(ValueError, match="wall"):
         Scenario.from_dict({"name": "x", "wall": {"normal_toward": [0, 0, 0]}})
+
+
+PAYLOADS = [f"{base}_payload{pct}" for base in ("wall1m_calm_0ms", "wall1m_wind_8ms")
+            for pct in (25, 50)]
+
+
+@pytest.mark.parametrize("name", PAYLOADS)
+def test_payload_copies_differ_only_in_name_and_payload(name):
+    # docs/airframe-sizes.md: 25 % and 50 % of the x500's 2.064 kg, same wind and seed.
+    pct = int(name.rsplit("payload", 1)[1])
+    base, heavy = load_scenario(name.rsplit("_payload", 1)[0]), load_scenario(name)
+    assert heavy.payload.mass_kg == pytest.approx(2.0643 * pct / 100, abs=1e-3)
+    assert base.payload.mass_kg == 0.0
+    assert replace(heavy, name=base.name, payload=base.payload) == base
+    assert payload_environment(base) == {}
+    env = payload_environment(heavy)
+    assert float(env["STRUCTURE_HOLD_PAYLOAD_KG"]) == heavy.payload.mass_kg
+    assert float(env["STRUCTURE_HOLD_PAYLOAD_OFFSET_M"]) == 0.05
+
+
+def test_payload_rejects_negative_mass():
+    with pytest.raises(ValueError):
+        Scenario.from_dict({"name": "x", "payload": {"mass_kg": -1.0}})
+    with pytest.raises(TypeError):
+        Scenario.from_dict({"name": "x", "payload": {"kg": 1.0}})
