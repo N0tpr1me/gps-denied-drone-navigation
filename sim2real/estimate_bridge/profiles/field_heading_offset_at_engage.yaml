@@ -1,0 +1,14 @@
+# Heading-error profile (docs/heading-error.md): vio_default's delay, noise and bias walk, its
+# random jumps and dropouts off, and EKF2's heading 30 deg clockwise of the truth from takeoff
+# on, through the vision yaw (sim2real/estimate_bridge/vision_yaw.py): a compass already wrong
+# where the drone takes off and engages, next to a steel deck or tower. Every position-to-tilt
+# loop then works in a frame turned 30 deg, and the module takes the wrong heading as the
+# wall's normal.
+# This copy is for the hold runner (keyed to the engage); the _at_hover twin differs only in its anchor.
+name: field_heading_offset_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+vision_yaw: {offset_deg: 30.0}

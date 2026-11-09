@@ -10,6 +10,7 @@ import numpy as np
 from envs.disturbance import DisturbanceConfig
 from envs.estimate import EstimateCorruptionConfig
 from envs.estimate.ekf import FusionConfig
+from envs.estimate.heading import HeadingErrorConfig
 from envs.sims import QuadParams, RatePidGains
 from envs.structure_hold.airframes import airframe_config
 from eval.metrics import CONTACT_RADIUS_M
@@ -407,6 +408,9 @@ class StructureHoldConfig:
     range: RangeSensor = field(default_factory=RangeSensor)
     vision_offset_down_m: float = 0.0
     fusion: FusionConfig = field(default_factory=FusionConfig)
+    # The estimator's heading off the true one (a compass near steel; envs/estimate/heading.py,
+    # docs/heading-error.md). Off by default.
+    heading_error: HeadingErrorConfig = field(default_factory=HeadingErrorConfig)
 
     def __post_init__(self) -> None:
         if self.vision_offset_down_m < 0:
@@ -457,6 +461,7 @@ class StructureHoldConfig:
             "sensor_noise": SensorNoise.from_dict,
             "range": RangeSensor.from_dict,
             "fusion": FusionConfig.from_dict,
+            "heading_error": HeadingErrorConfig.from_dict,
         }
         for key, build in nested.items():
             if key in d:

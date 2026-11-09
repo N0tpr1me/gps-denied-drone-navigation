@@ -131,3 +131,14 @@ def test_docker_command_watch_publishes_the_browser_view(tmp_path):
     cmd = run_estimate.docker_command("img", tmp_path, "-2,0,0,0,0,0", 2.5, 60.0, "c", {},
                                       watch=True)
     assert "WATCH=1" in cmd and cmd.index("6080:6080") < cmd.index("img")
+
+
+def test_estimate_error_reports_the_heading_error_across_the_wrap():
+    topics = synthetic_topics()
+    n = topics[TRUTH]["x"].size
+    topics[TRUTH]["heading"] = np.full(n, np.pi - 0.1)
+    topics[ESTIMATE]["heading"] = np.full(n, -np.pi + 0.2)  # 0.3 rad clockwise of the truth
+    h = estimate_error(topics, START, (7.0, 11.0))["heading_error"]
+    assert abs(h["mean_deg"] - np.degrees(0.3)) < 1e-6
+    assert abs(h["max_abs_deg"] - np.degrees(0.3)) < 1e-6
+    assert estimate_error(synthetic_topics(), START, (7.0, 11.0))["heading_error"] is None

@@ -92,8 +92,21 @@ def estimate_error(topics, start_us: int, window: tuple[float, float] | None) ->
             return None
         return int(np.ptp(np.asarray(est[key])[first][in_win]))
 
+    heading = None
+    if "heading" in est and "heading" in truth:
+        # EKF2's heading minus the true one (NED yaw, degrees, + clockwise), on the truth's
+        # time base: the heading error a vision_yaw profile puts in (vision_yaw.py).
+        tt_all = _seconds(truth, start_us)
+        ht = np.asarray(truth["heading"], dtype=float)
+        if window is not None:
+            ht = ht[(tt_all >= window[0]) & (tt_all <= window[1])]
+        he = np.unwrap(np.asarray(est["heading"], dtype=float)[first])
+        d = np.degrees(np.angle(np.exp(1j * (np.interp(tt, te, he) - ht))))
+        if d.size == tt.size and np.isfinite(d).all():
+            heading = {"mean_deg": float(d.mean()), "max_abs_deg": float(np.abs(d).max())}
     return {
         "samples": int(tt.size),
+        "heading_error": heading,
         "rms_m": float(np.sqrt(np.mean(norm**2))),
         "p95_m": float(np.percentile(norm, 95)),
         "max_m": float(norm.max()),
