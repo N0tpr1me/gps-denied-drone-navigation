@@ -109,6 +109,87 @@ Seed 1 is one of tuned PX4's bad seeds at the flat wall too (0.92 m in
 `docs/near-wall-flow.md`), so this says the worlds and runners work, not by how much v22
 wins; the 8-seed batches on the server do that.
 
+### Eight seeds in Gazebo (2026-11-09, cloud)
+
+`gz_bridge_tuned` and `gz_bridge_v22` of the queue, flown in a cloud container on the
+`cloud_build.sh` image rebuilt from main with the two worlds (Gazebo benchmarks fly in the
+cloud since 2026-11-09, `docs/gpu-server.md`): one flight at a time (`--jobs 1`), each batch in
+two seed halves pooled with `run_baseline --pool`, 24 flights each. Tuned PX4 is
+`px4_tuned_v2.params` in Position mode on `vio_at_hover`; v22 is the hold runner on
+`vio_at_engage` with `--rangefinder`. Mean p95 error over 8 seeds (worst seed in brackets):
+
+| Scenario | Tuned PX4 | v22 | Change | Furthest toward the face, worst seed (tuned, v22) | Crashes |
+| --- | --- | --- | --- | --- | --- |
+| `deck_corner_8ms_flow` | 0.493 m (1.131) | 0.351 m (0.523) | -29 % | 0.48 m and 0.18 m | 0 and 0 |
+| `deck_open_8ms_flow` | 0.492 m (1.110) | 0.318 m (0.526) | -35 % | 0.48 m and 0.22 m | 0 and 0 |
+| `pier_lee_8ms_flow` | 0.520 m (1.140) | 0.384 m (0.492) | -26 % | 0.49 m and 0.16 m | 0 and 0 |
+
+| p95 per seed | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | Median |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Deck corner, tuned | 0.905 | 0.179 | 0.472 | 0.281 | 0.316 | 1.131 | 0.306 | 0.358 | 0.337 |
+| Deck corner, v22 | 0.384 | 0.205 | 0.523 | 0.483 | 0.176 | 0.332 | 0.397 | 0.307 | 0.358 |
+| Deck open, tuned | 0.925 | 0.173 | 0.476 | 0.378 | 0.288 | 1.110 | 0.328 | 0.261 | 0.353 |
+| Deck open, v22 | 0.267 | 0.321 | 0.389 | 0.265 | 0.146 | 0.526 | 0.333 | 0.300 | 0.311 |
+| Pier wake, tuned | 0.898 | 0.370 | 0.525 | 0.311 | 0.224 | 1.140 | 0.324 | 0.369 | 0.369 |
+| Pier wake, v22 | 0.407 | 0.306 | 0.482 | 0.492 | 0.241 | 0.339 | 0.454 | 0.352 | 0.380 |
+
+What it says:
+
+- **The go check passes**: v22's mean p95 is below tuned PX4's in all three scenarios and
+  neither crashed in 48 flights, so the fine-tune (`bridge_ft_*`) stays off.
+- **The margin is 26 to 35 % and it is not even across seeds.** The last flat-wall benchmark
+  had v22 43 to 45 % below tuned PX4 (`docs/baseline.md`), but it was flown before
+  `EKF2_HGT_REF` moved to 0 and is being flown again, so the two are not yet comparable.
+  Tuned PX4 itself does here what it does at the flat wall on current main (0.49 to 0.53 m,
+  `experiments/LOG.md` 2026-11-09 17:35): the deck and the wake cost it nothing measurable.
+  The gain comes from tuned PX4's two bad seeds, 1 and 6 (0.9 to 1.1 m in every scenario), where
+  v22 holds 0.27 to 0.53 m. Over the other six seeds the two are level (deck corner 0.32
+  against 0.35 m for v22, deck open 0.32 against 0.29 m, pier wake 0.35 against 0.39 m), the
+  medians are level, and v22 is the tighter of the two on 4, 5 and 5 of the 8 seeds.
+- **What v22 does buy here is the bad case and the distance to the structure.** Its worst
+  seed is half of tuned PX4's (0.49 to 0.53 m against 1.1 m), and it comes 0.06 to 0.08 m
+  toward the abutment or pier face on average (worst 0.22 m) where tuned PX4 comes 0.20 m
+  (worst 0.49 m, half of the 1 m standoff). Under the deck both keep their height margin:
+  the closest either came to the underside was 1.19 m (tuned PX4) and 1.33 m (v22) of the
+  1.5 m asked for.
+- v22's error here is as much height as position: its largest height error in a hold was
+  0.26 to 0.35 m on average (0.5 m at worst) against 0.22 to 0.23 m sideways, and larger
+  than the sideways one in 15 of the 24 flights. v22 was trained and gated on vision height
+  and flies here on the barometer (`docs/baseline.md`), which probably matters more to these
+  numbers than the deck's or the pier's air does; these flights do not separate the two.
+- The mock had v22 at 0.18 to 0.20 m in these cells (about 45 % under the PD). Gazebo's
+  0.32 to 0.38 m is 1.6 to 2 times that, so the mock's verdict (holds under a deck and in a
+  wake, no crash) carries and its sizes do not.
+
+Run quality. The real-time factor was sampled every 15 s inside the container (295 samples,
+mean 0.99) and by the stock runner over each hover. Six flights showed a momentary dip (four
+tuned PX4 flights with a runner minimum of 0.57 to 0.79 or a sample of 0.33, two v22 flights
+with a sample of 0.38 and 0.81) and were flown again. Then the bridge logs, which print the
+simulation time every 10 s of wall time, showed that no flight of the day ran slow for any
+length of time: every 10 s stretch of all 136 flights (these and the heading batches) ran at
+0.98 or above. The dips are stalls of well under a second, which PX4 and Gazebo, stepping
+together, do not feel. So the first flights are the ones scored above, and the six second
+flights are repeats of the same seed:
+
+| Repeat of | First flight | Second flight |
+| --- | --- | --- |
+| Tuned, pier wake, seed 2 | 0.370 m | 0.367 m |
+| Tuned, pier wake, seed 3 | 0.525 m | 0.476 m |
+| Tuned, deck open, seed 7 | 0.328 m | 0.308 m |
+| Tuned, deck open, seed 8 | 0.261 m | 0.312 m |
+| v22, deck corner, seed 1 | 0.384 m | 0.170 m |
+| v22, deck corner, seed 4 | 0.483 m | 0.348 m |
+
+The same seed does not give the same flight. v22's two repeats moved by 0.14 and 0.21 m (the
+one-seed preview above had seed 1 at 0.265 m, a third value); tuned PX4's four by 0.05 m at
+most. The wind and the estimate noise repeat with the seed, so the likely cause is the moment
+of engage against them, which does not; that was not checked. With the second flights in
+place of the first, v22's deck corner mean would be 0.307 m (-38 %) and the other cells move
+by 0.01 m. A difference of a few centimetres between two 8-seed means is inside this noise.
+
+Runs: `experiments/LOG.md` (2026-11-09, bridge batches); the folders stay in the cloud
+container.
+
 ## On the server
 
 `training/queues/bridge_holds.yaml` (no job needs Zain's yes: all under 1 h, one GPU each,
@@ -117,7 +198,7 @@ at most two at once):
 1. `bridge_check_v22`: the mock check above on the server's GPU; must match the cloud run.
 2. `gz_bridge_image`: rebuild the SITL image so it has the two worlds and the plugin's
    second surface.
-3. `gz_bridge_tuned`, `gz_bridge_v22`: tuned PX4 (`vio_at_hover`) and v22 (hold runner,
+3. `gz_bridge_tuned`, `gz_bridge_v22` (flown in the cloud instead, results above): tuned PX4 (`vio_at_hover`) and v22 (hold runner,
    `vio_at_engage`, `--rangefinder`) in the three scenarios, seeds 1 to 8, 24 flights each.
    Go: v22's mean p95 below tuned PX4's in every scenario with 0 crashes, as at the flat
    wall (`docs/baseline.md`).

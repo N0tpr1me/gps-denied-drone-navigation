@@ -130,7 +130,10 @@ flown in a cloud container one flight at a time (`--jobs 1`, 16-flight batches i
 pooled with `run_baseline --pool`), 80 flights. Gazebo's real-time factor, sampled every 15 s,
 was 0.97 to 1.00 over 465 samples (mean 1.00; one sample at each of 12 flight starts, before
 the simulation runs, left out). The stock runner's own finer sampling caught two tuned drift
-flights dipping to 0.61 and 0.84; both were flown again at 1.00 and the re-flies count. Wind
+flights (seeds 7 and 8) dipping for a moment to 0.61 and 0.84, and both were flown again. The
+bridge logs later showed every 10 s stretch of every flight at 0.98 or above
+(`docs/bridge-holds.md`, run quality), so those dips were stalls of well under a second and
+the first flights are the ones scored; the two second flights are repeats of the same seed. Wind
 into the wall, 1 m, 8 seeds per cell, `px4_tuned_v2.params` with `vision_yaw.params` over it.
 Yardstick: tuned PX4 in Position mode on the same profile. "Held" is a full 60 s scored hold
 with no wall contact. The heading error is what EKF2 really had (EKF2's heading minus Gazebo's,
@@ -138,7 +141,7 @@ from each ulog).
 
 | Batch | Held | Not held | p95 of the holds (mean / worst) | Heading error in the holds |
 | --- | --- | --- | --- | --- |
-| tuned, drift to 30 deg, 4 m/s | 3 of 8 | 5 wall contact | 0.59 / 0.63 m | 0 up to 18 to 22 deg |
+| tuned, drift to 30 deg, 4 m/s | 4 of 8 | 4 wall contact | 0.67 / 0.87 m | 0 up to 18 to 22 deg |
 | **v22**, drift to 30 deg, 4 m/s | **8 of 8** | 0 | 0.23 / 0.32 m | 0 up to 29 to 30 deg |
 | tuned, 30 deg from takeoff, 4 m/s | 3 of 8 | 5 wall contact | 0.61 / 0.68 m | 14 deg mean |
 | tuned, 30 deg from takeoff, 8 m/s | 3 of 8 | 5 wall contact | 0.53 / 0.59 m | 14 deg mean |
@@ -154,7 +157,9 @@ What it says:
 - **The drift batch is the clean comparison, and v22 wins it.** Both controllers start on the
   true heading and the error grows during the hold. v22 held all 8 flights at 0.23 m p95, the
   same as its no-error control, while EKF2's heading went 29 to 30 deg wrong. Tuned PX4 hit the
-  wall in 5 of 8, and its three holds were 0.59 m against 0.24 m in its control.
+  wall in 4 of 8, and its four holds were 0.67 m against 0.24 m in its control. Of the two
+  seeds flown a second time, seed 7 held at 0.87 m the first time and hit the wall the
+  second (2.30 m); seed 8 held both times (0.66 and 0.63 m).
 - **The 30 deg batches say less about v22 than their counts suggest**, because the hold runner
   takes off and hovers in Position mode on the same wrong heading before it engages, and stock
   PX4 is already circling by then. At engage the vehicle was moving at 0.6 to 6.0 m/s; in the
