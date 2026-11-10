@@ -319,7 +319,9 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   rangefinder and lidar; its Gazebo flights (`docs/surface-passes.md`) have neither sensor,
   so they score the pass itself, not its guards. F50 and F52 have no test. A pass has not
   been flown faster than 0.5 m/s outside the mock, and the policy flying it (v22) was not
-  trained on a moving hold point.
+  trained on a moving hold point. The 2 s wait of F51 is a first value, set on one seed's
+  two 1.5 s dropouts and confirmed on the same eight seeds; a dropout of over 2 s while the
+  point moves has not been flown.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump
   along the wall is untested and uncaught.
 - The keep-out (F41 to F45) is tested in unit tests and one SIH lidar case, not in Gazebo

@@ -231,7 +231,8 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   collision-prevention data (`obstacle_distance`, side-facing `distance_sensor`s) keeps the
   hold point of all three modes that far from obstacles other than the structure; not
   avoidance. `structurehold.px4board` also drops the Septentrio GNSS driver so the fmu-v6x
-  build still fits (99.0 % with the pilot status and keep-out).
+  build still fits (99.55 % with the surface pass and the pre-arm VIO check, about 9 KB
+  spare: the next feature needs room made first).
   GPS on (2026-11-02, decided; `docs/field-faults.md` "GPS on"): the envelope allows a GPS or
   RTK receiver fused beside the VIO, with the forward rangefinder required (`SH_WALL_REQ` 1):
   on a 1.5 m GPS jump tuned PX4 hit the wall on 3 of 3 seeds, v22's wall guard held 0.70 m;
@@ -239,10 +240,15 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   not barometer (0); the benchmark set said 1 until 2026-11-02 and flew on the barometer only
   because there was no GPS; it says 0 now (`eval/log_health.py` warns on 1).
 - Surface passes (Nov 2026, `docs/surface-passes.md`): the hold point moves 5 m along or up
-  the wall at the same standoff (mock only). The velocity input is relative to the moving
-  hold point, so no new input: v22 flies passes as it is and the pass training
-  (`structure_hold_ppo_pass.yaml`, queue `training/queues/surface_passes.yaml`) starts from it. Scored Gate 1 style
-  by `eval/configs/gate1_x500_ekf_pass.yaml`. The module and Gazebo do not fly passes yet.
+  the wall at the same standoff. The velocity input is relative to the moving hold point, so
+  no new input: v22 flies passes as it is. Mock: scored Gate 1 style by
+  `eval/configs/gate1_x500_ekf_pass.yaml`. Module (2026-11-10, Proposed): `SH_PASS_LEN`
+  (0 = off, the default), `SH_PASS_DIR`, `SH_PASS_SPD`, `SH_PASS_T0`; the wall guard and
+  keep-out act on the moving point, and the pass waits once the fix is 2 s stale. Gazebo
+  (`wall1m_pass_*`, 8 seeds each, cloud): v22 against tuned PX4 flying the same pass in
+  Offboard on trajectory setpoints (`pass_flight.py`), scored by `eval/pass_score.py`; level
+  with a healthy estimate, v22 ahead on the VIO-jump seed, no crash.
+  PASS_S0_SENTENCE
 - Heading error near steel (2026-11-09, `docs/heading-error.md`): in the mock v22 holds a
   15 deg wrong heading but circles into the wall at 30 deg (100 % crash, the PD holds); the
   server queue `training/queues/heading_error.yaml` trains two heading candidates. In Gazebo

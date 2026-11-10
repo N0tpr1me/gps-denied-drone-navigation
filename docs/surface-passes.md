@@ -190,9 +190,11 @@ Tests:
 | A pole on the line at 3.5 m | `--keep-out --pass-len 5 --pass-pole-m 3.5` | stopped after 2.4 m, closest 0.92 m to the pole with a 1 m keep-out |
 
 The usual sequence (`--wall --keep-out`, 37 checks) still passes with the pass code in and
-off. Flash: `px4_fmu-v6x_structurehold` is at 99.44 % (1,955,032 B, about 11 KB spare; it
-was 99.27 %), so it fits, and the next feature or two of this size will not without making
-room.
+off. Flash: with the pass alone `px4_fmu-v6x_structurehold` was at 99.44 % (1,955,032 B; it
+was 99.27 %), and with the pre-arm VIO check that reached main beside it 99.55 %
+(1,957,192 B of 1920 KB, about 9 KB spare). It fits, and the next feature or two of this
+size will not without making room. After merging main the plain 5 m pass (28 checks) and
+`--prearm` (29 checks) were flown again in SIH and pass.
 
 ## In Gazebo: against tuned PX4 flying the same pass
 
