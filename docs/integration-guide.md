@@ -121,8 +121,11 @@ engage; changing them mid-pass changes nothing until the next one. The same poli
 it: its velocity input is taken relative to the moving point, so nothing else changes.
 
 - The wall guard and the keep-out act on the moving point, as on a still one.
-- While the position fix is stale (`SH_FB_T`) the point brakes and waits, and goes on when
-  the fix is fresh, so a pass through a dropout takes that much longer.
+- A short dropout of the position fix does not hold the pass back: EKF2 dead-reckons and
+  the vehicle follows the point as before. Once the fix has been stale for 2 s the point
+  brakes and waits, and goes on when the fix is fresh, so a pass through a long dropout
+  takes that much longer. With the brake-and-hover fallback on (`SH_FB_EN` 1) it waits from
+  `SH_FB_T` instead, because the vehicle brakes then.
 - The pass ends early, braking to a stop where the point then stays for the rest of the
   hold, when an obstacle seen by the collision-prevention sensors is within the keep-out of
   where the point would come to rest (0.25 m ahead at 0.5 m/s, plus 0.1 m), when the wall

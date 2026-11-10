@@ -6,9 +6,10 @@ pass: the hold point slides along the wall (a girder, a deck underside, a rack f
 same standoff, so the camera sweeps a strip of the surface while the drone keeps its distance.
 `docs/market-research.md` row 12 is the buyer case.
 
-Status (2026-11-04): in the mock, with the PD yardstick, a Gate 1 style scorer, and a training
-config queued for the GPU server. v22 as it is passes the pass set against the PD (below). Not
-in the PX4 module yet, not in Gazebo yet, no policy trained on passes yet.
+Status (2026-11-09): in the mock, with the PD yardstick, a Gate 1 style scorer and a training
+config queued for the GPU server; **in the PX4 module** (`SH_PASS_LEN`, off by default; "In
+the module" below); and **in Gazebo against tuned PX4 flying the same pass** ("In Gazebo"
+below). v22 as it is flies all of it. No policy trained on passes is released yet.
 
 ## What a pass is
 
@@ -127,15 +128,104 @@ yes):
 | `hold_pass`, `hold_pass_s1` | the config on seeds 0 and 1, one GPU each, chained twice (part 2 resumes part 1's `policy.pt`), about 45 min a part | the end-of-run eval beats the PD on passes |
 | `hold_pass_gate` | `gate1_x500_ekf_pass.yaml` with both added as `pass_s0` (judged) and `pass_s1` | PASS against the PD, and a lower p95 than v22 in every cell (v22: 0.16 to 0.21 m) |
 
+## In the module
+
+`sim2real/px4/structure_hold/PassPath.hpp` is the path, plain C++ with no heap, stepped once
+per control tick. Four parameters, clamped in `ParamLimits.hpp` and read at each engage:
+
+| Parameter | Default | Range | What it does |
+| --- | --- | --- | --- |
+| `SH_PASS_LEN` | 0 m (no pass) | -10 to 10 m | How far the hold point moves. Positive to the right of the nose, negative to the left; up and down with `SH_PASS_DIR` 1 |
+| `SH_PASS_DIR` | 0 | 0 or 1 | 0 along the wall, 1 up or down it |
+| `SH_PASS_SPD` | 0.5 m/s | 0.1 to 1 m/s | Cruise speed; it speeds up and slows down at 0.5 m/s^2 |
+| `SH_PASS_T0` | 3 s | 0 to 60 s | The still hold after the engage before the point moves |
+
+With a length set, each engage flies one pass: still for `SH_PASS_T0`, the line at right
+angles to the heading at engage (the engage heading is the wall normal, so that line is
+parallel to the face), then a hold at the end. The policy reads its velocity relative to the
+moving point (`PolicyController.hpp`, `hold_vel_ned`), the one subtraction the mock promised;
+the watchdog's position error, the fallback rule and the status topic follow the moving
+point too (`structure_hold_status.pass_state`, `pass_offset_ned`).
+
+What the module does that the mock's path does not:
+
+- **It waits for the estimate.** While the position fix is older than `SH_FB_T` the point
+  brakes at 0.5 m/s^2 and waits, and goes on when the fix is fresh. The mock's path runs on a
+  clock; a real drone should not chase a point that ran ahead while it could not see.
+- **The guards act on the moving point.** The wall guard moves it back off a face that steps
+  toward the drone and the pass goes on at the new standoff. The keep-out looks ahead along
+  the line: an obstacle within the keep-out of where the point would come to rest (the
+  braking distance plus 0.1 m) ends the pass.
+- **A pass that ends early brakes to a stop** and stays there for the rest of the hold: on
+  that obstacle, when the wall guard has used up `SH_SHIFT_MAX`, or when a pass down comes
+  within 1 m of the ground. The first version stopped the point dead; in SIH the drone then
+  overshot 0.3 m into a 1 m keep-out, which is why it brakes and looks ahead now.
+- **One line per engage.** No raster, no route. The pilot (or a companion computer setting
+  the parameter and the mode) starts the next one. Structure Land and Structure Hover do not
+  fly passes; a handback during a pass starts from where the point was.
+
+The pilot sees `Structure Hold: pass 5.0 m at 0.5 m/s`, then `pass done`, or `pass stopped
+after 2.4 m: keep-out` (`docs/pilot-status.md`, safety manual section 4). The interface is
+in `docs/integration-guide.md` ("Surface pass"), the hazards are F47 to F52 of
+`docs/safety-manual.md` (version 1.10, not signed). The Auterion app (`docs/auterion-app.md`)
+flies the same headers but does not start a pass yet.
+
+Tests:
+
+- `sim2real/px4/tests/test_pass_path.cpp` (CI): the profile against the closed form, 5 m in
+  11 s at 0.5 m/s, both signs, up and down, the wait on a stale fix, the braking stop
+  (before the start, on the move, while waiting, close to the end), the parameter limits.
+  `test_keep_out.cpp` has the look-ahead.
+- PX4 SIH, `sitl_test.sh` with `SITL_EXTRA_ARGS` (2026-11-09, `experiments/LOG.md`):
+
+| Flight | Options | Result |
+| --- | --- | --- |
+| 5 m along | `--pass-len 5` | started 3.1 s after the engage, done 11.0 s later, ended 4.97 m along, never more than 0.18 m behind the point |
+| 3 m up | `--pass-len 3 --pass-up` | done, same checks |
+| A 0.5 m step in the face half way | `--wall --pass-len 5 --pass-wall-step-m 0.5` | the wall guard moved the point back; settled 0.79 m from the stepped face, closest 0.57 m, the pass finished |
+| A pole on the line at 3.5 m | `--keep-out --pass-len 5 --pass-pole-m 3.5` | stopped after 2.4 m, closest 0.92 m to the pole with a 1 m keep-out |
+
+The usual sequence (`--wall --keep-out`, 37 checks) still passes with the pass code in and
+off. Flash: `px4_fmu-v6x_structurehold` is at 99.43 % (1,954,944 B, about 11 KB spare; it
+was 99.27 %), so it fits, and the next feature of this size will not without making room.
+
+## In Gazebo: against tuned PX4 flying the same pass
+
+The yardstick is stock PX4 with the tuned set (`eval/baselines/px4_tuned_v2.params`) flying
+the same moving point the way an integrator would without the module: **Offboard mode with
+trajectory setpoints** (`sim2real/px4/pass_flight.py`: position, velocity and acceleration
+of the same trapezoid at 50 Hz, the feedforward PX4's position controller is built to use).
+That is a fair, strong baseline: it knows the path exactly and ahead of time.
+
+Three scenarios (`sim2real/gazebo/scenarios/wall1m_pass_*.yaml`: calm, 4 m/s and 8 m/s with
+two gusts, 1 m from the wall): 3 s still, the 5 m pass at 0.5 m/s (11 s), 16 s still at the
+end, 30 s in all. To keep the two like for like:
+
+- both controllers start their hold when PX4's clock reads 60 s (`pass.engage_at_s`), so
+  both meet the same gusts at the same point of the pass (each seed puts its two gusts 6 to
+  18 s into the hold: in the cruise or in the hold at the end);
+- the same estimate profile (`vio_at_engage`: the scripted VIO jumps and dropouts start at
+  the engage, which for stock PX4 is the switch to Offboard);
+- both scored by `eval/metrics.py` on Gazebo's **true** position against the moving point
+  (`eval/pass_score.py`), over the same 28 s (the 30 s less the first 2 s after the engage,
+  as the hold benchmark trims); crash and wall contact judged on it;
+- one flight at a time in a cloud container, real-time factor recorded per flight.
+
+Beside the 3-D p95 the table has the error along the wall normal (the standoff, the camera's
+distance to the surface) and along the pass (how far behind or ahead of the point).
+
+RESULTS_PLACEHOLDER
+
 ## Not done yet
 
-- **The module.** A pass needs the module to move its own hold point: a path generator like
-  `passes.py` (C++, no heap), the velocity input made relative to it, the wall guard and
-  keep-out applied to the moving point, and a way for the pilot or a mission to start a pass
-  (a direction and a length). Its parameters and the safety manual's envelope change with it.
-- **Tuned PX4 on the same pass.** The real yardstick is stock PX4 flying the same moving
-  setpoint (offboard trajectory setpoints, or a short mission) in Gazebo, scored on true
-  position, as Gate 2 does for the hold. That needs Gazebo pass scenarios and the
-  `run_baseline` runner taught to move the setpoint; it waits for the server's CPU lane.
-- **Curved and stepped surfaces.** The wall is a flat plane; a pass along a curved pier face
-  or across a ledge is not modelled.
+- **A policy trained on passes.** v22 never trained on a moving hold point. The server queue
+  (`training/queues/surface_passes.yaml`) trains two; one that passes its mock gate and the
+  release check gets these same Gazebo batches before it can replace v22 on passes.
+- **Guards in Gazebo.** The Gazebo pass flights have no rangefinder and no lidar, so they
+  score the pass, not the wall guard or the keep-out on it; those are SIH only.
+- **Faster, longer, up the wall.** Gazebo flew 5 m along at 0.5 m/s. 1 m/s, a pass up a pier
+  and the raster are mock only.
+- **A raster or a route in the module.** One line per engage; chaining lines is the
+  integrator's for now.
+- **Curved and stepped surfaces.** The wall is a flat plane; the module's wall guard follows
+  a step (SIH), but a pass along a curved pier face is not modelled anywhere.

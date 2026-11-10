@@ -1134,10 +1134,15 @@ Vector3f StructureHold::passStep(const hrt_abstime now)
 	const float dt = _pass_us > 0 && now > _pass_us ? (now - _pass_us) * 1e-6f : 0.f;
 	_pass_us = now;
 
-	// A stale estimate (the fallback's own threshold) brakes the point and holds the pass
-	// back: the brake-and-hover fallback then brakes to a hover, and the fix that returns
-	// finds the point about where the vehicle stopped, not seconds of pass ahead of it.
-	const PassStep step = _pass.step(dt, _stale_s >= _param_fb_t.get());
+	// The point waits while the vehicle does not follow it (passWaits, PassPath.hpp): the
+	// brake-and-hover fallback brakes to a hover on a stale fix, and the fix that returns
+	// then finds the point about where the vehicle stopped, not seconds of pass ahead of
+	// it. A policy without the fallback flies on through a short dropout, and so does the
+	// point.
+	const FallbackRule &rule = _policy.rule();
+	const bool fallback_on = _param_ctrl.get() == 1 && (rule.enabled || rule.forced);
+	const PassStep step = _pass.step(dt, passWaits(_stale_s, fallback_on,
+				   rule.forced ? 0.f : rule.threshold_s));
 
 	if (step.started) {
 		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: pass %.1f m at %.1f m/s",

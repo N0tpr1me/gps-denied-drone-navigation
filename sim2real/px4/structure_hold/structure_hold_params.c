@@ -514,8 +514,8 @@ PARAM_DEFINE_INT32(SH_HB_RANGE, 1);
  * Positive is to the right as the drone faces the structure, negative to the left; with
  * SH_PASS_DIR 1 positive is up and negative down. The wall guard and the keep-out keep
  * acting on the moving point, a keep-out move ends the pass where it is, and the pass waits
- * while the position estimate is stale. A change takes effect at the next engage. Off by
- * default: 0 is the plain hold.
+ * once the position estimate has been stale for 2 s (from SH_FB_T with the fallback on).
+ * A change takes effect at the next engage. Off by default: 0 is the plain hold.
  *
  * @unit m
  * @min -10.0

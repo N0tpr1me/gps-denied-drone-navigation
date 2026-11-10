@@ -413,6 +413,38 @@ int main()
 		CHECK(near(p.travelled() - before, 0.5f * PassPath::MAX_DT_S, 1e-5f));
 	}
 
+	// When the pass waits for the estimate (passWaits): a short dropout does not hold it
+	// back, PASS_BLIND_S of stale fix does, and with the brake-and-hover fallback on it
+	// waits from the fallback's own take-over time, since the vehicle brakes then.
+	{
+		CHECK(!passWaits(0.f, false, 0.5f));
+		CHECK(!passWaits(1.5f, false, 0.5f));            // the dropouts of the Gazebo profile
+		CHECK(!passWaits(PASS_BLIND_S - 0.01f, false, 0.5f));
+		CHECK(passWaits(PASS_BLIND_S, false, 0.5f));
+		CHECK(passWaits(5.f, false, 0.5f));
+		CHECK(!passWaits(0.49f, true, 0.5f));
+		CHECK(passWaits(0.5f, true, 0.5f));               // as PolicyController's take-over
+		CHECK(passWaits(0.f, true, 0.f));                 // the fallback forced on
+		CHECK(passWaits(1.f, true, 5.f) == false);        // a long take-over time: still
+		CHECK(passWaits(PASS_BLIND_S, true, 5.f));        // PASS_BLIND_S at the latest
+		CHECK(passWaits(NAN, false, 0.5f));
+		CHECK(passWaits(INFINITY, false, 0.5f));
+
+		// A 1.5 s dropout in the cruise: the pass finishes on its trapezoid's time.
+		PassPath p = path(5.f);
+		p.engage(0.f, true);
+		float seconds = 0.f, stale = 0.f;
+
+		for (int i = 0; i < 2000 && p.state() != PassState::Done; i++) {
+			stale = (i >= 400 && i < 550) ? stale + DT : 0.f;
+			p.step(DT, passWaits(stale, false, 0.5f));
+			seconds += DT;
+		}
+
+		CHECK(p.state() == PassState::Done);
+		CHECK(near(seconds, passDuration(5.f, 0.5f, 0.5f), 0.15f));
+	}
+
 	// The policy's velocity input is relative to the hold point (PolicyController.hpp): a
 	// vehicle keeping up with the pass reads as standing still, and a plain hold reads as
 	// before.

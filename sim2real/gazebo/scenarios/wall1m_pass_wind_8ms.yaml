@@ -10,8 +10,8 @@ wind_heading_deg: 0.0
 disturbance:
   mean_speed: 8.0
   num_gusts: 2
-  # The hold starts at 60 s (pass.engage_at_s): the first gust lands in the cruise of the
-  # pass, 6 s in; the second in the hold at its end, 18 s in.
+  # The hold starts at 60 s (pass.engage_at_s): each gust starts 6 to 18 s into it, in the
+  # cruise of the pass or in the hold at its end, wherever the seed puts it.
   gust_start: [66.0, 78.0]
   gust_duration: [1.0, 2.0]
   gust_speed: [2.0, 4.0]

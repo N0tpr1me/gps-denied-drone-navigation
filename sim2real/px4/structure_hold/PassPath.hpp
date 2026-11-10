@@ -22,8 +22,8 @@
  *
  * which is the trapezoid when nothing interferes (the square root is the speed from which
  * accel still stops in the distance left). hold = true brakes the point to a stop at accel
- * and keeps it there; the module sets it while the position estimate is stale, so the
- * brake-and-hover fallback brakes to a hover instead of chasing a point it cannot see. On
+ * and keeps it there; the module sets it once the position estimate has been stale too long
+ * (passWaits below), so the vehicle is not sent after a point it cannot see. On
  * release the pass picks up where it stopped. stop() ends the pass for the rest of the
  * engage (an obstacle in the way): the point brakes the same way and stays where it comes
  * to rest, brakeDistance() further on, which is how far ahead the module looks for the
@@ -220,6 +220,27 @@ private:
 	float _wait_s{0.f};
 	bool _ending{false};  // stop() was called: braking to rest
 };
+
+/** The longest a pass moves on a position fix that has gone stale, s. */
+static constexpr float PASS_BLIND_S = 2.f;
+
+/**
+ * Whether the pass waits for the estimate this tick (``PassPath::step``'s ``hold``).
+ *
+ * A short dropout does not hold the pass back: EKF2 dead-reckons through it and the vehicle
+ * follows the point as before. Braking the point at the fallback's 0.5 s was tried first: two
+ * 1.5 s dropouts in the cruise then braked and restarted it twice, and v22 surged 0.5 m ahead
+ * of it along the wall (Gazebo, docs/surface-passes.md "In Gazebo"). The pass waits when
+ * the vehicle no longer follows the point: the brake-and-hover fallback has taken over
+ * (``fallback_on`` and ``fallback_t_s``), or the fix has been gone ``PASS_BLIND_S``, past
+ * which dead reckoning along a wall is not worth the metres.
+ */
+inline bool passWaits(float stale_s, bool fallback_on, float fallback_t_s)
+{
+	if (!std::isfinite(stale_s)) { return true; }
+
+	return stale_s >= PASS_BLIND_S || (fallback_on && stale_s >= fallback_t_s - 1e-6f);
+}
 
 /** Time a pass of ``length_m`` takes from its start to its stop (the mock's profile), s. */
 inline float passDuration(float length_m, float speed_mps, float accel_mps2)
