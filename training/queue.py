@@ -364,13 +364,16 @@ class Runner:
             if s["status"] in ("running", "blocked", "skipped") or (
                     retry_failed and s["status"] == "failed"):
                 s["status"] = "pending"  # a stopped queue picks these up again
+            if s["status"] == "ok" and not s["parts"]:
+                # Every job that ran has a part on record. "ok" without one is the mark an
+                # earlier --only run used to leave on the jobs it did not run.
+                s["status"] = "pending"
             why = runnable(j, smoke=smoke, device=device, approved=approved)
             if s["status"] == "pending" and why:
                 s["status"], s["why"] = "skipped", why
-        if only:  # jobs outside --only count as done for ordering
-            for j in queue.jobs:
-                if j.id not in only:
-                    self.state.setdefault(j.id, {"status": "ok", "parts": []})
+        # Jobs outside --only count as done for ordering, in this run only. They are not
+        # written to the state: a job marked ok there is skipped by every later run.
+        self.outside_only = [j.id for j in queue.jobs if only and j.id not in only]
         if device == "cuda":
             gpus = free_gpu_indices(nvidia_smi)
         else:
@@ -395,7 +398,8 @@ class Runner:
         tmp.replace(self.state_path)
 
     def status(self) -> dict[str, str]:
-        return {jid: s["status"] for jid, s in self.state.items()}
+        status = {jid: s["status"] for jid, s in self.state.items()}
+        return {**{jid: "ok" for jid in self.outside_only}, **status}
 
     def run_dirs(self) -> dict[str, str]:
         """Each job's last good run folder, for ``{run:ID}``."""
