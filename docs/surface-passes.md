@@ -149,9 +149,13 @@ point too (`structure_hold_status.pass_state`, `pass_offset_ned`).
 
 What the module does that the mock's path does not:
 
-- **It waits for the estimate.** While the position fix is older than `SH_FB_T` the point
-  brakes at 0.5 m/s^2 and waits, and goes on when the fix is fresh. The mock's path runs on a
-  clock; a real drone should not chase a point that ran ahead while it could not see.
+- **It waits for a lost estimate, not for a short dropout.** Once the position fix has been
+  stale for 2 s the point brakes at 0.5 m/s^2 and waits, and goes on when the fix is fresh:
+  a real drone should not chase a point that ran ahead while it could not see. Under 2 s the
+  pass goes on, on EKF2's dead reckoning, as the mock's path does (it runs on a clock). With
+  the brake-and-hover fallback on (`SH_FB_EN` 1) it waits from `SH_FB_T` instead, because
+  the vehicle brakes then. The first version waited from 0.5 s always; "In Gazebo" below is
+  why it does not.
 - **The guards act on the moving point.** The wall guard moves it back off a face that steps
   toward the drone and the pass goes on at the new standoff. The keep-out looks ahead along
   the line: an obstacle within the keep-out of where the point would come to rest (the
@@ -186,8 +190,9 @@ Tests:
 | A pole on the line at 3.5 m | `--keep-out --pass-len 5 --pass-pole-m 3.5` | stopped after 2.4 m, closest 0.92 m to the pole with a 1 m keep-out |
 
 The usual sequence (`--wall --keep-out`, 37 checks) still passes with the pass code in and
-off. Flash: `px4_fmu-v6x_structurehold` is at 99.43 % (1,954,944 B, about 11 KB spare; it
-was 99.27 %), so it fits, and the next feature of this size will not without making room.
+off. Flash: `px4_fmu-v6x_structurehold` is at 99.44 % (1,955,032 B, about 11 KB spare; it
+was 99.27 %), so it fits, and the next feature or two of this size will not without making
+room.
 
 ## In Gazebo: against tuned PX4 flying the same pass
 

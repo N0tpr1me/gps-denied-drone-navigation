@@ -337,8 +337,8 @@ venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structur
 uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946,952 B,
 about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
 in. With the VIO runaway trip and the EKF2 cut (2026-11-09) `px4_fmu-v6x_structurehold` is at
-99.27 % (1,951,816 B, about 14 KB spare). With the surface pass (2026-11-09) it is at 99.43 %
-(1,954,944 B, about 11 KB spare): the next feature of that size needs room made first. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+99.27 % (1,951,816 B, about 14 KB spare). With the surface pass (2026-11-09) it is at 99.44 %
+(1,955,032 B, about 11 KB spare): room has to be made before much more goes in. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it
