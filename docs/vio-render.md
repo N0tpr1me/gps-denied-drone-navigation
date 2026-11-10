@@ -119,6 +119,13 @@ the VIO alone, open loop, on a scripted hold flight.
 2. **Fly the measured errors.** Replay each condition's Basalt error into the mock and into
    the Gazebo estimate bridge in place of the modelled VIO, and score v22 against the PD and
    tuned PX4 on them: heavy dust and the dust cloud are the cells that matter.
+   The mock half is ready: `eval/configs/fault_rates_dust_measured.yaml` puts the three bold
+   rows above into `envs/estimate` terms (the walk, its cap and the velocity noise, with the
+   rangefinder spoilt as in `field_degrade`) and scores v22, v24 and the PD on 20,480
+   episodes each (`training/queues/server_week3.yaml`). A 128-episode first look in the
+   cloud (`experiments/LOG.md`, 2026-11-09 19:49) had no crashes, with v22 and the PD
+   following a dust cloud's walk about 0.3 m toward the wall and v24 holding on its range
+   input (0.05 m). The Gazebo half is still to do.
 3. **Replace the `degrade` fault's made-up numbers** with these (a Proposed row, since the
    field-fault set is a buyer-facing benchmark), and add a dust walk as its own fault.
 4. **A pre-take-off check that the VIO is still** (a landed vehicle whose VIO reports
