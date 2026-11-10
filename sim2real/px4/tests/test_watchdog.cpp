@@ -72,6 +72,162 @@ static float flyRunaway(RunawayFix &f, float seconds, Err err, float noise = 0.f
 	return max_dv;
 }
 
+// StillFix driven like the module on the ground: the VIO's velocity at 30 Hz from ``t0``,
+// with white noise, ``speed(t)`` along its x axis, and the land detector's at-rest flag.
+template<typename Speed, typename Rest>
+static uint64_t sitStill(StillFix &f, float seconds, Speed speed, Rest at_rest, float noise = 0.05f,
+			 uint64_t t0 = 1'000'000)
+{
+	unsigned rng = 777u;
+	auto uniform = [&rng]() {
+		rng = rng * 1664525u + 1013904223u;
+		return static_cast<float>(rng >> 8) / 16777216.f - 0.5f;
+	};
+	const int steps = static_cast<int>(seconds * 30.f);
+	uint64_t t_us = t0;
+
+	for (int k = 0; k < steps; k++) {
+		const float t = static_cast<float>(k) / 30.f;
+		t_us = t0 + 33'333ULL * k;
+		f.fix(t_us, speed(t) + noise * uniform(), noise * uniform(), noise * uniform(), at_rest(t));
+		f.tick(t_us);
+	}
+
+	return t_us + 33'333ULL;
+}
+
+static void testStillFix()
+{
+	auto rest = [](float) { return true; };
+	auto zero = [](float) { return 0.f; };
+
+	// Off (limit 0): never moving, whatever the VIO says.
+	{
+		StillFix f;
+		sitStill(f, 20.f, [](float t) { return 3.f * t; }, rest);
+		CHECK(!f.moving());
+	}
+
+	// A healthy VIO on the ground, noisy as in dust (0.35 m/s peak to peak around zero): the
+	// slot mean stays far under 0.3 m/s.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		sitStill(f, 120.f, zero, rest, 0.7f);
+		CHECK(!f.moving() && f.speed() < 0.15f);
+	}
+
+	// A VIO running away on the floor at 0.5 m/s^2 from 5 s: blocked within 3 s of its
+	// start, and it stays blocked while the VIO keeps its 2.8 m/s.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		auto run = [](float t) { return t < 5.f ? 0.f : std::fmin(0.5f * (t - 5.f), 2.8f); };
+		sitStill(f, 5.f, run, rest);
+		CHECK(!f.moving());
+		StillFix g;
+		g.setLimit(0.3f);
+		sitStill(g, 8.f, run, rest);
+		CHECK(g.moving());
+		sitStill(g, 60.f, [](float) { return 2.8f; }, rest, 0.05f, 9'000'000);
+		CHECK(g.moving());
+	}
+
+	// One slot over the limit (a person walks past the camera for a second) does not block.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		sitStill(f, 20.f, [](float t) { return (t > 5.1f && t < 5.9f) ? 1.f : 0.f; }, rest);
+		CHECK(!f.moving());
+	}
+
+	// Still again: the block lifts after ten slots under the limit, not sooner, and a slot
+	// over it starts the count again.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		uint64_t t = sitStill(f, 5.f, [](float) { return 1.f; }, rest);
+		CHECK(f.moving());
+		t = sitStill(f, 8.f, zero, rest, 0.05f, t);
+		CHECK(f.moving());
+		t = sitStill(f, 4.f, zero, rest, 0.05f, t);
+		CHECK(!f.moving());
+		t = sitStill(f, 5.f, [](float) { return 1.f; }, rest, 0.05f, t);
+		CHECK(f.moving());
+		t = sitStill(f, 8.f, zero, rest, 0.05f, t);
+		t = sitStill(f, 1.5f, [](float) { return 1.f; }, rest, 0.05f, t);
+		t = sitStill(f, 8.f, zero, rest, 0.05f, t);
+		CHECK(f.moving());
+		sitStill(f, 4.f, zero, rest, 0.05f, t);
+		CHECK(!f.moving());
+	}
+
+	// Carried by hand (not at rest): a real speed proves nothing, and a blocked VIO is not
+	// cleared by slots the vehicle was not at rest in.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		sitStill(f, 30.f, [](float) { return 1.5f; }, [](float) { return false; });
+		CHECK(!f.moving());
+		// At rest only part of each slot: dropped too.
+		StillFix g;
+		g.setLimit(0.3f);
+		sitStill(g, 30.f, [](float) { return 1.5f; }, [](float t) { return std::fmod(t, 1.f) < 0.5f; });
+		CHECK(!g.moving());
+		StillFix h;
+		h.setLimit(0.3f);
+		uint64_t t = sitStill(h, 5.f, [](float) { return 1.f; }, rest);
+		CHECK(h.moving());
+		t = sitStill(h, 30.f, zero, [](float) { return false; }, 0.05f, t);
+		CHECK(h.moving());
+		sitStill(h, 12.f, zero, rest, 0.05f, t);
+		CHECK(!h.moving());
+	}
+
+	// A runaway caught another way (RunawayFix while carried): distrusted until seen still.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		f.distrust();
+		CHECK(f.moving());
+		uint64_t t = sitStill(f, 8.f, zero, rest);
+		CHECK(f.moving());
+		sitStill(f, 4.f, zero, rest, 0.05f, t);
+		CHECK(!f.moving());
+	}
+
+	// The VIO goes silent for 5 s: EKF2 no longer fuses it, the block lifts. A VIO that
+	// sends no velocity (NaN) is never judged moving.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		const uint64_t t = sitStill(f, 5.f, [](float) { return 1.f; }, rest);
+		CHECK(f.moving());
+		f.tick(t + 4'000'000);
+		CHECK(f.moving());
+		f.tick(t + 5'200'000);
+		CHECK(!f.moving());
+		StillFix g;
+		g.setLimit(0.3f);
+
+		for (int k = 0; k < 600; k++) {
+			g.fix(1'000'000 + 33'333ULL * k, NAN, 5.f, 0.f, true);
+		}
+
+		CHECK(!g.moving());
+	}
+
+	// reset() (the module calls it on arming) clears the block and the counts.
+	{
+		StillFix f;
+		f.setLimit(0.3f);
+		sitStill(f, 5.f, [](float) { return 1.f; }, rest);
+		CHECK(f.moving());
+		f.reset();
+		CHECK(!f.moving() && f.speed() <= 0.f);
+	}
+}
+
 static void testRunawayFix()
 {
 	// Off by default: never runaway, whatever the VIO does.
@@ -382,6 +538,7 @@ int main()
 	}
 
 	testRunawayFix();
+	testStillFix();
 
 	// Names are stable (they end up in logs and the status topic).
 	CHECK(std::string_view(Watchdog::name(Trip::None)) == "none");

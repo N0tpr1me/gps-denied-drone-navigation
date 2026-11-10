@@ -45,6 +45,17 @@
  * that stopped accelerating can still be metres per second off, and a fresh comparison
  * would not see that.
  *
+ * Before take-off (PX4 param SH_WD_GND_V): Basalt started in drifting dust took the grains
+ * for motion while the drone sat on the floor and ran off at up to 2.8 m/s before take-off
+ * (docs/vio-render.md). On the ground there is a plainer witness than the comparison above:
+ * the land detector's at-rest flag (the IMU alone has seen no movement for a second). A VIO
+ * that reports a speed while the vehicle is at rest is wrong, whatever frame its velocity is
+ * in. StillFix averages the VIO's velocity over 1 s slots, and after two slots in a row over
+ * the limit the module blocks arming in every mode (its arming-check reply to commander),
+ * until the VIO has agreed with at-rest for ten slots or has gone silent (EKF2 then no
+ * longer fuses it). Slots in which the vehicle was not at rest (carried, bumped) prove
+ * nothing either way and are dropped.
+ *
  * This header is deliberately free of PX4 dependencies so it compiles and runs in a plain
  * g++ unit test (tests/test_watchdog.cpp) without a PX4 tree.
  */
@@ -284,6 +295,118 @@ private:
 	bool _runaway{false};
 	uint8_t _counter{0};
 	bool _counter_seen{false};
+};
+
+/** Before take-off: a vehicle at rest whose VIO says it is moving. See the header comment. */
+class StillFix
+{
+public:
+	static constexpr uint64_t SLOT_US = 1000000;    // the VIO's velocity is averaged over 1 s
+	static constexpr int MIN_SAMPLES = 5;           // a slot with fewer fixes says nothing
+	static constexpr int MOVING_SLOTS = 2;          // over the limit this many slots in a row
+	static constexpr int STILL_SLOTS = 10;          // under it this many to be trusted again
+	static constexpr uint64_t SILENT_US = 5000000;  // no fix this long: nothing left to distrust
+
+	/** The VIO speed at rest that counts as moving, m/s; 0 = off (never moving). */
+	void setLimit(float limit_mps) { _limit = limit_mps; }
+
+	/** Every fix sample while disarmed: when it arrived, its velocity (any frame; NaN: the
+	 * VIO sends none) and whether the land detector has the vehicle at rest. */
+	void fix(uint64_t t_us, float vx, float vy, float vz, bool at_rest)
+	{
+		_last_t = t_us;
+
+		if (!(std::isfinite(vx) && std::isfinite(vy) && std::isfinite(vz))) {
+			return;
+		}
+
+		if (_n > 0 && (t_us < _slot_t || t_us - _slot_t >= SLOT_US)) {
+			closeSlot();  // this sample starts the next slot
+		}
+
+		if (_n == 0) {
+			_slot_t = t_us;
+			_rest = true;
+		}
+
+		_sum[0] += vx;
+		_sum[1] += vy;
+		_sum[2] += vz;
+		_rest = _rest && at_rest;
+		++_n;
+	}
+
+	/** Every tick: a VIO that went silent is no longer fused, so it no longer blocks. */
+	void tick(uint64_t now_us)
+	{
+		if (_moving && now_us > _last_t && now_us - _last_t > SILENT_US) {
+			reset();
+		}
+	}
+
+	/** Not trusted from now until it has been seen still (a runaway caught another way). */
+	void distrust()
+	{
+		_moving = true;
+		_still = 0;
+	}
+
+	bool moving() const { return _moving; }
+
+	/** The VIO's mean speed over the last slot at rest, m/s. */
+	float speed() const { return _speed; }
+
+	void reset()
+	{
+		_moving = false;
+		_over = 0;
+		_still = 0;
+		_n = 0;
+		_sum[0] = _sum[1] = _sum[2] = 0.f;
+		_speed = 0.f;
+	}
+
+private:
+	void closeSlot()
+	{
+		if (_rest && _n >= MIN_SAMPLES) {
+			const float n = static_cast<float>(_n);
+			_speed = std::sqrt(_sum[0] * _sum[0] + _sum[1] * _sum[1] + _sum[2] * _sum[2]) / n;
+
+			if (_limit > 0.f && _speed > _limit) {
+				_still = 0;
+
+				if (++_over >= MOVING_SLOTS) {
+					_moving = true;
+				}
+
+			} else {
+				_over = 0;
+
+				if (_moving && ++_still >= STILL_SLOTS) {
+					_moving = false;
+					_still = 0;
+				}
+			}
+
+		} else {
+			_over = 0;  // moved by hand or too few fixes: no proof either way
+		}
+
+		_n = 0;
+		_sum[0] = _sum[1] = _sum[2] = 0.f;
+	}
+
+	float _limit{0.f};
+	float _sum[3] {0.f, 0.f, 0.f};  // the slot's velocity sum: noise averages out, a runaway does not
+	int _n{0};
+	bool _rest{true};               // at rest through the whole slot so far
+	uint64_t _slot_t{0};
+	uint64_t _last_t{0};
+	int _over{0};
+	int _still{0};
+	float _speed{0.f};
+	bool _moving{false};
 };
 
 class Watchdog

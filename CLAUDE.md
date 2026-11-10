@@ -223,7 +223,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   Heavy dust (Nov 2026, `docs/field-faults.md` "Heavy dust"): `SH_WD_VIO_DV` (0.8 m/s, on by
   default) trips on a VIO whose velocity runs away from the IMU's over 3 s (`RunawayFix`) and
   hands back as if the position were lost; `eval/vio_runaway.py` scores it in the mock and
-  replays a ulog (`replay <ulg>`) to set the limit on a partner's own logs.
+  replays a ulog (`replay <ulg>`) to set the limit on a partner's own logs. Before take-off
+  (`SH_WD_GND_V`, 0.3 m/s, `StillFix`): a VIO that reports motion while the vehicle sits
+  disarmed and at rest blocks arming in every mode, through a fourth registration with
+  commander (an arming check with no mode attached); `sitl_test.py --prearm` flies it.
   Keep-out (Nov 2026, `KeepOut.hpp`, `SH_KO_DIST`, -1 follows PX4's `CP_DIST`): PX4's
   collision-prevention data (`obstacle_distance`, side-facing `distance_sensor`s) keeps the
   hold point of all three modes that far from obstacles other than the structure; not
