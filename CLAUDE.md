@@ -248,7 +248,9 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   (`wall1m_pass_*`, 8 seeds each, cloud): v22 against tuned PX4 flying the same pass in
   Offboard on trajectory setpoints (`pass_flight.py`), scored by `eval/pass_score.py`; level
   with a healthy estimate, v22 ahead on the VIO-jump seed, no crash.
-  PASS_S0_SENTENCE
+  `pass_s0` (`training/policies/structure_hold_pass_s0.*`) is the server's pass-trained
+  candidate: a little tighter than v22 on the same Gazebo passes, not released (it has not
+  flown the hold benchmark; a release is Zain's call).
 - Heading error near steel (2026-11-09, `docs/heading-error.md`): in the mock v22 holds a
   15 deg wrong heading but circles into the wall at 30 deg (100 % crash, the PD holds); the
   server queue `training/queues/heading_error.yaml` trains two heading candidates. In Gazebo

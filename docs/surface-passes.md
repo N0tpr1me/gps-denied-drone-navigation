@@ -6,10 +6,12 @@ pass: the hold point slides along the wall (a girder, a deck underside, a rack f
 same standoff, so the camera sweeps a strip of the surface while the drone keeps its distance.
 `docs/market-research.md` row 12 is the buyer case.
 
-Status (2026-11-09): in the mock, with the PD yardstick, a Gate 1 style scorer and a training
-config queued for the GPU server; **in the PX4 module** (`SH_PASS_LEN`, off by default; "In
-the module" below); and **in Gazebo against tuned PX4 flying the same pass** ("In Gazebo"
-below). v22 as it is flies all of it. No policy trained on passes is released yet.
+Status (2026-11-10): in the mock, with the PD yardstick and a Gate 1 style scorer; **in the
+PX4 module** (`SH_PASS_LEN`, off by default; "In the module" below); and **in Gazebo against
+tuned PX4 flying the same pass** ("In Gazebo" below). v22 as it is flies all of it and stays
+the released policy. The server trained a pass policy, `pass_s0`: it passed its mock gate and
+flew the same Gazebo passes a little tighter than v22 ("The pass-trained candidate" below);
+it is a candidate, not released.
 
 ## What a pass is
 
@@ -299,11 +301,59 @@ that build: seed 7 along the pass 0.17 m, the batch's worst. That is one design 
 on one seed and confirmed on the same eight, so treat 2 s as a first value. A pass through a
 dropout longer than 2 s is not in these scenarios while the point moves.
 
+### The pass-trained candidate (pass_s0) on the same passes
+
+The server queue trained two pass policies from v22 (2026-11-09, `experiments/LOG.md`).
+`pass_s0` passed its mock gate, 7 of 7 cells against the PD and tighter than v22 in every
+cell (pooled p95 0.13 m; `training/policies/README.md`), so it flew the same three Gazebo
+passes, same seeds, same module build with only the compiled-in policy swapped
+(`structure_hold_pass_s0`, fallback off as v22), 24 flights on 2026-11-10. The roughness
+column is `eval/metrics.py`'s rate command roughness over the scored hold:
+
+| Pass | Controller | 3-D p95 m, mean / worst | Standoff p95 m, mean / median / worst | Along the pass p95 m, mean / worst | Height p95 m, mean | Rate command roughness rad/s^2, mean | Crashes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 m/s | v22 | 0.29 / 0.40 | 0.083 / 0.06 / 0.19 | 0.12 / 0.17 | 0.26 | 2.8 | 0/8 |
+| 8 m/s | pass_s0 | 0.25 / 0.32 | 0.075 / 0.06 / 0.19 | 0.10 / 0.13 | 0.23 | 2.1 | 0/8 |
+| 4 m/s | v22 | 0.24 / 0.29 | 0.094 / 0.07 / 0.28 | 0.12 / 0.17 | 0.18 | 3.0 | 0/8 |
+| 4 m/s | pass_s0 | 0.25 / 0.37 | 0.066 / 0.05 / 0.19 | 0.10 / 0.13 | 0.23 | 2.3 | 0/8 |
+| Calm | v22 | 0.25 / 0.32 | 0.099 / 0.07 / 0.30 | 0.12 / 0.16 | 0.20 | 3.0 | 0/8 |
+| Calm | pass_s0 | 0.30 / 0.47 | 0.066 / 0.05 / 0.21 | 0.10 / 0.13 | 0.28 | 2.3 | 0/8 |
+
+Per seed, standoff p95 (m):
+
+| Pass, controller | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 m/s, pass_s0 | 0.06 | 0.09 | 0.05 | 0.04 | 0.04 | 0.07 | 0.19 | 0.06 |
+| 4 m/s, pass_s0 | 0.05 | 0.09 | 0.03 | 0.03 | 0.04 | 0.05 | 0.19 | 0.05 |
+| Calm, pass_s0 | 0.06 | 0.09 | 0.02 | 0.03 | 0.03 | 0.05 | 0.21 | 0.04 |
+
+- **It is a little tighter where a controller can be.** Standoff p95 0.066 to 0.075 m against
+  v22's 0.083 to 0.099 m (10 % tighter at 8 m/s, 30 and 33 % at 4 m/s and calm) and 0.10 against
+  0.12 m along the pass; tighter than v22 on the standoff in 20 of the 24 paired flights and
+  along the pass in 19. Against tuned PX4 that is 0.07 against 0.16 to 0.18 m standoff.
+- **The dropout seed improved, not gone.** Seed 7: 0.19 to 0.21 m against v22's 0.19 to
+  0.30 m (tuned PX4 0.11 to 0.14 m). The VIO jump (seed 6) it holds as v22 does, 0.05 to
+  0.07 m.
+- **The mock's watch item did not show.** The gate measured twice v22's rate command
+  roughness (4 against 2 rad/s^2). In Gazebo pass_s0's commands were the smoother of the two
+  in every batch (2.1 to 2.3 against 2.8 to 3.0 rad/s^2).
+- **The 3-D number does not separate them**: it is the barometer offset of each flight
+  (pass_s0's calm seed 3 drew 0.47 m of it), as above.
+- No crash, no wall contact, never more than 0.08 m closer to the wall than the point; every
+  10 s stretch of the 24 flights at 0.99 real time or above. Seed 6 has the same 1 s PX4
+  failsafe in the landing after the hold as v22's flights.
+
+What this does and does not decide: the gain is real but small (0.02 to 0.03 m of standoff
+on 8 seeds), and pass_s0 has so far only been judged on passes. **v22 stays the compiled-in,
+released policy.** Before pass_s0 could replace it, it has to beat v22 on the release check
+(`eval/configs/gazebo_check_v28.yaml` with `params.candidates.pass_s0`; RELEASE_CHECK_RESULT)
+and on the 60 s hold benchmark in Gazebo against tuned PX4, and the release is Zain's call.
+The second seed (`pass_s1`, nearly as tight in the mock at half the roughness) has not flown.
+
 ## Not done yet
 
-- **A policy trained on passes.** v22 never trained on a moving hold point. The server queue
-  (`training/queues/surface_passes.yaml`) trains two; one that passes its mock gate and the
-  release check gets these same Gazebo batches before it can replace v22 on passes.
+- **Releasing a pass-trained policy.** pass_s0 flew these passes a little tighter than v22
+  (above). It has not flown the hold benchmark, and a release needs that and Zain's yes.
 - **Guards in Gazebo.** The Gazebo pass flights have no rangefinder and no lidar, so they
   score the pass, not the wall guard or the keep-out on it; those are SIH only.
 - **Faster, longer, up the wall.** Gazebo flew 5 m along at 0.5 m/s. 1 m/s, a pass up a pier
