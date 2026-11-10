@@ -172,14 +172,15 @@ refused because no GPU was free (correct). Its SITL step flies 8 hovers at once;
 shared machine run it with `--no-sitl` and fly the hover test and parallel check by hand.
 
 **Gazebo on this server: probably fine; the reference was wrong.** The first tuned PX4
-batches were judged against the Mac's 0.427 / 0.424 / 0.428 m, but those were flown with
+batches were judged against the Mac's 0.427 / 0.424 / 0.428 m, but those were flown on
+vision height (`px4_tuned_v1.params`), and the 0.424 / 0.443 / 0.433 m of 2026-11-02 with
 `EKF2_HGT_REF` 1 (GPS height, falling back to the barometer) before PR #136 set it to 0.
 The cloud re-flew tuned PX4 on current main the same day at real-time factor about 1.0:
 0.494 / 0.514 / 0.529 m. Against that, the server's numbers are close:
 
 | Flights at once | Tuned PX4 mean p95, calm / 4 / 8 m/s (m) | Real-time factor, worst |
 | --- | --- | --- |
-| Mac, one at a time, `EKF2_HGT_REF` 1 (`docs/baseline.md`, the old reference) | 0.427 / 0.424 / 0.428 | 0.85 |
+| Mac, one at a time, vision height (`docs/baseline.md`, the old reference) | 0.427 / 0.424 / 0.428 | 0.85 |
 | cloud, one at a time, current main (`EKF2_HGT_REF` 0) | 0.494 / 0.514 / 0.529 | about 1.0 |
 | server, 4 at once, 4 cores each | 0.534 / 0.544 / 0.559 | 0.21 |
 | server, 2 at once, 6 cores each | 0.509 / 0.499 / 0.475 | 0.57 |

@@ -185,7 +185,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   fixed. Like for like (offset out, fixed hold point for both) tuned PX4 is 0.33 m and v22
   0.20 m, about -40 % (`eval/height_split.py`, `docs/baseline.md` "What moved tuned PX4
   from 0.43 to 0.51 m"). Scoring that way is a Proposed row (2026-11-09); until Zain
-  decides, the as-scored numbers are the benchmark. Crash is judged on the 60 s
+  decides, the as-scored numbers are the benchmark. In plain words: v22 holds about 0.3 m
+  on barometer height and about 0.2 m on vision height; quote the barometer numbers. The
+  -43 to -45 % quoted before 2026-11-09 was flown with `EKF2_HGT_REF` 1 (the old setting),
+  and vision height is not allowed in flight by the safety manual. Crash is judged on the 60 s
   hold only; seed 6 is the hard seed. The mock fusion has a barometer-height option
   (`fusion.height_source: baro`, numbers from EKF2 on Gazebo hovers; `docs/baseline.md`
   "The mock fusion on barometer height"); `gz_x500_sitl`, and with it the release check,

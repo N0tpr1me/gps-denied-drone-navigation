@@ -22,16 +22,19 @@ from a wall, pier or deck in gusts, without GPS, on the drone's own position est
 stock rate controller. A classical watchdog hands control back to stock PX4 on any fault,
 and a forward rangefinder keeps the hold point off the wall (the wall guard). The pilot
 can always take over by switching to Position mode. In our PX4 SITL benchmark (Gazebo,
-8 seeds, gusts up to 8 m/s) it held with a 54 to 55 % lower p95 error than properly tuned
-stock PX4, with no crashes (`docs/baseline.md`). This pack is how we find out whether that
-holds on a real drone.
+8 seeds, gusts up to 8 m/s, on barometer height as step 2 of this pack sets it) it held to
+about 0.3 m at the 95th percentile, 34 to 46 % tighter than properly tuned stock PX4 (0.49
+to 0.53 m), with no crashes (`docs/baseline.md`, re-flown 2026-11-09). On vision height, which
+this pack and the safety manual do not allow in flight, it holds to about 0.2 m; the 54 to
+55 % in earlier copies of this pack was that set-up. This pack is how we find out whether
+the barometer-height result holds on a real drone.
 
 ## The steps, and who does what
 
 | Step | Who | Props | Time | Output you send us |
 | --- | --- | --- | --- | --- |
 | 0. Airframe sheet and one logging flight | Partner flies, we check | On, by hand | Half a day | Airframe sheet, parameter dump, `.ulg` |
-| 1. Build and install | Partner (we can build for you) | – | 1 hour | Build log, firmware commit |
+| 1. Build and install | We send a firmware file, or the partner builds from source (per agreement) | – | 1 hour | Build log, firmware commit |
 | 2. Sensors and parameters | Partner | – | 1 to 2 hours | Parameter dump |
 | 3. Bench test | Partner | **Off** | 15 minutes | `summary.json`, `.ulg` |
 | 4. Tethered checks | Partner | On, tethered or netted | Half a day | `.ulg` files, notes |
@@ -68,6 +71,17 @@ We answer with go, no-go, or "go after a retrain on your airframe" (we add your 
 
 ## Step 1: build Structure Hold into your firmware
 
+Two ways to get the module onto your flight controller. Which one a partner gets is
+decided per partner, in the signed agreement (open item 2 at the end):
+
+- **Firmware file from us (no source).** Send us the board name and your PX4 tree; we build
+  the `structurehold` variant below and send back a firmware file to flash. This is how the
+  evaluation kit already ships, binary only (`docs/decisions.md`, 2026-11-02).
+- **Source under the agreement.** You build it yourself with the commands below. Only for a
+  partner whose agreement names the module source.
+
+Either way the board has to fit it:
+
 The module is plain C++ inside PX4: no companion computer, no ONNX runtime, no heap. It
 takes about 125 KB of flash, most of it the policy's weights.
 
@@ -97,8 +111,8 @@ starts it at boot (behind `SH_EN`), and logs its status topic. PX4's build wants
 it and drop something else you do not use; Structure Hold needs only the multicopter stack.
 
 If your firmware is a fork, or you build with a vendor flow (for example ModalAI's), run
-`install.sh` on your tree and tell us anything it could not patch. If you would rather not
-build, send us the board name and your PX4 tree, and we send back a firmware file.
+`install.sh` on your tree and tell us anything it could not patch (with a firmware file
+from us, we do this on the tree you send).
 
 **Check:** on the PX4 shell (QGC, Analyze Tools, MAVLink Console), `structure_hold status`
 says `state: standby` and names the policy (`structure_hold_v22`). QGC lists three new
@@ -382,8 +396,10 @@ failures included, and send you the report.
 
 1. **Evaluation agreement.** A written agreement (NDA plus evaluation licence) must be
    signed before the partner sees this pack or the code. Not drafted here.
-2. **Source or binary.** Whether the partner gets the module's source (step 1 as written)
-   or only a firmware file we build for their board.
+2. **Source or binary.** Whether the partner gets the module's source or only a firmware
+   file we build for their board; step 1 describes both. Evaluation kits are binary only
+   (Decided 2026-11-02, `docs/decisions.md`); that row leaves the module source for a
+   partner flying real hardware to be decided per partner, under a signed agreement.
 3. **Gate 3 pass bar.** What result on a partner drone counts as Gate 3 passed (for
    example: lower mean p95 than tuned PX4 in every flown case, and no contacts). Agree it
    in writing before the first scored session.

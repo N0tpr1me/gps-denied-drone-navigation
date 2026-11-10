@@ -110,7 +110,9 @@ so the Gazebo re-fly decides. The PX4 module reads the input when its header has
 `tests/test_policy.cpp` passes on the v22 header (observation within 3e-7 of the env, MLP
 within 1e-6 of onnxruntime).
 
-Gazebo confirmed it (`docs/baseline.md`, "v22 candidate vs tuned PX4 and v19"): over 8 seeds
+Gazebo confirmed it on the vision-height set-up of the time (`docs/baseline.md`, "v22
+candidate vs tuned PX4 and v19"; on barometer height, the set-up flown since, v22 holds
+about 0.3 m against tuned PX4's 0.5 m, see the 2026-11-09 re-fly there): over 8 seeds
 mean hold p95 0.198 / 0.196 / 0.194 m at calm / 4 / 8 m/s against v19's 0.221 / 0.224 /
 0.227 and tuned PX4's 0.427 / 0.424 / 0.428 (-54 / -54 / -55 %), lower than v19 in all 24
 seed and wind cells, no crash or contact. Zain released it on 2026-10-31 and the module
