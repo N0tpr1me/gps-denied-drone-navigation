@@ -8,7 +8,8 @@ disagree, the code is what produced the numbers; fix whichever is wrong in its o
 ## Inputs
 
 - **True position** `p(t)`, ENU, metres. Simulator state, SITL ground truth
-  (`vehicle_local_position_groundtruth`) or motion capture. Never the flight controller's
+  (`vehicle_local_position_groundtruth`), motion capture, or outdoors an RTK GPS receiver's
+  fixed solutions, logged and not fused (`docs/rtk-truth.md`). Never the flight controller's
   estimate: with a corrupted estimate, scoring against it hides the error we measure. The
   ulog reader refuses to fall back to the estimate unless asked (`--allow-estimate`).
 - **Hold setpoint** `p_sp(t)`, ENU. A fixed hold point, or PX4's position setpoint held
@@ -76,3 +77,10 @@ in the mocap frame) or `--align T0 T1`: the EKF estimate is fitted to mocap over
 by a yaw and an offset (needs 0.5 m of horizontal motion, so use take-off and the move to the
 hold point), which carries the setpoint into the mocap frame. The wall is then given in the
 mocap frame too. The fit's yaw, offset and residual are printed with the metrics.
+
+Outdoors the truth is RTK (`eval/rtk_truth.py`, through `eval/partner_session.py` with
+`truth: rtk`; `docs/rtk-truth.md`). RTK comes and goes, so `compute_metrics` takes
+`max_gap_s`: a moment between two truth samples further apart than that is left out of every
+number instead of being drawn through (it counts neither as error nor as a contact, and never
+as recovered), `scored_s` is the time that was scored, and a window with no truth at all is
+refused. With no `max_gap_s` (simulator, SITL, mocap) nothing changes.
