@@ -331,3 +331,27 @@ added, once steps 1 to 8 of the first-hour checklist pass:
 | Decision | Status | Date | Why / what would change it |
 | --- | --- | --- | --- |
 | Isaac Lab pinned at 2.3.2 on Isaac Sim 5.1.0, run from `nvcr.io/nvidia/isaac-lab:2.3.2` (digest recorded on first pull); our rsl_rl pin and PPO recipe unchanged; the Isaac backend is one PhysX rigid body per env with the mock's mass, inertia, motor lag and clipping (`envs/sims/isaac_quad.py`), accepted only if it passes `eval/sim_parity.py` | Proposed | 2026-10-22 | Newest stable Isaac Lab line; 3.0 is beta / early access with a new physics backend. Move to 3.x only after its GA and only in its own PR that passes parity again |
+
+## First runs on the GPU server (2026-11-09)
+
+`training/isaac_parity.sh` on the shared UWL server (one free RTX 4500 Ada, Isaac Lab 2.3.2
+image, driver 580.142). Isaac Sim itself starts headless and steps (step 4, after the fix
+in #156 for the stock tutorial that never exits). Our backend then failed on two bugs,
+both fixed here:
+
+- Isaac Sim 5.1 raises `RuntimeError` from `omni.kit.app.get_app()` when no Kit app exists
+  yet; `_launch_app` caught only `ImportError`, so every Isaac test failed before the app
+  started (15 of 78).
+- Isaac Lab's bundled torch 2.7 accepts the `dynamo=True` export but pins the batch to the
+  dummy's 1, so scoring 8 drones failed in onnxruntime. `export_onnx` now checks the
+  exported batch dimension and falls back to the legacy exporter with `dynamic_axes`.
+
+**Still open: PhysX GPU crash.** With both fixed, the repo tests in Isaac's Python
+(step 5) start the app, then about 100 s in PhysX reports `Fetching GPU Narrowphase failed!
+700` (CUDA illegal address), cannot recreate its CUDA context, and the run hangs with the
+GPU idle. Kit also warns that the IOMMU is enabled and the CPU governor is `powersave`;
+Kit flags the IOMMU as a possible cause of GPU problems (not confirmed as the cause here),
+and changing it is the admin's call (BIOS / kernel parameter), not ours. Next steps: run the
+contract tests one at a time to find the first scene that crashes, try
+`SimulationCfg(device="cpu")` with GPU dynamics off explicitly, and ask the admin about
+the IOMMU. M3 stays open; the decided fallback (the mock on the GPU) is unaffected.

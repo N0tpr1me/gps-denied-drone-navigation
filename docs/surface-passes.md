@@ -170,7 +170,7 @@ What the module does that the mock's path does not:
 
 The pilot sees `Structure Hold: pass 5.0 m at 0.5 m/s`, then `pass done`, or `pass stopped
 after 2.4 m: keep-out` (`docs/pilot-status.md`, safety manual section 4). The interface is
-in `docs/integration-guide.md` ("Surface pass"), the hazards are F47 to F52 of
+in `docs/integration-guide.md` ("Surface pass"), the hazards are F48 to F53 of
 `docs/safety-manual.md` (version 1.10, not signed). The Auterion app (`docs/auterion-app.md`)
 flies the same headers but does not start a pass yet.
 

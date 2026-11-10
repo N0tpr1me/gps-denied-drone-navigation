@@ -73,6 +73,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 DEFAULT_PARAMS = HERE / "ekf2_ev.params"
 GPS_ON_PARAMS = HERE / "gps_on.params"
+GPS_LOGGED_PARAMS = HERE / "gps_logged.params"
 VISION_YAW_PARAMS = HERE / "vision_yaw.params"
 NAV_OFFBOARD = 14  # vehicle_status.nav_state (ulog_checks.NAV_STATE)
 PASS_SETTLE_S = 2.0  # the switch transient left out of the scored pass, as the hold runner's
@@ -81,21 +82,23 @@ PASS_DRIFT_TOL_M = 1.0  # run_gazebo's --drift-tol, on truth
 
 def px4_params_for(profile, params_path: Path) -> dict[str, int | float]:
     """The PX4 set of a flight: the file given, with ``gps_on.params`` over it when the
-    profile carries the scripted GPS (the bridge is then the receiver EKF2 fuses), and
+    profile carries the scripted GPS (the bridge is then the receiver EKF2 fuses), or
+    ``gps_logged.params`` when that receiver is only logged (``gps.fused`` false), and
     ``vision_yaw.params`` when it carries a scripted heading error (EKF2 takes its heading
     from the vision stream's attitude)."""
     params = read_params(params_path)
     if profile.gps is not None:
-        params.update(read_params(GPS_ON_PARAMS))
+        params.update(read_params(GPS_ON_PARAMS if profile.gps.fused else GPS_LOGGED_PARAMS))
     if getattr(profile, "vision_yaw", None) is not None:
         params.update(read_params(VISION_YAW_PARAMS))
     return params
 
 
 def gps_as_expected(profile, ekf: dict[str, Any]) -> bool:
-    """GPS-free flights must never have used GNSS; GPS-on flights must have."""
+    """GPS-free flights must never have used GNSS, a receiver that is only logged included;
+    GPS-on flights must have."""
     used = not ekf["gps_free"]
-    return used if profile.gps is not None else not used
+    return used if profile.gps is not None and profile.gps.fused else not used
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,

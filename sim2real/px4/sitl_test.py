@@ -9,6 +9,11 @@ Steps, each a check in the summary:
 0. on the ground (skip with ``--no-ground-checks``): Structure Hold cannot be armed into,
    and once armed a switch into it is refused (land detector) and handed back without
    lifting off;
+   with ``--prearm`` first the pre-arm VIO check (SH_WD_GND_V): the script sends a VIO
+   (MAVLink ODOMETRY) that sits still, then runs off at 0.5 m/s^2 while the vehicle sits
+   disarmed. Arming must be allowed on the still VIO, refused in the stock mode once the
+   VIO runs (with the critical message on the ground station), still refused 6 s after it
+   stops, allowed again after 10 s still, and allowed 5 s after a running VIO goes silent;
 1. take off to ``--altitude`` in stock PX4 and hover ``--settle-s``;
 2. engage the external mode "Structure Hold" over MAVLink (DO_SET_MODE, auto/external),
    hold ``--hold-s``: drift from the engage point stays under ``--drift-tol``;
@@ -145,6 +150,11 @@ LIDAR_BINS = 72
 LIDAR_MIN_CM = 20
 LIDAR_MAX_CM = 1000
 MAV_FRAME_BODY_FRD = 12
+MAV_FRAME_LOCAL_FRD = 20
+# --prearm: the scripted VIO's runaway on the ground, as Basalt's in drifting dust
+# (docs/vio-render.md: up to 2.8 m/s before take-off).
+VIO_RUN_ACCEL = 0.5
+VIO_RUN_SPEED = 2.8
 # The surface pass (PassPath.hpp): the module's acceleration (the mock's
 # SurfacePass.accel_mps2) and structure_hold_status.pass_state.
 PASS_ACCEL_MPS2 = 0.5
@@ -286,6 +296,12 @@ class Vehicle:
         self.ranges: list[float] = []  # every range sent, for the wall checks
         self.stick_y = 0                # MANUAL_CONTROL y (roll), -1000..1000
         self.range_faults = False       # send RANGE_FAULTS instead of the wall's range
+        # --prearm: a scripted VIO over MAVLink ODOMETRY at 30 Hz. None: none sent; else its
+        # acceleration along its own x axis (0 with vio_speed 0: a still VIO).
+        self.vio_accel: float | None = None
+        self.vio_speed = 0.0
+        self.vio_x = 0.0
+        self._last_vio = 0.0
         self._fault_i = 0
         # Autopilot STATUSTEXT as the ground station sees it: (time, severity, text), long
         # texts reassembled from their chunks (MAVLink 2 ``id``).
@@ -305,6 +321,7 @@ class Vehicle:
             self._send_joystick()
             self._send_range()
             self._send_scan()
+            self._send_vio()
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return
@@ -349,6 +366,31 @@ class Vehicle:
         self.m.mav.distance_sensor_send(boot_ms, 10, int(self.wall.max_m * 100),
                                         int(round(r * 100)), mavlink.MAV_DISTANCE_SENSOR_LASER, 0,
                                         mavlink.MAV_SENSOR_ROTATION_NONE, 0)
+
+    def _send_vio(self) -> None:
+        """The scripted VIO: position and body-frame velocity, noisy as a real one at rest."""
+        now = time.monotonic()
+        if self.vio_accel is None:
+            self._last_vio = 0.0
+            return
+        dt = now - self._last_vio
+        if dt < 1.0 / 30.0:
+            return
+        if self._last_vio > 0.0:
+            self.vio_speed = min(self.vio_speed + self.vio_accel * dt, VIO_RUN_SPEED)
+            self.vio_x += self.vio_speed * dt
+        self._last_vio = now
+        nan21 = [float("nan")] * 21
+        jitter = 0.02 * math.sin(40.0 * now)
+        self.m.mav.odometry_send(int(now * 1e6), MAV_FRAME_LOCAL_FRD, MAV_FRAME_BODY_FRD,
+                                 self.vio_x, 0.0, 0.0, [1.0, 0.0, 0.0, 0.0],
+                                 self.vio_speed + jitter, -jitter, 0.0, 0.0, 0.0, 0.0,
+                                 nan21, nan21, 0, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100)
+
+    def stop_vio(self, still: bool) -> None:
+        """The VIO stops running: it reports still again, or goes silent."""
+        self.vio_speed = 0.0
+        self.vio_accel = 0.0 if still else None
 
     def _send_scan(self) -> None:
         """360 deg lidar at 10 Hz against the virtual pole, when there is one."""
@@ -523,6 +565,9 @@ def parse_args() -> argparse.Namespace:
                    help="with --wall: how far the wall creeps in during the landing, m")
     p.add_argument("--land-creep-mps", type=float, default=0.1,
                    help="with --wall: creep speed, m/s (Gazebo seed 3 crept 0.05-0.07 m/s)")
+    p.add_argument("--prearm", action="store_true",
+                   help="before take-off, check the pre-arm VIO check (SH_WD_GND_V) with a "
+                        "scripted VIO that runs off on the ground")
     p.add_argument("--no-ground-checks", action="store_true",
                    help="skip step 0 (arm-into and ground-engage refusals) before take-off")
     p.add_argument("--range-faults", action="store_true",
@@ -649,6 +694,8 @@ def fly(args: argparse.Namespace) -> dict:
     # then disarm again: from here a refused arm can only be the mode's doing.
     v.wait_for(try_arm, args.ready_timeout_s, "arming")
     result["ready_s"] = round(time.monotonic() - start, 1)
+    if args.prearm:
+        prearm_checks(v, result, try_arm)
     if not args.no_ground_checks:
         ground_checks(v, args, result, stock, try_arm)
     ground_down = v.tel.down
@@ -837,6 +884,76 @@ def fly(args: argparse.Namespace) -> dict:
         # here (minimum 0.28-0.67 m over runs). Gazebo judges the landing (run_gazebo).
     result["wall_s"] = round(time.monotonic() - start, 1)
     return result
+
+
+def prearm_checks(v: Vehicle, result: dict, try_arm) -> None:
+    """SH_WD_GND_V: no arming, in the stock mode either, on a VIO that runs on the ground."""
+    checks = result["checks"]
+    critical = mavlink.MAV_SEVERITY_CRITICAL
+    arm_cmd = mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+
+    def disarm() -> None:
+        v.pump(1.2)  # the armed flag comes with the 1 Hz heartbeat
+        if v.tel.armed:
+            v.command(arm_cmd, 0)
+            v.wait_for(lambda: not v.tel.armed, 5, "disarm")
+
+    def refused() -> bool:
+        ack = v.command(arm_cmd, 1)
+        v.pump(1.2)
+        was_refused = ack != mavlink.MAV_RESULT_ACCEPTED and not v.tel.armed
+        disarm()
+        return was_refused
+
+    def run_until_blocked() -> float:
+        t0 = time.monotonic()
+        v.vio_accel = VIO_RUN_ACCEL
+        return v.wait_for(lambda: any("arming blocked" in t for t in v.texts_since(t0, critical)),
+                          15, "the arming-blocked message")
+
+    def wait_allowed(t0: float, timeout_s: float) -> float:
+        v.wait_for(lambda: any("arming allowed" in t for t in v.texts_since(t0)),
+                   timeout_s, "the arming-allowed message")
+        return time.monotonic() - t0
+
+    disarm()
+    out: dict = {}
+    # A still VIO: the land detector needs its second at rest, the check its slots.
+    v.vio_accel = 0.0
+    v.pump(5.0)
+    checks["prearm_still_vio_arms"] = try_arm()
+    disarm()
+    v.pump(2.0)
+    # It runs off: blocked within a few seconds, said to the pilot, arming refused.
+    out["blocked_after_s"] = round(run_until_blocked(), 1)
+    v.pump(0.5)  # commander's next arming-check poll (300 ms)
+    checks["prearm_running_vio_refused"] = refused()
+    # Still again: not trusted at once, trusted after ten seconds.
+    t_still = time.monotonic()
+    v.stop_vio(still=True)
+    v.pump(6.0)
+    checks["prearm_refused_6s_after_still"] = refused()
+    out["allowed_after_still_s"] = round(wait_allowed(t_still, 20), 1)
+    v.pump(0.5)
+    checks["prearm_arms_after_still"] = try_arm() and 9.0 <= out["allowed_after_still_s"] <= 16.0
+    disarm()
+    v.pump(2.0)
+    # It runs off again and then goes silent: EKF2 no longer fuses it, arming allowed.
+    out["blocked_again_after_s"] = round(run_until_blocked(), 1)
+    v.pump(0.5)
+    refused_again = refused()
+    t_silent = time.monotonic()
+    v.stop_vio(still=False)
+    out["allowed_after_silent_s"] = round(wait_allowed(t_silent, 15), 1)
+    v.pump(0.5)
+    checks["prearm_arms_after_silent"] = refused_again and try_arm() \
+        and 4.0 <= out["allowed_after_silent_s"] <= 9.0
+    checks["prearm_blocked_within_5s"] = max(out["blocked_after_s"],
+                                             out["blocked_again_after_s"]) <= 5.0
+    result["prearm"] = out
+    # The flight that follows counts its fixes from the local position again, as it does
+    # with no VIO: the scripted one is gone.
+    v.set_param("SH_FIX_SRC", 2)
 
 
 def ground_checks(v: Vehicle, args: argparse.Namespace, result: dict,

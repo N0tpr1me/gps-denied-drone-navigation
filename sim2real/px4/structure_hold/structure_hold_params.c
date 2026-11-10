@@ -113,6 +113,26 @@ PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 0.8f);
 PARAM_DEFINE_INT32(SH_WD_EV_CUT, 1);
 
 /**
+ * Pre-arm: VIO speed with the vehicle at rest that blocks arming
+ *
+ * A VIO started in drifting dust can take the grains for motion and run away while the
+ * vehicle sits on the ground (docs/vio-render.md: up to 2.8 m/s before take-off). EKF2 fuses
+ * it, and a take-off in any position mode then follows it. While the vehicle is disarmed
+ * and the land detector has it at rest (IMU only), the module averages the VIO's velocity
+ * over 1 s; over this limit for 2 s in a row it tells commander to refuse arming, in every
+ * mode, and tells the pilot. Arming is allowed again once the VIO has reported under the
+ * limit for 10 s at rest, or has gone silent for 5 s. A runaway caught by SH_WD_VIO_DV
+ * while disarmed blocks and clears the same way. Never acts once armed. 0 = off.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 5.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WD_GND_V, 0.3f);
+
+/**
  * Watchdog: entry hold-off after an estimator reset
  *
  * Structure Hold refuses to engage (commander keeps the current mode, or the module hands

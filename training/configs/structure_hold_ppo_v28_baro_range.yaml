@@ -1,0 +1,101 @@
+# The barometer step for the rangefinder line: v24 (the wall-range candidate, 23 inputs,
+# docs/wall-range.md) continued on barometer height, as structure_hold_ppo_v28_baro.yaml
+# continues v22. Trained only if the cloud Gazebo re-fly releases v24 (queue
+# training/queues/baro_successor.yaml, jobs baro_range_s0 to baro_range_s2: off until
+# then), because the barometer step should start from whichever policy is the release.
+# v24's recipe with nothing else moved (structure_hold_ppo_v24.yaml: the rangefinder in half
+# the episodes, the spike gate on), from v24's ONNX with a fresh critic warmed up 200
+# iterations (v24's policy.pt went with its run folder). GPU-sized: 4096 drones, 800
+# iterations plus the warm-up, one part under 1 h.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v28_baro_range.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_v28_baro_range.yaml --device cuda
+name: structure_hold_ppo_v28_baro_range
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  init_actor_onnx: training/policies/structure_hold_v24.onnx  # candidate, not released (PR #103)
+  critic_warmup: 200
+  resume_std: 0.05  # as v12 to v22: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 800
+  num_obs: 23  # the 21 of v22 plus the wall range and its usable flag
+  num_steps_per_env: 48
+  history: 15  # 180 ms window at the 12 ms tick, covers the 50 to 150 ms estimate delay
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    fusion: {height_source: baro}  # on top of the preset's EKF2 settings
+    episode_length_s: 60.0  # the Gazebo benchmark's hover
+    reengage_rate_hz: 0.05
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]  # toward +x, into the wall, give or take 90 deg
+    reward:
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    estimate:
+      jump_rate_hz: 0.1  # five times vio_default's 0.02, as v22 and v24
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+    range:  # as v24
+      present_prob: 0.5
+      rate_hz: 20.0
+      noise_std_m: 0.01
+      noise_frac: 0.005
+      scale_error: [-0.02, 0.02]
+      outlier_prob: 0.01
+      dropout_rate_hz: 0.05
+      dropout_s: [0.2, 2.0]
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 100
+    select_envs: 1024  # as v24
+smoke:
+  critic_warmup: 2
+  num_obs: 23
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    fusion: {height_source: baro}
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0  # a few in the 2 s smoke episodes
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    range: {present_prob: 0.7, outlier_prob: 0.01, dropout_rate_hz: 0.5}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8

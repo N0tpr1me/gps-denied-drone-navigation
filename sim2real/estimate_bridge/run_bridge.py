@@ -73,7 +73,7 @@ from pymavlink.dialects.v20 import common as mavlink
 from envs.frames import enu_to_ned
 from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
-from sim2real.estimate_bridge.gps import SATELLITES, enu_to_lat_lon_alt
+from sim2real.estimate_bridge.gps import SATELLITES, WORLD_ORIGIN, enu_to_lat_lon_alt
 from sim2real.estimate_bridge.heartbeat import (
     airborne_engage,
     offboard_engaged,
@@ -269,11 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14030")
     ap.add_argument("--sysid", type=int, default=1)
     ap.add_argument("--heartbeat-timeout-s", type=float, default=120.0)
-    # The world's spherical coordinates (wall_slab.sdf copies PX4's default world), so
-    # PX4's ground-truth topic, which it derives from them, shares the vision origin.
-    ap.add_argument("--origin-lat", type=float, default=47.397971057728974)
-    ap.add_argument("--origin-lon", type=float, default=8.546163739800146)
-    ap.add_argument("--origin-alt", type=float, default=0.0)
+    # The world's spherical coordinates (gps.WORLD_ORIGIN), so PX4's ground-truth topic,
+    # which it derives from them, shares the vision origin.
+    ap.add_argument("--origin-lat", type=float, default=WORLD_ORIGIN[0])
+    ap.add_argument("--origin-lon", type=float, default=WORLD_ORIGIN[1])
+    ap.add_argument("--origin-alt", type=float, default=WORLD_ORIGIN[2])
     ap.add_argument("--no-origin", action="store_true", help="send no global origin")
     args = ap.parse_args(argv)
 

@@ -27,6 +27,44 @@ StructureHold::~StructureHold()
 	perf_free(_tick_perf);
 }
 
+void StructureHold::updatePreArm(const hrt_abstime now)
+{
+	if (_armed || _param_wd_gnd_v.get() <= 0.f) {
+		_prearm_warned = false;
+		_ground_runaway = false;
+		return;
+	}
+
+	// A runaway RunawayFix caught on the ground (the vehicle carried, say, so StillFix had
+	// no at-rest slots to judge) blocks too, and both clear the same way: the VIO seen
+	// still for ten seconds at rest, or silent.
+	if (fixRunaway() && !_ground_runaway) {
+		_ground_runaway = true;
+		_still_fix.distrust();
+	}
+
+	_still_fix.tick(now);
+
+	if (_ground_runaway && !_still_fix.moving()) {
+		_ground_runaway = false;
+		_runaway_fix.reset();
+	}
+
+	const bool blocked = _still_fix.moving();
+
+	// Said when it starts and every 15 s while it lasts, so it is on screen when the pilot
+	// tries to arm: commander's own refusal does not say why.
+	if (blocked && (!_prearm_warned || now - _prearm_warned_us > 15_s)) {
+		_prearm_warned_us = now;
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: arming blocked, the VIO reports motion with the vehicle on the ground (SH_WD_GND_V)");
+
+	} else if (!blocked && _prearm_warned) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: arming allowed again, the VIO is still or silent");
+	}
+
+	_prearm_warned = blocked;
+}
+
 void StructureHold::cutVision(bool cut)
 {
 	if (_param_ev_ctrl == PARAM_INVALID || cut == (_ev_ctrl_saved >= 0)) {
@@ -108,6 +146,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wd_frz_t, param_limits::SH_WD_FRZ_T, "SH_WD_FRZ_T");
 	sanitizeParam(_param_wd_vio_dv, param_limits::SH_WD_VIO_DV, "SH_WD_VIO_DV");
 	sanitizeParam(_param_wd_ev_cut, param_limits::SH_WD_EV_CUT, "SH_WD_EV_CUT");
+	sanitizeParam(_param_wd_gnd_v, param_limits::SH_WD_GND_V, "SH_WD_GND_V");
 	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
 	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
 	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
@@ -147,6 +186,7 @@ void StructureHold::updateParams()
 	_watchdog.setLimits(limits);
 	_pilot.setLimits(limits);
 	_runaway_fix.setLimit(_param_wd_vio_dv.get());
+	_still_fix.setLimit(_param_wd_gnd_v.get());
 
 	_gains.p_pos = _param_p_pos.get();
 	_gains.p_vel = _param_p_vel.get();
@@ -220,6 +260,20 @@ void StructureHold::sendRegistration(const char *name, uint64_t &request_id)
 	_register_request_pub.publish(request);
 }
 
+void StructureHold::sendCheckRegistration()
+{
+	// An arming check with no mode: commander applies its answer to arming in every mode
+	// (PX4 ExternalChecks, a registration without a nav state), and never to a running one.
+	register_ext_component_request_s request{};
+	request.timestamp = hrt_absolute_time();
+	_prearm_request_id = request.timestamp ^ 0x5347u;
+	request.request_id = _prearm_request_id;
+	strncpy(request.name, CHECK_NAME, sizeof(request.name) - 1);
+	request.px4_ros2_api_version = register_ext_component_request_s::LATEST_PX4_ROS2_API_VERSION;
+	request.register_arming_check = true;
+	_register_request_pub.publish(request);
+}
+
 void StructureHold::sendUnregistration(const char *name, int8_t mode_id, int8_t arming_check_id)
 {
 	unregister_ext_component_s request{};
@@ -274,6 +328,16 @@ void StructureHold::checkRegistrationReplies()
 			PX4_INFO("Structure Hover registered: mode_id %d, arming_check_id %d", _hover_mode_id,
 				 _hover_arming_check_id);
 			sendControlModeConfig(_hover_mode_id, true);
+
+		} else if (_prearm_check_id == -1 && _prearm_registration_sent && reply.request_id == _prearm_request_id) {
+			if (!reply.success) {
+				// Commander takes no registration while armed: asked again after the disarm.
+				PX4_WARN("pre-arm VIO check registration rejected by commander");
+				continue;
+			}
+
+			_prearm_check_id = reply.arming_check_id;
+			PX4_INFO("pre-arm VIO check registered: arming_check_id %d", _prearm_check_id);
 		}
 	}
 
@@ -289,6 +353,11 @@ void StructureHold::checkRegistrationReplies()
 	} else if (!_hover_registration_sent && _param_hb_guard.get() != 0) {
 		sendRegistration(HOVER_MODE_NAME, _hover_request_id);
 		_hover_registration_sent = true;
+
+	} else if (!_prearm_registration_sent && _param_wd_gnd_v.get() > 0.f
+		   && !(_hover_registration_sent && _hover_mode_id == -1)) {
+		sendCheckRegistration();
+		_prearm_registration_sent = true;
 	}
 }
 
@@ -355,6 +424,14 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 		// for want of a local position.
 		reply.registration_id = _hover_arming_check_id;
 		reply.mode_req_local_position = _param_hb_range.get() == 0;
+		_arming_check_reply_pub.publish(reply);
+	}
+
+	if (_prearm_check_id != -1) {
+		// SH_WD_GND_V: no arming, in any mode, on a VIO that reports motion while the vehicle
+		// sits at rest (StillFix). Always true once armed: this never stops a flight.
+		reply.registration_id = _prearm_check_id;
+		reply.can_arm_and_run = !preArmBlocked();
 		_arming_check_reply_pub.publish(reply);
 	}
 
@@ -703,6 +780,11 @@ void StructureHold::updateFix(const hrt_abstime now)
 
 			if (useOdometryFix()) {
 				_runaway_fix.fix(_last_fix_sample_us, v(0), v(1), v(2), odom.reset_counter);
+			}
+
+			if (!_armed) {
+				// The speed is the same in any frame, so the VIO's own frame is checked too.
+				_still_fix.fix(_last_fix_us, odom.velocity[0], odom.velocity[1], odom.velocity[2], _landed && _at_rest);
 			}
 		}
 	}
@@ -1487,6 +1569,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.odometry_fix = useOdometryFix();
 	status.vio_imu_dv = _runaway_fix.disagreement();
 	status.vio_runaway = fixRunaway();
+	status.arming_blocked = preArmBlocked();
 	status.wall_distance_m = _wall_out.wall_m;
 	status.hold_clearance_m = _wall_out.clearance_m;
 	status.standoff_shift_m = _wall_guard.totalShift();
@@ -1669,6 +1752,10 @@ void StructureHold::Run()
 			sendUnregistration(HOVER_MODE_NAME, _hover_mode_id, _hover_arming_check_id);
 		}
 
+		if (_prearm_check_id != -1) {
+			sendUnregistration(CHECK_NAME, -1, _prearm_check_id);
+		}
+
 		exit_and_cleanup();
 		return;
 	}
@@ -1687,7 +1774,9 @@ void StructureHold::Run()
 	if (_mode_id == -1 || (_land_registration_sent && _land_mode_id == -1)
 	    || (_hover_registration_sent && _hover_mode_id == -1)
 	    || (!_land_registration_sent && _param_land_en.get() != 0)
-	    || (!_hover_registration_sent && _param_hb_guard.get() != 0)) {
+	    || (!_hover_registration_sent && _param_hb_guard.get() != 0)
+	    || (_prearm_registration_sent && _prearm_check_id == -1)
+	    || (!_prearm_registration_sent && _param_wd_gnd_v.get() > 0.f)) {
 		checkRegistrationReplies();
 
 		if (_mode_id == -1) {
@@ -1722,6 +1811,15 @@ void StructureHold::Run()
 		if (_armed && !armed) {
 			_last_trip = Trip::None;
 			_runaway_fix.reset();  // a VIO that ran away is trusted again after a disarm
+
+			if (_prearm_check_id == -1) {
+				_prearm_registration_sent = false;  // rejected while armed: ask again
+			}
+		}
+
+		if (_armed != armed) {
+			_still_fix.reset();  // the ground check starts over on every arm and disarm
+			_ground_runaway = false;
 		}
 
 		_armed = armed;
@@ -1737,6 +1835,7 @@ void StructureHold::Run()
 
 	if (_land_detected_sub.update(&land_detected)) {
 		_landed = land_detected.landed;
+		_at_rest = land_detected.at_rest;
 	}
 
 	_attitude_sub.update(&_attitude);
@@ -1753,6 +1852,8 @@ void StructureHold::Run()
 					     (double)_runaway_fix.disagreement());
 		}
 	}
+
+	updatePreArm(now);
 
 	// SH_WD_EV_CUT: a runaway caught while the module is in charge (or handing back) takes
 	// the VIO out of EKF2, which otherwise turns its attitude to follow it; it goes back in

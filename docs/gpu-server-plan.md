@@ -24,6 +24,13 @@ The 5 m surface passes (`docs/surface-passes.md`) have a queue of their own,
 `training/queues/surface_passes.yaml` (2026-11-09): two seeds of the pass training on 2 GPUs,
 chains of sub-1 h parts, then `hold_pass_gate`. It runs on its own or beside this one.
 
+The barometer-height successor (`docs/baro-successor.md`) has one too,
+`training/queues/baro_successor.yaml` (2026-11-09): v22's recipe on barometer height, three
+seeds on 2 GPUs (0.9 h each), then each judged against v22 in the Gazebo-like check (0.8 h
+each), about 5.1 GPU-hours, every job under an hour. It is parked: the looser barometer
+holds it was written for turned out to be a scoring offset, and the seed-repeatability
+retrains already show what the barometer gives in the check, so run it only if asked.
+
 ## How the queue works
 
 ```
@@ -86,8 +93,8 @@ All of these are `run_baseline --jobs auto`, scored on true position by `eval/me
 
 | # | Job | Flights | Time | What it decides |
 | --- | --- | --- | --- | --- |
-| 8 | `gz_tuned_baseline`: tuned PX4, `vio_at_hover` | 24 | ~25 min | The server's tuned-PX4 table against the Mac's (`docs/baseline.md`: mean p95 0.427 / 0.424 / 0.428 m). The machine changed, so a few % either way is expected; more means Gazebo's real-time factor is off (`rtf_min` in `batch.json`; fewer jobs) |
-| 9 | `gz_v22_baseline`: v22, `vio_at_engage` | 24 | ~25 min | v22 on the server: mean p95 40 % or more below tuned, 0 crashes in the 60 s holds, as on the Mac (-43 to -45 %). This pair becomes the server's benchmark row in `docs/baseline.md`; the Mac's stays the record |
+| 8 | `gz_tuned_baseline`: tuned PX4, `vio_at_hover` | 24 | ~25 min | The server's tuned-PX4 table against the cloud's on current main (`docs/baseline.md`, re-flown 2026-11-09 on `EKF2_HGT_REF` 0: mean p95 0.49 / 0.51 / 0.53 m; the Mac's 0.427 / 0.424 / 0.428 m were flown on vision height and are the old set-up). The machine changed, so a few % either way is expected; more means Gazebo's real-time factor is off (`rtf_min` in `batch.json`; fewer jobs) |
+| 9 | `gz_v22_baseline`: v22, `vio_at_engage` | 24 | ~25 min | v22 on the server: mean p95 near the cloud's 0.33 / 0.33 / 0.29 m (34 to 46 % below tuned), 0 crashes in the 60 s holds. The -43 to -45 % written here first was flown on 2026-11-02 with `EKF2_HGT_REF` 1, the old setting. This pair becomes the server's benchmark row in `docs/baseline.md`; the cloud's 2026-11-09 re-fly is the record |
 | 10 | `gz_v24_image`: export v24's header, build `structure-hold/px4-sitl:v24`, restore the committed header | - | ~30 min | A SITL image with v24 compiled in. The committed `PolicyWeights.hpp` stays v22's until a release |
 | 11 | `gz_v24_refly`: v24, `--rangefinder`, the v24 image | 24 | ~25 min | **The v24 release decision.** Beats `gz_v22_baseline` on mean p95 and worst toward the wall with 0 crashes, and the mock predicted it (p95 ratio about 0.77): v24 goes to Zain as a release candidate, with the lift rule miss (+1.5 cm in the mock) stated. Loses or crashes: v24 is parked and the mock check's lift rule was right |
 | 12 | `gz_v22_range`: v22, `--rangefinder` | 24 | ~25 min | v22 with the same rangefinder, so the wall guard is on for both and v24's gain is the policy's, not the guard's |
@@ -115,7 +122,9 @@ the wind evidence are all in `experiments/LOG.md`.
 - If Isaac passes M3: Isaac Lab's speed decides whether later recipes use more drones or
   longer episodes inside the hour rule (`docs/isaac-lab.md` "M3"). A seed sweep of v22's recipe
   on Isaac and on the mock (3 seeds each, 6 GPU runs of 45 min) says how much of a candidate's
-  mock score is seed luck; today nobody knows.
+  mock score is seed luck. The mock half ran in the cloud on 2026-11-09 (`docs/gazebo_check.md`
+  "Seed repeatability"): 5 % spread in pooled p95 between seeds, verdicts that flip on single
+  replay cells, so a check margin inside about 10 % is seed luck; the Isaac half still waits.
 - Gate 1 stress set and the Basalt-fitted estimate configs (`eval/configs/gate1_x500_ekf_*`)
   re-run on the GPU for v24 and the Isaac policy, 10 min each.
 - If the pass policy passes `hold_pass_gate`: Gazebo pass scenarios with stock PX4 flying the
@@ -154,7 +163,7 @@ python -m training.queue training/queues/server_week2.yaml --max-gpus 2
 | --- | --- | --- | --- |
 | 1. the hold datasheet | 3 x 0.9 | the wind at which Structure Hold and the PD break, per direction, distance and estimate quality: the number every datasheet quotes, which nobody publishes for hold accuracy; then the edge cells in Gazebo | `docs/hold-datasheet.md` |
 | 2. failure rates per fault | 9 x 0.3 | a 95 % bound on the crash rate behind every FMEA row (20,480 episodes each), and the Gazebo field faults from 3 seeds to 8 | `docs/fault-rates.md` |
-| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check | `docs/gazebo_check.md` |
+| 3. seed repeatability | 3 x 0.8 + 0.75 | how much of a check score is seed luck: v22's recipe on three more seeds through the Gazebo-like check. Done in the cloud 2026-11-09 (the four jobs are disabled in the queue): about 5 % seed spread in pooled p95, verdicts that turn on single replay cells | `docs/gazebo_check.md` "Seed repeatability" |
 | 4. other drone sizes | about 5 | the policy on a 250 g and a 2 kg airframe fitted by `eval/fit_airframe.py`: whether a buyer's drone needs retraining | own thread |
 | 5. deck and pier undersides | about 0.3 | holds under a bridge deck and in a pier's wake, a second surface in the wind model and two Gazebo worlds | `training/queues/bridge_holds.yaml`, `docs/bridge-holds.md` |
 | 6. heading error | about 3 | holds with the estimate's heading off by 5 to 15 degrees (the `log_health.py` finding, flown) | `training/queues/heading_error.yaml`, `docs/heading-error.md` |
@@ -165,6 +174,40 @@ Items 4 and 8 need an environment change before they can be queued; each is its 
 and lands in a `server_week3.yaml` when ready. Where a week-2 result changes the
 safety manual (the envelope in section 2, the failure table in section 5) it is a new manual
 version for Zain to re-sign, not an edit in place.
+
+## Week 3: one free card, scoring only (2026-11-09)
+
+The server we got is shared (`docs/gpu-server.md` "The server we got"): on the day this was
+written one GPU was free and the CPUs were too loaded for training. So the third queue,
+`training/queues/server_week3.yaml`, trains nothing: it scores the policies that already exist
+(v22 released, v24 the wall-range candidate) on the GPU mock, every job under 1 h on 1 GPU,
+about 12 GPU-hours in all. It needs nothing from the other queues and nothing needs a yes.
+
+```
+python -m training.queue training/queues/server_week3.yaml --dry-run --gpus 1
+python -m training.queue training/queues/server_week3.yaml --smoke
+python -m training.queue training/queues/server_week3.yaml --max-gpus 2
+```
+
+| Part | Jobs | GPU hours | What it decides |
+| --- | --- | --- | --- |
+| 1. open questions | `dust_heavy`, `dust_cloud`, `dark_dust`, `dust_table` | 1.6 | The first flights on the dust a real VIO measured (`docs/vio-render.md` "Next" 2; `eval/configs/fault_rates_dust_measured.yaml`): crash rate with a 95 % bound for v22, v24 and the PD. The numbers that replace the made-up `degrade` row in the failure table |
+| | `v24_check_fresh` | 0.8 | v24 against v22 in the release check on two unseen check seeds at four times the episodes: whether v24's 23 % lead is the policy's or the sample's |
+| | `runaway_false_trips` | 0.8 | The heavy-dust runaway check (`SH_WD_VIO_DV`, `docs/field-faults.md` "Heavy dust") at 16 times the flights: "0 false trips in 31 flight hours" becomes a bound over about 500, and the catch rate of slow runaways gets 4096 flights each |
+| | `heading_v24_range` | 0.8 | Whether v24's range input holds a steady 30 deg wrong heading, where v22 hits the wall in every mock episode. Gazebo's EKF2 never held a steady 30 deg and v22 held there (`docs/heading-error.md`), so this cell is the mock's to answer. Yes: v24 covers the steady case too; no: the module heading check moves up |
+| 2. v24's release pack | `v24_gate1_baro`, `v24_gate1_stress_baro_p1` to `p3` | 2.0 | v24's Gate 1 on the benchmark's barometer height (its 2026-11-01 runs fused vision height) |
+| | `v24_gate1_basalt_fit` | 0.6 | Whether v24 passes the cell of the Basalt-fitted estimate that v22 failed |
+| | `v24_fault_*` (nine), `v24_fault_table` | 2.8 | v24's failure table per FMEA fault, beside week 2's v22 table |
+| 3. v24's datasheet | `v24_datasheet_into`, `_along`, `_lee`, `v24_datasheet_table` | 2.8 | v24's hold datasheet, beside week 2's v22 one |
+
+Parts 2 and 3 only matter if v24 is released. The cloud's Gazebo re-fly confirmed it on
+2026-11-09 (`docs/wall-range.md`: tighter than v22 in all three scenarios, no crash) and the
+release is Zain's decision, so they are queued now: a yes is then followed by a scored release
+pack, not another week. If v22 stays, run part 1 alone
+(`--only dust_heavy,dust_cloud,dark_dust,dust_table,v24_check_fresh,runaway_false_trips,heading_v24_range`).
+Not here, because other queues already have them: Route Follow's narrow pipes with five times
+the estimate jumps (`server_week1.yaml` `route_pipes*`, `route_gazebo.yaml`), seed luck of a
+training recipe (`server_week2.yaml` `seed_*`), and every Gazebo flight (the cloud).
 
 ## What needs Zain's yes, as one batch
 
@@ -189,8 +232,8 @@ v24 release, if its re-fly wins, is a separate decision card.
 | `setup` | `report.md` all PASS, hover test rtf about 1.0, parallel hovers each at real time | The failing step's log; the SITL lane waits, the GPU lanes can start if the GPU smoke passed |
 | `isaac_parity` | `parity: PASS`; no Isaac SKIPs; v22 on Isaac p95 0.20 to 0.21 m, crash under 1 % | M3 stops; mock on the GPU is the decided fallback; tell Zain with the parity table |
 | `v22_eval_mock_gpu` | p95 0.211 / 0.206 / 0.202 m to a few mm | The GPU torch build differs from the CPU one; stop the GPU scoring jobs until explained |
-| `gz_tuned_baseline` | Mean p95 within about 5 % of the Mac's 0.427 / 0.424 / 0.428 m, `rtf_min` near the Mac's 0.85 | Fewer parallel jobs (`--jobs 8`), re-fly; the server's numbers do not replace the Mac's until this passes |
-| `gz_v22_baseline` | 40 % or more below tuned, 0 crashes | A regression on main since the Mac batches; bisect before any new policy flies |
+| `gz_tuned_baseline` | Mean p95 within about 5 % of the cloud's 0.49 / 0.51 / 0.53 m on current main (not the Mac's 0.427 / 0.424 / 0.428 m, flown on vision height), `rtf_min` near 1.0 | Fewer parallel jobs (`--jobs 8`), re-fly; the server's numbers do not replace the cloud's until this passes |
+| `gz_v22_baseline` | Mean p95 within about 5 % of the cloud's 0.33 / 0.33 / 0.29 m (34 to 46 % below tuned), 0 crashes | A regression on main since the cloud batches of 2026-11-09; bisect before any new policy flies |
 | `gz_v24_refly` vs `gz_v22_range` | v24 tighter on mean p95 and worst toward the wall, 0 crashes | v24 parked; the lift rule stands as the gate |
 | `route_pipes_stress` | Best seed: narrow-pipe crashes under 11 %, beats both PDs on all 13 cells | More jumps in training did not help; next try is a rangefinder-weighted reward, not more iterations |
 | `hold_pass_gate` | PASS against the PD on the pass cells, lower p95 than v22 in every cell | v22 as it is stays the pass controller to beat; look at the start and stop of each pass (a pass-velocity input is the next idea) |

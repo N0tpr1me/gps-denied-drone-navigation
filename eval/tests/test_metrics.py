@@ -209,3 +209,35 @@ def test_bad_traces_are_rejected(kwargs):
 def test_cli_needs_both_wall_arguments(capsys):
     with pytest.raises(SystemExit):
         main(["x.ulg", "--wall-point", "1,0,0"])
+
+
+def test_a_gap_in_the_truth_is_left_out_not_drawn_through():
+    # 10 s at the hold point, then nothing for 10 s, then 10 s sitting 0.5 m off. Drawn
+    # through, the gap would add a 10 s ramp that nobody measured.
+    t = np.concatenate([np.arange(0.0, 10.0, 0.1), np.arange(20.0, 30.0 + 1e-9, 0.1)])
+    x = np.where(t < 15.0, 0.0, 0.5)
+    drawn = compute_metrics(Trace(t, line_x(t, x), HOLD), WALL, contact_radius_m=0.6)
+    m = compute_metrics(Trace(t, line_x(t, x), HOLD), WALL, contact_radius_m=0.6,
+                        max_gap_s=0.5)
+    assert drawn["scored_s"] == pytest.approx(30.0, abs=0.02)
+    assert m["duration_s"] == pytest.approx(30.0, abs=0.02)
+    assert m["scored_s"] == pytest.approx(20.0, abs=0.2)
+    # Half the scored time at 0, half at 0.5 m: the ramp's values in between are gone.
+    assert m["rms_m"] == pytest.approx(0.5 / math.sqrt(2), abs=0.01)
+    assert drawn["rms_m"] < m["rms_m"] - 0.02
+    assert m["min_clearance_m"] == pytest.approx(0.5)
+    assert m["contacts"] == 1
+
+
+def test_a_gap_never_counts_as_recovered():
+    # Back within 10 cm only inside the gap: with the gap left out, recovery starts after it.
+    t = np.concatenate([np.arange(0.0, 5.0, 0.1), np.arange(9.0, 20.0 + 1e-9, 0.1)])
+    x = np.where(t < 5.0, 0.5, 0.0)
+    m = compute_metrics(Trace(t, line_x(t, x), HOLD), gusts=[(1.0, 2.0)], max_gap_s=0.5)
+    assert m["recovery_max_s"] == pytest.approx(7.0, abs=0.02)
+
+
+def test_a_window_with_no_truth_at_all_is_refused():
+    t = np.concatenate([np.arange(0.0, 2.0, 0.1), np.arange(28.0, 30.0, 0.1)])
+    with pytest.raises(ValueError, match="no truth"):
+        compute_metrics(Trace(t, line_x(t, 0 * t), HOLD), window=(5.0, 25.0), max_gap_s=0.5)

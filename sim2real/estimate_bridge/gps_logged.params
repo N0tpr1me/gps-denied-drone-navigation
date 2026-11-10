@@ -1,0 +1,20 @@
+# PX4 parameters laid over the benchmark's set when a profile's `gps` block says
+# `fused: false` (the runners do this themselves): the bridge's scripted receiver reaches
+# PX4 and the log, and EKF2 never uses it. That is how an RTK receiver is carried as the
+# truth an outdoor flight is scored on (eval/rtk_truth.py, docs/partner-pack.md); here
+# Gazebo's own truth is in the same log to check the scorer against.
+#
+# MAV_USEHILGPS 1: PX4's mavlink receiver turns the bridge's HIL_GPS into sensor_gps.
+# SIM_GPS_USED 0: Gazebo's own navsat receiver reports no fix, so the receiver PX4 selects
+#   (vehicle_gps_position, which the logger keeps at 10 Hz) is the bridge's.
+# EKF2_GPS_CTRL 0: nothing from GPS in the estimate. SYS_HAS_GPS 0: no GPS preflight check.
+#   Both are what the benchmark set says already; kept here so this file stands alone.
+1	1	MAV_USEHILGPS	1	6
+1	1	SIM_GPS_USED	0	6
+1	1	EKF2_GPS_CTRL	0	6
+1	1	SYS_HAS_GPS	0	6
+# SDLOG_PROFILE 2179 = PX4 SITL's 131 (default + estimator replay + computer vision) + bit 11
+#   (2048, high-rate sensors): sensor_gps at the receiver's full rate. Without it PX4 v1.17
+#   logs sensor_gps at 1 Hz, and with SYS_HAS_GPS 0 the sensors module publishes no
+#   vehicle_gps_position (the 10 Hz copy) at all: found on the first check flight, 2026-11-09.
+1	1	SDLOG_PROFILE	2179	6

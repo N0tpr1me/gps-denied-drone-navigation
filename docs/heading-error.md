@@ -130,7 +130,10 @@ flown in a cloud container one flight at a time (`--jobs 1`, 16-flight batches i
 pooled with `run_baseline --pool`), 80 flights. Gazebo's real-time factor, sampled every 15 s,
 was 0.97 to 1.00 over 465 samples (mean 1.00; one sample at each of 12 flight starts, before
 the simulation runs, left out). The stock runner's own finer sampling caught two tuned drift
-flights dipping to 0.61 and 0.84; both were flown again at 1.00 and the re-flies count. Wind
+flights (seeds 7 and 8) dipping for a moment to 0.61 and 0.84, and both were flown again. The
+bridge logs later showed every 10 s stretch of every flight at 0.98 or above
+(`docs/bridge-holds.md`, run quality), so those dips were stalls of well under a second and
+the first flights are the ones scored; the two second flights are repeats of the same seed. Wind
 into the wall, 1 m, 8 seeds per cell, `px4_tuned_v2.params` with `vision_yaw.params` over it.
 Yardstick: tuned PX4 in Position mode on the same profile. "Held" is a full 60 s scored hold
 with no wall contact. The heading error is what EKF2 really had (EKF2's heading minus Gazebo's,
@@ -138,7 +141,7 @@ from each ulog).
 
 | Batch | Held | Not held | p95 of the holds (mean / worst) | Heading error in the holds |
 | --- | --- | --- | --- | --- |
-| tuned, drift to 30 deg, 4 m/s | 3 of 8 | 5 wall contact | 0.59 / 0.63 m | 0 up to 18 to 22 deg |
+| tuned, drift to 30 deg, 4 m/s | 4 of 8 | 4 wall contact | 0.67 / 0.87 m | 0 up to 18 to 22 deg |
 | **v22**, drift to 30 deg, 4 m/s | **8 of 8** | 0 | 0.23 / 0.32 m | 0 up to 29 to 30 deg |
 | tuned, 30 deg from takeoff, 4 m/s | 3 of 8 | 5 wall contact | 0.61 / 0.68 m | 14 deg mean |
 | tuned, 30 deg from takeoff, 8 m/s | 3 of 8 | 5 wall contact | 0.53 / 0.59 m | 14 deg mean |
@@ -154,7 +157,9 @@ What it says:
 - **The drift batch is the clean comparison, and v22 wins it.** Both controllers start on the
   true heading and the error grows during the hold. v22 held all 8 flights at 0.23 m p95, the
   same as its no-error control, while EKF2's heading went 29 to 30 deg wrong. Tuned PX4 hit the
-  wall in 5 of 8, and its three holds were 0.59 m against 0.24 m in its control.
+  wall in 4 of 8, and its four holds were 0.67 m against 0.24 m in its control. Of the two
+  seeds flown a second time, seed 7 held at 0.87 m the first time and hit the wall the
+  second (2.30 m); seed 8 held both times (0.66 and 0.63 m).
 - **The 30 deg batches say less about v22 than their counts suggest**, because the hold runner
   takes off and hovers in Position mode on the same wrong heading before it engages, and stock
   PX4 is already circling by then. At engage the vehicle was moving at 0.6 to 6.0 m/s; in the
@@ -202,6 +207,53 @@ has no check on how fast the vehicle is moving when it is asked to engage.
 
 Runs: `experiments/LOG.md` (2026-11-09, heading batches). Run folders stay in the cloud
 container (`runs/` is not committed).
+
+## Candidates trained in the cloud (2026-11-09)
+
+The GPU server was full, so `heading_s0` and `heading_s1` ran in the cloud container on 4 CPU
+cores with `structure_hold_ppo_heading_cloud.yaml` (the same recipe on 1024 drones, about
+25 min each), then `gazebo_check_heading_candidates.yaml` judged them against v22 (32 min).
+A third try, `heading_s1b`, continued `heading_s1` 400 iterations with the wrong heading on
+35 % of episodes instead of 70 %, to win back v22's tight hold on a true heading. Runs in
+`experiments/LOG.md`; yardstick v22 (the PD's numbers are in the table above).
+
+| Cell | v22 crash / p95 | `heading_s0` | `heading_s1` | `heading_s1b` |
+| --- | --- | --- | --- | --- |
+| `calm_clean` | 0 % / 0.055 m | 0 % / 0.067 m | 0 % / 0.081 m | 0 % / 0.068 m |
+| `head_none` (true heading) | 0 % / 0.173 m | 0 % / 0.231 m | 0 % / 0.237 m | 0 % / 0.193 m |
+| `head_off15` | 2.3 % / 0.186 m | 0 % / 0.236 m | 0 % / 0.242 m | 0 % / 0.195 m |
+| `head_off30` | 100 % / 1.12 m | 1.6 % / 0.228 m | 0 % / 0.243 m | 0 % / 0.198 m |
+| `head_off45` | 100 % / 1.20 m | 50.8 % / 0.482 m | 28.9 % / 0.314 m | 46.1 % / 0.434 m |
+| `head_drift` | 76.6 % / 0.581 m | 0.8 % / 0.233 m | 0 % / 0.251 m | 0 % / 0.197 m |
+| `head_steps` | 50.8 % / 0.400 m | 11.8 % / 0.252 m | 3.2 % / 0.273 m | 5.5 % / 0.206 m |
+| `head_off30_wind8` | 93.0 % / 0.943 m | 1.6 % / 0.218 m | 0.8 % / 0.226 m | 0 % / 0.192 m |
+| Verdict against v22 | reference | fails `head_none` slack | fails both true-heading cells | fails the fast ring |
+
+**No candidate passes, so none goes to Gazebo yet.** Training on a wrong heading works in
+the mock: every candidate holds through a fixed 30 degrees and the drift with almost no
+crashes, where v22 hits the wall. The price is paid when the compass is right. `heading_s0`
+and `heading_s1` hold about 35 % looser on a true heading (0.23 against 0.17 m), outside the
+check's 2 cm slack. `heading_s1b` wins most of that back (0.193 m, inside the slack) but works
+its rate commands harder: its 2.2 to 6 Hz roll and pitch rate content is 0.022 rad/s against
+v22's 0.018 pooled over the heading cells (0.022 against 0.015 on `head_none`, 0.014 against
+0.009 in calm air), just over the check's 25 % limit, and a fast ring is what made v18 ring in
+Gazebo (`docs/gazebo_check.md`). It is the trade the phase margin predicts: a loop that
+tolerates a turned frame gives up some tightness or some smoothness.
+
+Read with the Gazebo flights above, the case for a heading-trained release is weaker than the
+mock alone made it. In Gazebo v22 as released held all 8 drift flights at its no-error p95
+while EKF2's heading went 29 to 30 degrees wrong; the mock's `head_drift` cell, the same
+1 deg/s drift to 30 degrees, loses 77 % of v22's episodes. Why the mock is harsher is not
+known. The Gazebo drift spends about 10 s at 30 degrees against the mock's 20 s, but about
+three quarters of the mock's crashes come within those first 10 s, so the timing does not
+explain it. Until that gap is understood the mock's heading cells overstate the danger to v22,
+and the candidates buy robustness Gazebo has not shown v22 to lack, at a cost on the true
+heading that is certain. Nothing is released or flown from this.
+
+If a steady 30 degrees turns out to be a real case (the engage-time offset profile suggested
+above, or a partner's flight near steel), `heading_s1b` is the starting point: continue it
+with a heavier `action_band` weight to bring the fast ring back under the limit (one sub-hour
+part), then fly it on the heading batches.
 
 ## Server runs (`training/queues/heading_error.yaml`)
 
