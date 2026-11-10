@@ -97,6 +97,7 @@ public:
 	static constexpr const char *MODE_NAME = "Structure Hold";
 	static constexpr const char *LAND_MODE_NAME = "Structure Land";
 	static constexpr const char *HOVER_MODE_NAME = "Structure Hover";
+	static constexpr const char *CHECK_NAME = "Structure Hold VIO";  // the pre-arm check
 	static constexpr float HOVER_WALL_RANGE_M = 5.f;  // a trip hands back to Structure Hover inside this
 	static constexpr float GUARD_SPEED_TAU_S = 0.3f;  // low-pass on the guard's push rate (feed-forward)
 	static constexpr float LAND_SLOW_MPS = 0.3f;      // Structure Land's descent while it lags the guard
@@ -120,6 +121,7 @@ private:
 	// Mode registration with commander
 	void sendRegistration(const char *name, uint64_t &request_id);
 	void sendUnregistration(const char *name, int8_t mode_id, int8_t arming_check_id);
+	void sendCheckRegistration();
 	void checkRegistrationReplies();
 	void sendControlModeConfig(int8_t mode_id, bool position_control);
 	void replyToArmingCheck(uint8_t request_id);
@@ -208,6 +210,11 @@ private:
 	uint64_t _hover_request_id{0};
 	int8_t _hover_mode_id{-1};     // Structure Hover; stays -1 with SH_HB_GUARD 0
 	int8_t _hover_arming_check_id{-1};
+	// SH_WD_GND_V: an arming check of its own, not tied to a mode, so commander applies its
+	// answer to arming in every mode. Stays -1 with the parameter at 0.
+	bool _prearm_registration_sent{false};
+	uint64_t _prearm_request_id{0};
+	int8_t _prearm_check_id{-1};
 
 	// Vehicle state cache
 	vehicle_status_s _vehicle_status{};
@@ -218,6 +225,7 @@ private:
 	bool _hover_thrust_from_estimator{false};
 	bool _armed{false};
 	bool _landed{true};  // vehicle_land_detected; on the ground until it says otherwise
+	bool _at_rest{false};  // and its at-rest flag: the IMU alone saw no movement for 1 s
 
 	// Mode state
 	uint8_t _state{structure_hold_status_s::STATE_UNREGISTERED};
@@ -241,6 +249,14 @@ private:
 	float _fix_frozen_s{0.f};
 	structure_hold::RunawayFix _runaway_fix{};  // the fix's velocity against the IMU's
 	bool _runaway_warned{false};
+	// SH_WD_GND_V: the VIO's speed while the vehicle is disarmed and at rest; while it says
+	// moving, arming is refused in every mode (replyToArmingCheck).
+	structure_hold::StillFix _still_fix{};
+	bool _ground_runaway{false};     // RunawayFix tripped while disarmed: wait for StillFix
+	bool _prearm_warned{false};
+	hrt_abstime _prearm_warned_us{0};
+	bool preArmBlocked() const { return !_armed && _param_wd_gnd_v.get() > 0.f && _still_fix.moving(); }
+	void updatePreArm(hrt_abstime now);
 	// SH_WD_EV_CUT: EKF2_EV_CTRL as it was before the module cleared its position and
 	// velocity bits on a runaway VIO; -1 while EKF2 is untouched.
 	param_t _param_ev_ctrl{PARAM_INVALID};
@@ -319,6 +335,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_FRZ_T>) _param_wd_frz_t,
 		(ParamFloat<px4::params::SH_WD_VIO_DV>) _param_wd_vio_dv,
 		(ParamInt<px4::params::SH_WD_EV_CUT>) _param_wd_ev_cut,
+		(ParamFloat<px4::params::SH_WD_GND_V>) _param_wd_gnd_v,
 		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
 		(ParamInt<px4::params::SH_BENCH>) _param_bench,
