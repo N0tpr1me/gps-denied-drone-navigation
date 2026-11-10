@@ -46,7 +46,7 @@ to arm, in every mode.
 
 | Need | Requirement | Why |
 | --- | --- | --- |
-| Firmware | PX4 v1.17.0, or a fork of exactly that release | The external-mode handshake and the topics below are v1.17's; another release is a re-check on our side |
+| Firmware | PX4 v1.17.0, or a fork of exactly that release, for everything in this guide and every hold number. The same module source also builds and passes its simulator acceptance flights on v1.16.2 and v1.18.0-rc1 (`docs/px4-versions.md`) | The interface below is the same on the three releases (the module adapts to v1.18's external-mode and parameter changes at build time), but the benchmark, the bench test and the safety manual are on v1.17.0 only; a real flight on another release is a re-check on our side first |
 | Airframe | A multicopter that flies well in stock Position mode on its own VIO with GPS off | Structure Hold flies on top of your rate loop and your estimate; it does not fix either. GPS or RTK may be fused as well, with the forward rangefinder and `SH_WALL_REQ` 1 (`docs/field-faults.md`, "GPS on") |
 | Flight controller | About 125 KB of free flash and a single-precision FPU | The policy's weights are compiled in. A 2 MB board needs the multicopter-only build (`sim2real/px4/boards/structurehold.px4board`) |
 | Position estimate | VIO into EKF2 as external vision (`ODOMETRY`, `estimator_type` VISION or VIO), logged as `vehicle_visual_odometry` | The hold point and the policy's position error come from EKF2's `vehicle_local_position`; the VIO samples tell a fresh fix from a stale one |

@@ -368,6 +368,18 @@ void StructureHold::sendControlModeConfig(int8_t mode_id, bool position_control)
 	// mc_rate_control follows. Structure Land: PX4's whole position-to-rate cascade, fed
 	// by our trajectory_setpoint, as in its own position modes (the land detector reads
 	// the climb-rate flag and the commanded descent to find touchdown).
+#if SH_HAS_SETPOINT_CONFIG
+	// PX4 v1.18: the same two sets of controllers, named by setpoint type (commander's
+	// ModeUtil/setpoint_types.cpp). No setpoint timeout, as on v1.17, where none exists:
+	// the module's own watchdog and the arming-check reply cover a stalled module.
+	setpoint_config_s config{};
+	config.timestamp = hrt_absolute_time();
+	config.source_id = mode_id;
+	config.type = position_control ? setpoint_config_s::TYPE_TRAJECTORY : setpoint_config_s::TYPE_RATES;
+	config.should_apply = true;
+	config.timeout_ms = 0;
+	_setpoint_config_pub.publish(config);
+#else
 	vehicle_control_mode_s config{};
 	config.timestamp = hrt_absolute_time();
 	config.source_id = mode_id;
@@ -384,6 +396,7 @@ void StructureHold::sendControlModeConfig(int8_t mode_id, bool position_control)
 	config.flag_control_offboard_enabled = false;
 	config.flag_control_termination_enabled = false;
 	_config_control_setpoints_pub.publish(config);
+#endif
 }
 
 void StructureHold::replyToArmingCheck(uint8_t request_id)
@@ -1756,7 +1769,11 @@ void StructureHold::Run()
 			sendUnregistration(CHECK_NAME, -1, _prearm_check_id);
 		}
 
+#ifdef SH_MODULE_DESCRIPTOR
+		exit_and_cleanup(desc);
+#else
 		exit_and_cleanup();
+#endif
 		return;
 	}
 
@@ -1977,13 +1994,36 @@ void StructureHold::Run()
 // ---------------------------------------------------------------------------------------
 // Module boilerplate
 
+#ifdef SH_MODULE_DESCRIPTOR
+ModuleBase::Descriptor StructureHold::desc{task_spawn, custom_command, print_usage};
+#endif
+
+void StructureHold::setInstance(StructureHold *instance)
+{
+#ifdef SH_MODULE_DESCRIPTOR
+	desc.object.store(instance);
+	desc.task_id = instance ? task_id_is_work_queue : -1;
+#else
+	_object.store(instance);
+	_task_id = instance ? task_id_is_work_queue : -1;
+#endif
+}
+
+StructureHold *StructureHold::runningInstance()
+{
+#ifdef SH_MODULE_DESCRIPTOR
+	return is_running(desc) ? get_instance<StructureHold>(desc) : nullptr;
+#else
+	return is_running() ? get_instance() : nullptr;
+#endif
+}
+
 int StructureHold::task_spawn(int argc, char *argv[])
 {
 	StructureHold *instance = new StructureHold();
 
 	if (instance) {
-		_object.store(instance);
-		_task_id = task_id_is_work_queue;
+		setInstance(instance);
 
 		if (instance->init()) {
 			return PX4_OK;
@@ -1994,8 +2034,7 @@ int StructureHold::task_spawn(int argc, char *argv[])
 	}
 
 	delete instance;
-	_object.store(nullptr);
-	_task_id = -1;
+	setInstance(nullptr);
 
 	return PX4_ERROR;
 }
@@ -2039,9 +2078,11 @@ static int runPolicyBench(int iterations)
 int StructureHold::custom_command(int argc, char *argv[])
 {
 	if (argc > 0 && !strcmp(argv[0], "bench")) {
-		if (is_running() && (get_instance()->_state == structure_hold_status_s::STATE_ENGAGED
-				     || get_instance()->_state == structure_hold_status_s::STATE_LANDING
-				     || get_instance()->_state == structure_hold_status_s::STATE_HOVER)) {
+		const StructureHold *running = runningInstance();
+
+		if (running && (running->_state == structure_hold_status_s::STATE_ENGAGED
+				|| running->_state == structure_hold_status_s::STATE_LANDING
+				|| running->_state == structure_hold_status_s::STATE_HOVER)) {
 			PX4_ERR("refused while engaged");
 			return 1;
 		}
@@ -2051,7 +2092,7 @@ int StructureHold::custom_command(int argc, char *argv[])
 	}
 
 	if (argc > 0 && !strcmp(argv[0], "trip")) {
-		if (!is_running()) {
+		if (!runningInstance()) {
 			PX4_ERR("not running");
 			return 1;
 		}
@@ -2165,5 +2206,9 @@ Land is ext2) or from a ground station / MAVLink as the external mode by name.
 
 extern "C" __EXPORT int structure_hold_main(int argc, char *argv[])
 {
+#ifdef SH_MODULE_DESCRIPTOR
+	return ModuleBase::main(StructureHold::desc, argc, argv);
+#else
 	return StructureHold::main(argc, argv);
+#endif
 }

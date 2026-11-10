@@ -262,13 +262,17 @@ sim2real/px4/
                          Watchdog.hpp, WallGuard.hpp, Handback.hpp, RangeHover.hpp, ParamLimits.hpp,
                          PolicyController.hpp, MlpPolicy.hpp,
                          PolicyWeights.hpp (generated), HoldController.hpp,
-                         structure_hold_params.c
+                         structure_hold_params.c (the parameters, source of truth) and
+                         structure_hold_params.yaml (generated from it; PX4 v1.18 reads this)
   msg/StructureHoldStatus.msg
   tools/                 export_policy_header.py (onnx -> PolicyWeights.hpp),
-                         make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp)
+                         make_test_vectors.py (Python env -> tests/PolicyTestVectors.hpp),
+                         params_yaml.py (structure_hold_params.c -> .yaml; --check, --against)
   install.sh             wires the module into a PX4-Autopilot tree (idempotent)
   boards/                structurehold.px4board: multicopter-only variant that fits a 2 MB board
   sitl_test.sh / .py     acceptance flight in PX4 SITL (SIH quadrotor, no Gazebo)
+  version_check.sh       one PX4 release end to end: clone, build, parameters, SIH flight
+                         (docs/px4-versions.md)
   bench_test.py          props-off bench checks on a flight controller (docs/bench-test.md)
   run_gazebo.py          the same flight in Gazebo with wind and the corrupted estimate
                          (Docker image, sim2real/estimate_bridge), scored on the truth
@@ -310,6 +314,12 @@ git clone --depth 1 --branch v1.17.0 --recurse-submodules https://github.com/PX4
 sim2real/px4/install.sh /path/to/PX4-Autopilot          # --link to symlink while developing
 cd /path/to/PX4-Autopilot && make px4_sitl_default
 ```
+
+v1.17.0 is the benchmark release. The same source also builds and passes its simulator
+flights on v1.16.2 and v1.18.0-rc1, picking up PX4 v1.18's changes at build time
+(`setpoint_config`, the new `ModuleBase`, YAML parameters generated from
+`structure_hold_params.c` by `tools/params_yaml.py`); `version_check.sh <tag>` checks a
+release in one command. What was checked on each and what was not: `docs/px4-versions.md`.
 
 `install.sh` copies (or links) `structure_hold/` to `src/modules/structure_hold`, adds the
 message to `msg/CMakeLists.txt`, enables `CONFIG_MODULES_STRUCTURE_HOLD` in the SITL board
