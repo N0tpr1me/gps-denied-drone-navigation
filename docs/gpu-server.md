@@ -176,7 +176,10 @@ batches were judged against the Mac's 0.427 / 0.424 / 0.428 m, but those were fl
 vision height (`px4_tuned_v1.params`), and the 0.424 / 0.443 / 0.433 m of 2026-11-02 with
 `EKF2_HGT_REF` 1 (GPS height, falling back to the barometer) before PR #136 set it to 0.
 The cloud re-flew tuned PX4 on current main the same day at real-time factor about 1.0:
-0.494 / 0.514 / 0.529 m. Against that, the server's numbers are close:
+0.494 / 0.514 / 0.529 m. Against that, the server's numbers are close (all numbers in this
+table are against the setpoint as logged, the scoring until 2026-11-10; like for like the
+cloud row reads 0.327 / 0.325 / 0.329 m, `docs/baseline.md` "Scored like for like", and a
+server batch scored on current main prints both):
 
 | Flights at once | Tuned PX4 mean p95, calm / 4 / 8 m/s (m) | Real-time factor, worst |
 | --- | --- | --- |

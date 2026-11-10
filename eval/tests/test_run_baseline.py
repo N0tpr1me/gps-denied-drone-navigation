@@ -270,6 +270,21 @@ def test_module_pass_row_reads_the_pass_numbers_from_the_hold():
     assert r["pass"]["p95_while_moving_m"] is None
 
 
+def test_table_prints_the_reference_columns_only_where_a_batch_has_them():
+    from eval.baselines.run_baseline import table
+
+    plain = [row_from_summary(summary(seed=1, p95=0.5), ekf(CLEAN))]
+    assert "height offset" not in table({"label": "a", "params": "p", "commit": "c",
+                                         "rows": plain, "aggregate": aggregate(plain)})
+    s = summary(seed=1, p95=0.3)
+    s["metrics"].update(ground_offset_m=0.2)  # a partner-path Gazebo row: the offset alone
+    rows = [row_from_summary(s, ekf(CLEAN))]
+    text = table({"label": "a", "params": "p", "commit": "c", "rows": rows,
+                  "aggregate": aggregate(rows)})
+    assert "| height offset on the ground, mean m |" in text and "| 0.200 |" in text
+    assert "setpoint as logged" not in text and "setpoint moved" not in text
+
+
 def test_table_lists_the_pass_numbers_when_a_batch_flew_passes():
     from eval.baselines.run_baseline import table
 

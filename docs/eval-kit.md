@@ -196,9 +196,13 @@ image scored 29 % (0.300 against 0.423 m), and the first sample of 2026-11-02 41
 against 0.407 m). The difference is almost all the height offset EKF2 has on the ground
 before take-off on barometer height (`docs/baseline.md`, "What moved tuned PX4 from 0.43 to
 0.51 m"): it is a different number on every flight, one Structure Hold run drew 0.3 m of it
-in the earlier set, and with Gazebo truth this path does not take it out. A partner's real
+in the earlier set, and with Gazebo truth this path did not take it out. A partner's real
 session does: there the EKF2 frame is fitted to the truth over the take-off, so that
 offset never reaches the page.
+
+Since 2026-11-10 a Gazebo session loses that offset too (`eval.ulog.gazebo_reference`, as
+every Gazebo hold does; `docs/metrics.md`). The same four logs then score 0.180 against
+0.408 m (worst run 0.190 against 0.655 m), still 56 % and still two holds a side.
 
 ### Sample on RTK truth (2026-11-09, Gazebo, not a partner flight)
 

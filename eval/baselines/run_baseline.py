@@ -203,19 +203,24 @@ def table(batch: dict[str, Any]) -> str:
                      f"| {'yes' if r.get('post_hold_fail') else 'no'} "
                      f"| {'yes' if r['failsafe'] else 'no'} "
                      f"({'yes' if r['failsafe_in_hover'] else 'no'}) |")
+    # The reference columns (eval.ulog.gazebo_reference) are printed only where a batch has
+    # them: a mocap or RTK session has none, and its table stays as it was.
+    ref = [(title, key, nd) for title, key, nd in (
+        ("p95 against the setpoint as logged, mean m", "p95_logged_setpoint_m_mean", 3),
+        ("height offset on the ground, mean m", "ground_offset_m_mean", 3),
+        ("setpoint moved, worst m", "setpoint_moved_m_worst", 2))
+        if any(math.isfinite(a.get(key, math.nan)) for a in batch["aggregate"].values())]
     lines += ["", "| scenario | p95 mean / worst m | worst toward wall mean / worst m "
-              "| crashes | post-hold failed | failsafes (in hover) "
-              "| p95 against the setpoint as logged, mean m | height offset on the ground, "
-              "mean m | setpoint moved, worst m |", "|---|---|---|---|---|---|---|---|---|"]
+              "| crashes | post-hold failed | failsafes (in hover) |"
+              + "".join(f" {title} |" for title, _, _ in ref),
+              "|---|---|---|---|---|---|" + "---|" * len(ref)]
     for name, a in batch["aggregate"].items():
         lines.append(f"| {name} | {fmt(a['p95_m_mean'])} / {fmt(a['p95_m_worst'])} "
                      f"| {fmt(a['worst_toward_surface_m_mean'])} / "
                      f"{fmt(a['worst_toward_surface_m_worst'])} | {a['crashes']}/{a['n']} "
                      f"| {a.get('post_hold_fails', 0)}/{a['n']} "
-                     f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) "
-                     f"| {fmt(a.get('p95_logged_setpoint_m_mean', math.nan))} "
-                     f"| {fmt(a.get('ground_offset_m_mean', math.nan))} "
-                     f"| {fmt(a.get('setpoint_moved_m_worst', math.nan), 2)} |")
+                     f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) |"
+                     + "".join(f" {fmt(a.get(key, math.nan), nd)} |" for _, key, nd in ref))
     passes = [r for r in batch["rows"] if r.get("pass")]
     if passes:
         # Surface passes (eval/pass_score.py): the error split along the wall normal (the
