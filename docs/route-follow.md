@@ -366,6 +366,60 @@ because the estimate had drifted. For scale only (different routes, the mock): v
 cross-track p95 on the mock's nominal tunnels and corridors is 0.20 to 0.23 m. The like for
 like comparison waits for the server batch and a policy flying the same worlds.
 
+### The 8-seed baseline (cloud, 2026-11-10)
+
+The benchmark batches of `training/queues/route_gazebo.yaml`, flown in a cloud container
+(Gazebo benchmarks moved there, `docs/gpu-server.md`): one flight at a time, each profile in
+two seed halves pooled with `run_mission --pool`, on main `9893e4b` plus the runner changes
+below. 104 flights, all at real time: Gazebo's real-time factor was sampled every 15 s beside
+each flight (`sim2real/docker/rtf_sampler.sh`) and averaged 1.00 in every batch.
+
+Tuned PX4 Mission mode (`px4_tuned_v2.params`), cross-track p95 in metres, mean over the
+flights that did not crash / worst flight; closest wall approach of any flight; missions
+completed; crashes (all of them wall contacts, none a mission PX4 gave up on):
+
+| Profile | tunnel_bend | corridor_ramp | pipe_narrow | drift_arched | All routes |
+| --- | --- | --- | --- | --- | --- |
+| `route_clean`, 2 seeds | 0.07 / 0.07, 1.37 m, 2/2, 0 | 0.08 / 0.09, 1.24 m, 2/2, 0 | 0.15 / 0.15, 0.69 m, 2/2, 0 | 0.12 / 0.13, 1.01 m, 2/2, 0 | 8/8 done, 0 crashes |
+| `route_vio`, 8 seeds | 0.39 / 0.72, 0.60 m, 8/8, 0 | 0.32 / 0.51, 0.33 m, 7/8, **1** | 0.32 / 0.45, 0.15 m, 6/8, **2** | 0.32 / 0.55, -0.11 m, 6/8, **1** | 27/32 done, **4 crashes** |
+| `route_drift`, 8 seeds | 0.50 / 0.81, 0.61 m, 6/8, 0 | 0.44 / 0.64, 0.35 m, 5/8, **1** | 0.32 / 0.42, 0.05 m, 3/8, **5** | 0.44 / 0.66, -0.06 m, 5/8, **1** | 19/32 done, **7 crashes** |
+| `route_degrade`, 8 seeds | 0.49 / 0.77, 0.68 m, 6/8, 0 | 0.51 / 0.75, 0.50 m, 5/8, 0 | n/a, -0.08 m, 0/8, **8** | 0.48 / 0.56, 0.08 m, 6/8, **1** | 17/32 done, **9 crashes** |
+
+What it says:
+
+- **The harness adds little.** On a perfect estimate every flight completes within 0.07 to
+  0.15 m, the same as the preview above.
+- **The baseline to beat is `route_vio`: 0.32 to 0.39 m cross-track, 4 wall contacts in 32
+  flights (12.5 %), 27 of 32 routes completed.** The error is the estimate's drift, which
+  Mission mode follows faithfully. Three of the four contacts are on seed 6, whose estimate
+  drifts most (0.7 to 0.8 m cross-track on every route); the fourth is the narrow pipe.
+- **The narrow pipe is where it breaks.** The 1.8 m pipe leaves 0.5 m of room each side of
+  the x500. Doubled drift puts 5 of 8 flights into its wall, and 20 s of dust or fog all 8.
+  The wide routes take both with at most one contact in 8, at 0.44 to 0.51 m cross-track.
+- A flight that is neither completed nor crashed ended more than 0.5 m from the last
+  waypoint because the estimate had drifted.
+
+For scale only (the mock, random routes, not these four): the PD yardstick's cross-track p95
+is 0.32 to 0.35 m and v2's 0.20 to 0.23 m, and v2 with rangefinders crashes in 6 % of narrow
+pipes against the PD's 31 %. So the mock's PD sits where PX4 Mission mode sits in Gazebo, and
+the pipe is the place a Route Follow policy with rangefinders has the most to gain. The like
+for like comparison still waits for a policy flying these four worlds as a PX4 mode.
+
+Three things about the flights themselves:
+
+- One flight of the 104 never took off: PX4 denied the single `arm()` because EKF2
+  called the heading unstable a moment after the health stream said armable.
+  `mission_flight.py` now tries again for up to 30 s, a flight that never arms counts as not
+  flown instead of as a crash, and that flight was flown again.
+- Three flights had one real-time-factor sample between 0.52 and 0.83 (everything else 0.92
+  or above). They were flown again and gave the same numbers to the centimetre (PX4 and
+  Gazebo run in lockstep), so a short dip of that size does not move the score; the tables
+  use the re-flights (`run_mission --pool --replace` keeps the first flights under
+  `replaced`).
+- The run folders carry two commits of the runner's branch before it was squashed: `1265564`
+  (the clean batch, `route_vio` and the drift seeds 1 to 4, 56 flights) and `7378c02` (the
+  rest, with the arming retry; the flight is otherwise the same).
+
 ## Plan, and what needs the GPU server
 
 1. **Now, no GPU:** this design, the tunnel and corridor envs, the classical baselines and a
@@ -373,8 +427,8 @@ like comparison waits for the server batch and a policy flying the same worlds.
 2. **GPU server:** full training runs (thousands of iterations on thousands of parallel
    drones; on the 4-core cloud container one policy would take many hours), then Isaac Lab.
 3. **Gazebo:** tunnel and corridor worlds, flown in SITL against tuned PX4 Mission mode on
-   the same waypoints. The worlds and the Mission baseline are built (above); the 8-seed
-   batches run on the server (`training/queues/route_gazebo.yaml`). A policy flies them once
+   the same waypoints. The worlds and the Mission baseline are built and the 8-seed batches
+   flown (above, in the cloud; `training/queues/route_gazebo.yaml`). A policy flies them once
    it is a PX4 mode. The policy is released only if Gazebo confirms the mock.
 4. **Module:** Route Follow as a second external mode with its watchdog, then a partner's
    drone.
