@@ -1,0 +1,156 @@
+# Every environmental factor the mock models, one cell each, against the same hold without it
+# (docs/environment-factors.md): the released v22, v24 (the wall-range policy) and the cascaded
+# PD yardstick on the same episodes, on the benchmark drone as Gazebo flies it (gz_x500_sitl:
+# EKF2-like fusion on the barometer). Mock numbers against the PD, not Gazebo against tuned
+# PX4; no cell is a gate. The ranges are physics or literature-shaped, not fitted to a flight.
+#   python -m training.launch --config eval/configs/environment_factors.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/environment_factors.yaml --device cpu \
+#       --set "params.only=[hot,hot_high,cold_pack,low_battery,rain,draughts]"   # one part, < 1 h
+#   python -m eval.environment_factors collect runs/<a> runs/<b> ... --out runs/factors.md
+name: environment_factors
+entrypoint: eval.environment_factors
+seed: 7501  # unused: the seeds are params.seeds
+expected_hours: 0.9  # ONE part (params.only, six or seven cells): 3 controllers x 768 episodes a cell
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # wall-range input
+  gate_controller: v22
+  reference: nominal
+  seeds: [7501, 7502, 7503]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 256
+  bootstrap: 1000
+  base_env:
+    airframe: gz_x500_sitl  # the benchmark drone as Gazebo flies it, barometer height
+    episode_length_s: 20.0
+    hold_distance: [1.0, 2.0]
+    contact_radius_m: 0.40  # the x500's props
+    # A forward rangefinder on every episode, as noisy as v24 trained on. It has its own
+    # generators, so v22 and the PD (which do not read it) fly the episodes they would without.
+    range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+            scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+            dropout_s: [0.2, 2.0]}
+    # The standard estimate corruption (eval rates), stated in full so a later change of a
+    # default cannot silently move these rows.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      num_gusts: 2
+      gust_start: [2.0, 16.0]  # both gusts inside the 20 s episode
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+      mean_speed: [0.0, 8.0]
+  cells:
+    - {name: nominal, group: reference, label: "nominal (standard day, nominal battery, dry)"}
+    # ---- the air and the power
+    # The Gazebo x500 has little thrust to spare (1.69 times its weight, 1.41 through the
+    # module's 0.9 thrust clamp), so it stops hovering at 0.71 of standard power: the hot
+    # cell is inside what it can fly, the hot and high one is at its edge on purpose.
+    # 30 to 40 degC at sea level, humid: air density 0.90 to 0.95 of standard.
+    - {name: hot, group: air, label: "hot and humid (30-40 degC, sea level)",
+       env: {ambient: {temperature_c: [30, 40], humidity: [0.5, 1.0]}}}
+    # 25 to 35 degC at 1000 to 2000 m: air density 0.73 to 0.86 of standard.
+    - {name: hot_high, group: air, envelope: false, label: "hot and high (25-35 degC, 1000-2000 m)",
+       env: {ambient: {temperature_c: [25, 35], altitude_m: [1000, 2000], humidity: [0.2, 0.8]}}}
+    # A cold pack: denser air (more thrust), but a lower voltage and a deep sag.
+    - {name: cold_pack, group: air, label: "cold (-15-0 degC, cold battery, sag 10-20 %)",
+       env: {ambient: {temperature_c: [-15, 0], battery_voltage: [0.90, 0.97], battery_sag: [0.10, 0.20]}}}
+    - {name: low_battery, group: air, label: "low battery (3.4-3.6 V a cell, sag 5-15 %)",
+       env: {ambient: {battery_voltage: [0.92, 0.97], battery_sag: [0.05, 0.15]}}}
+    # Rain is weight and thrust (small) and what the sensors make of it (not small): drops
+    # in front of the camera and short returns off them on the rangefinder.
+    - name: rain
+      group: air
+      label: "rain 10-50 mm/h (airframe, camera and rangefinder)"
+      env:
+        ambient: {rain_mm_h: [10, 50]}
+        estimate: {degrade_prob: 1.0, degrade_noise_scale: [1.5, 3.0], degrade_walk_scale: [1.0, 2.0],
+                   degrade_jump_rate_scale: [1.0, 3.0], degrade_dropout_rate_scale: [2.0, 6.0]}
+        range: {outlier_prob: 0.05, dropout_rate_hz: 0.3}
+    - {name: draughts, group: air, label: "up and down draughts to 3 m/s",
+       env: {disturbance: {mean_vertical: [-3.0, 3.0]}}}
+    # ---- rotors near surfaces
+    # The same close hold without the rotor effects: what is closeness, what is the rotors.
+    - {name: close_hold, group: surfaces, label: "a close hold (0.8-1.2 m), no rotor effects",
+       env: {hold_distance: [0.8, 1.2]}}
+    - {name: rotors_wall, group: surfaces, label: "rotors near the wall and the ground (hold at 0.8-1.2 m)",
+       env: {hold_distance: [0.8, 1.2], ambient: {rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10]}}}
+    - {name: deck, group: surfaces, label: "under a deck 0.8-1.5 m overhead (no rotor effects)",
+       env: {deck_clearance: [0.8, 1.5]}}
+    - {name: rotors_deck, group: surfaces, label: "under that deck, with the rotors feeling it",
+       env: {deck_clearance: [0.8, 1.5], ambient: {rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10]}}}
+    # ---- the barometer
+    # A door, a shutter, ventilation, a train in a tunnel: 2 to 12 Pa, read as 0.2 to 1 m.
+    - {name: baro_doors, group: height, label: "pressure steps 0.2-1 m (doors, ventilation), one per 20 s",
+       env: {fusion: {baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0], baro_step_tau_s: 1.0}}}
+    - {name: baro_wind, group: height, label: "wind on the barometer's port (4-12 % of dynamic pressure)",
+       env: {ambient: {baro_wind_m_per_mps2: [0.002, 0.006]}}}
+    # ---- the IMU
+    - {name: imu_drift, group: imu, label: "IMU drift (gyro bias to 0.03 rad/s, attitude tipped to 2 deg)",
+       env: {sensor_noise: {gyro_bias_rad_s: 0.03, tilt_bias_deg: 2.0}}}
+    - {name: vibration, group: imu, label: "vibration (gyro 0.1 rad/s, accelerometer 0.5 m/s2)",
+       env: {sensor_noise: {ang_vel_std_rad_s: 0.1, gravity_std: 0.01}, fusion: {imu_noise_mps2: 0.5}}}
+    # ---- the camera (VIO)
+    # Low light, flicker, glare: Basalt on rendered fog and low light came out within 20 % of
+    # clear (docs/vio-render.md), so this cell is already harsher than what was measured.
+    - name: seeing_poor
+      group: camera
+      label: "poor seeing (low light, flicker, glare): noise x1-3, drift x1-3, losses x1-5"
+      env:
+        estimate: {degrade_prob: 1.0, degrade_noise_scale: [1.0, 3.0], degrade_walk_scale: [1.0, 3.0],
+                   degrade_jump_rate_scale: [1.0, 3.0], degrade_dropout_rate_scale: [1.0, 5.0]}
+    # Smoke, a blank or wet or mirror-like surface, people walking through the picture.
+    - name: seeing_bad
+      group: camera
+      label: "bad seeing (smoke, blank or wet walls, people): noise x2-5, drift x2-6, losses x5-20"
+      envelope: false
+      env:
+        estimate: {degrade_prob: 1.0, degrade_noise_scale: [2.0, 5.0], degrade_walk_scale: [2.0, 6.0],
+                   degrade_jump_rate_scale: [3.0, 10.0], degrade_dropout_rate_scale: [5.0, 20.0]}
+    # ---- the rangefinder
+    - {name: range_glass, group: rangefinder, label: "rangefinder on glass or water (reads 0.5-3 m too far, 20-80 % of the time)",
+       env: {range: {glass_prob: 1.0, glass_extra_m: [0.5, 3.0], glass_frac: [0.2, 0.8]}}}
+    - {name: range_lost, group: rangefinder, label: "rangefinder losing the wall (black, wet or sunlit: dropouts 0.5 Hz, 5 % stray returns)",
+       env: {range: {dropout_rate_hz: 0.5, dropout_s: [0.5, 3.0], outlier_prob: 0.05}}}
+    # ---- a field day: a moderate share of everything at once
+    - name: field_day
+      group: combined
+      label: "a field day: everything above at once, moderate"
+      env:
+        ambient: {temperature_c: [0, 35], altitude_m: [0, 800], humidity: [0.2, 0.9],
+                  battery_voltage: [0.95, 1.12], battery_sag: [0.0, 0.10], rain_mm_h: [0, 10],
+                  rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.03], unsteady: [0.0, 0.05],
+                  baro_wind_m_per_mps2: [0.0, 0.003]}
+        disturbance: {mean_vertical: [-1.5, 1.5]}
+        fusion: {baro_step_rate_hz: 0.02, baro_step_m: [0.1, 0.5]}
+        sensor_noise: {gyro_bias_rad_s: 0.02, tilt_bias_deg: 1.0, ang_vel_std_rad_s: 0.05}
+        estimate: {degrade_prob: 0.5, degrade_noise_scale: [1.0, 3.0], degrade_walk_scale: [1.0, 3.0],
+                   degrade_jump_rate_scale: [1.0, 3.0], degrade_dropout_rate_scale: [1.0, 5.0]}
+        range: {glass_prob: 0.2, outlier_prob: 0.03}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [7501]
+  base_env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    contact_radius_m: 0.40
+    range: {present_prob: 1.0}

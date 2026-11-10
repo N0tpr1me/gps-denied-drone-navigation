@@ -6,6 +6,9 @@ Folders (see docs/decisions.md and the execution plan):
 
 - `disturbance/` wind and near-wall force model (NumPy core, PyTorch adapter)
 - `estimate/` position-estimate corruption: delay, noise, bias, jumps, dropouts
+- `ambient/` the air and the power: air density, battery level and sag, rain, rotors near
+  the ground, a ceiling or a wall (NumPy only; `docs/environment-factors.md` lists every
+  environmental factor and where it lives)
 - `sims/` rigid-body backends behind one seam: `torch_quad.py` (CPU mock, now) and
   `isaac_quad.py` (Isaac Lab, on the GPU server, later)
 - `structure_hold/` the task: observations, reward, resets, the classical cascaded-PD
