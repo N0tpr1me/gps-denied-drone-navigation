@@ -14,12 +14,13 @@
 #      heavy dust a real VIO measured, is v24's lead over v22 in the release check more than the
 #      check's sampling, how often does the dust runaway check trip falsely, and does v24's
 #      wall-range input survive a steady wrong heading near steel;
-#   2. v24's release pack on the benchmark's own set-up (barometer height), so that if the cloud
-#      Gazebo re-fly confirms v24 the paperwork is already scored: Gate 1 nominal and stress,
-#      the Basalt-fitted estimate, and the failure rate per FMEA fault;
+#   2. v24's release pack on the benchmark's own set-up (barometer height). The cloud's Gazebo
+#      re-fly confirmed v24 on 2026-11-09 (docs/wall-range.md) and the release is Zain's
+#      decision; this is the paperwork a release needs: Gate 1 nominal and stress, the
+#      Basalt-fitted estimate, and the failure rate per FMEA fault;
 #   3. v24's hold datasheet (three wind directions).
-# If the cloud re-fly parks v24, drop parts 2 and 3 (`--only` the part 1 ids,
-# docs/gpu-server-plan.md "Week 3").
+# If Zain keeps v22, drop parts 2 and 3 (`--only` the part 1 ids, docs/gpu-server-plan.md
+# "Week 3").
 name: server_week3
 reserve_cpus: 4
 gpu_job_cpus: 4

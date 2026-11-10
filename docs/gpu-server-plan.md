@@ -200,9 +200,11 @@ python -m training.queue training/queues/server_week3.yaml --max-gpus 2
 | | `v24_fault_*` (nine), `v24_fault_table` | 2.8 | v24's failure table per FMEA fault, beside week 2's v22 table |
 | 3. v24's datasheet | `v24_datasheet_into`, `_along`, `_lee`, `v24_datasheet_table` | 2.8 | v24's hold datasheet, beside week 2's v22 one |
 
-Parts 2 and 3 only matter if v24 is released; they are queued so that a Gazebo win (the
-cloud's re-fly) is followed by a scored release pack, not another week. If the re-fly parks
-v24, run part 1 alone (`--only dust_heavy,dust_cloud,dark_dust,dust_table,v24_check_fresh,runaway_false_trips,heading_v24_range`).
+Parts 2 and 3 only matter if v24 is released. The cloud's Gazebo re-fly confirmed it on
+2026-11-09 (`docs/wall-range.md`: tighter than v22 in all three scenarios, no crash) and the
+release is Zain's decision, so they are queued now: a yes is then followed by a scored release
+pack, not another week. If v22 stays, run part 1 alone
+(`--only dust_heavy,dust_cloud,dark_dust,dust_table,v24_check_fresh,runaway_false_trips,heading_v24_range`).
 Not here, because other queues already have them: Route Follow's narrow pipes with five times
 the estimate jumps (`server_week1.yaml` `route_pipes*`, `route_gazebo.yaml`), seed luck of a
 training recipe (`server_week2.yaml` `seed_*`), and every Gazebo flight (the cloud).
