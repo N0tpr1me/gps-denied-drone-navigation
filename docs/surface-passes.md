@@ -344,16 +344,23 @@ Per seed, standoff p95 (m):
   failsafe in the landing after the hold as v22's flights.
 
 What this does and does not decide: the gain is real but small (0.02 to 0.03 m of standoff
-on 8 seeds), and pass_s0 has so far only been judged on passes. **v22 stays the compiled-in,
-released policy.** Before pass_s0 could replace it, it has to beat v22 on the release check
-(`eval/configs/gazebo_check_v28.yaml` with `params.candidates.pass_s0`; RELEASE_CHECK_RESULT)
-and on the 60 s hold benchmark in Gazebo against tuned PX4, and the release is Zain's call.
-The second seed (`pass_s1`, nearly as tight in the mock at half the roughness) has not flown.
+on 8 seeds), and in Gazebo pass_s0 has only flown passes. **v22 stays the compiled-in,
+released policy.** On the release check (`eval/configs/gazebo_check_v28.yaml` with
+`params.candidates.pass_s0`, run `20261110-035256`, `docs/gazebo_check.md` "The pass-trained
+candidate") pass_s0 holds 22 % tighter than v22 in the mock (pooled p95 0.137 against
+0.176 m) and passes 17 of the 18 rules, but fails `ring_not_higher`: its 1.2 to 2.2 Hz roll
+ring is 14 % above v22's where the rule allows 5 % (0.0038 against 0.0034, both far under the
+0.1 wobble threshold). As the rule is written that is "does not beat v22", so it does not go
+on to the 60 s hold benchmark in Gazebo as a release candidate; whether a ring that small
+should count is Zain's call (`docs/decisions.md` "Ideas parked"). The second seed (`pass_s1`,
+nearly as tight in the mock at half the roughness) has not flown.
 
 ## Not done yet
 
 - **Releasing a pass-trained policy.** pass_s0 flew these passes a little tighter than v22
-  (above). It has not flown the hold benchmark, and a release needs that and Zain's yes.
+  (above) but fails the release check's ring rule by a small margin, so it has not flown the
+  hold benchmark. A release needs the check passed (or the rule changed by Zain), the hold
+  benchmark and Zain's yes.
 - **Guards in Gazebo.** The Gazebo pass flights have no rangefinder and no lidar, so they
   score the pass, not the wall guard or the keep-out on it; those are SIH only.
 - **Faster, longer, up the wall.** Gazebo flew 5 m along at 0.5 m/s. 1 m/s, a pass up a pier
