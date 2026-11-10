@@ -88,6 +88,9 @@ params:
     - {name: draughts, group: air, label: "up and down draughts to 3 m/s",
        env: {disturbance: {mean_vertical: [-3.0, 3.0]}}}
     # ---- rotors near surfaces
+    # The same close hold without the rotor effects: what is closeness, what is the rotors.
+    - {name: close_hold, group: surfaces, label: "a close hold (0.8-1.2 m), no rotor effects",
+       env: {hold_distance: [0.8, 1.2]}}
     - {name: rotors_wall, group: surfaces, label: "rotors near the wall and the ground (hold at 0.8-1.2 m)",
        env: {hold_distance: [0.8, 1.2], ambient: {rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10]}}}
     - {name: deck, group: surfaces, label: "under a deck 0.8-1.5 m overhead (no rotor effects)",

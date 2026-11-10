@@ -1,0 +1,131 @@
+# Field-conditions candidate (docs/environment-factors.md): v24's ONNX continued with every
+# environmental factor the mock gained on 2026-11-10 switched on at moderate strength, so the
+# policy has met thin air, a low battery, rotors near the wall, draughts, pressure steps on the
+# barometer, a drifting IMU, poor seeing and a rangefinder on glass before it flies in them.
+# v24's recipe otherwise (structure_hold_ppo_v24.yaml), from the ONNX with a fresh critic
+# warmed up 200 iterations. Cloud-sized: 1024 drones, one part under the hour on 4 cores.
+# The air and battery ranges stay where the x500 still hovers with a 10 % weak motor set
+# (it stops at 0.71 of standard power): this is training inside the envelope, not beyond it.
+#   python -m training.launch --config training/configs/structure_hold_ppo_v24_field.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_v24_field.yaml --device cpu
+name: structure_hold_ppo_v24_field
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 1024
+  init_actor_onnx: training/policies/structure_hold_v24.onnx
+  critic_warmup: 200
+  resume_std: 0.05  # as v12 to v24: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 800
+  num_obs: 23  # the 21 of v22 plus the wall range and its usable flag
+  num_steps_per_env: 48
+  history: 15
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.05
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]
+      mean_vertical: [-2.0, 2.0]  # new: up and down draughts
+    reward:
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+      # new: half the episodes see poorly (flicker, glare, a blank or wet wall)
+      degrade_prob: 0.5
+      degrade_noise_scale: [1.0, 3.0]
+      degrade_walk_scale: [1.0, 3.0]
+      degrade_jump_rate_scale: [1.0, 2.0]
+      degrade_dropout_rate_scale: [1.0, 3.0]
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+    range:
+      present_prob: 0.5
+      rate_hz: 20.0
+      noise_std_m: 0.01
+      noise_frac: 0.005
+      scale_error: [-0.02, 0.02]
+      outlier_prob: 0.02
+      dropout_rate_hz: 0.1
+      dropout_s: [0.2, 2.0]
+      glass_prob: 0.2  # new: one in five rangefinders reads through the face some of the time
+      glass_extra_m: [0.5, 3.0]
+      glass_frac: [0.2, 0.8]
+    ambient:  # new (envs/ambient)
+      temperature_c: [-10, 35]
+      altitude_m: [0, 300]
+      humidity: [0.0, 1.0]
+      battery_voltage: [0.97, 1.14]  # 3.6 V a cell to a full pack
+      battery_sag: [0.0, 0.15]
+      rain_mm_h: [0, 5]
+      rotor_radius_m: [0.13, 0.25]
+      wall_pull: [0.0, 0.05]
+      unsteady: [0.0, 0.10]
+      baro_wind_m_per_mps2: [0.0, 0.004]
+    fusion:  # on top of the preset's EKF2 settings
+      baro_step_rate_hz: 0.03  # new: a door or a fan about twice a hold
+      baro_step_m: [0.1, 0.8]
+    sensor_noise:  # new: a drifting IMU
+      gyro_bias_rad_s: 0.02
+      tilt_bias_deg: 1.5
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0  # selection scores the hold as Gate 1 and Gazebo fly it
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+    select_every: 200
+    select_envs: 256
+smoke:
+  critic_warmup: 2
+  num_obs: 23
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0], mean_vertical: [-2.0, 2.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    estimate: {degrade_prob: 0.5, degrade_noise_scale: [1.0, 3.0], degrade_dropout_rate_scale: [1.0, 3.0]}
+    range: {present_prob: 0.5, outlier_prob: 0.02, dropout_rate_hz: 0.5, glass_prob: 0.5}
+    ambient: {temperature_c: [-10, 35], altitude_m: [0, 300], battery_voltage: [0.97, 1.14],
+              battery_sag: [0.0, 0.15], rain_mm_h: [0, 5], rotor_radius_m: [0.13, 0.25],
+              wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10], baro_wind_m_per_mps2: [0.0, 0.004]}
+    fusion: {baro_step_rate_hz: 1.0, baro_step_m: [0.1, 0.8]}
+    sensor_noise: {gyro_bias_rad_s: 0.02, tilt_bias_deg: 1.5}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {}
+    select_every: 2
+    select_envs: 8
