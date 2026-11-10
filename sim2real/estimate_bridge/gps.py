@@ -11,7 +11,9 @@ PX4 turns into a ``sensor_gps`` instance (``MAV_USEHILGPS`` 1). Gazebo's own rec
 to report no fix (``SIM_GPS_USED`` 0, ``gps_on.params``), so this is the only GPS PX4 has.
 
 ``GpsSource`` is the receiver: its rate, its nominal fix (``rtk_fixed``, ``rtk_float`` or
-``fix3d``, which set the accuracy it reports and its noise) and the noise draw. The faults,
+``fix3d``, which set the accuracy it reports and its noise), the noise draw, and whether
+EKF2 fuses it (``fused``; false leaves it in the log only, as the truth an outdoor flight
+is scored on: ``rtk_truth_*`` profiles, ``eval/rtk_truth.py``). The faults,
 timed from the bridge's fault anchor like the field faults:
 
 ``gps_float``
@@ -45,6 +47,10 @@ FIXES: dict[str, tuple[int, float, float, float]] = {
     "rtk_float": (5, 0.5, 1.0, 0.3),
     "rtk_fixed": (6, 0.02, 0.04, 0.01),
 }
+# Latitude, longitude (deg) and altitude (m) of the Gazebo world's origin: the spherical
+# coordinates of wall_slab.sdf, which copies PX4's default world. PX4's ground-truth topic
+# is derived from them, so the bridge's vision stream and GPS share its origin.
+WORLD_ORIGIN = (47.397971057728974, 8.546163739800146, 0.0)
 NOISE_SEED_OFFSET = 7919  # the GPS stream's draws never overlap the corruptor's
 SATELLITES = 14
 
@@ -102,6 +108,10 @@ class GpsSource:
     rate_hz: float = 10.0
     fix: str = "rtk_fixed"
     noise_m: float | None = None  # per-axis horizontal noise; None: the fix's own
+    # False: PX4 receives and logs the receiver but EKF2 does not fuse it (the runners lay
+    # gps_logged.params over the PX4 set instead of gps_on.params). That is RTK as the truth
+    # an outdoor flight is scored on (eval/rtk_truth.py), with Gazebo's truth to check it.
+    fused: bool = True
 
     def __post_init__(self) -> None:
         if not self.rate_hz > 0:
@@ -114,13 +124,14 @@ class GpsSource:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> GpsSource:
         d = dict(d)
-        unknown = set(d) - {"rate_hz", "fix", "noise_m"}
+        unknown = set(d) - {"rate_hz", "fix", "noise_m", "fused"}
         if unknown:
             raise ValueError(f"unknown gps keys: {sorted(unknown)}")
         return cls(**d)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"rate_hz": self.rate_hz, "fix": self.fix, "noise_m": self.noise_m}
+        return {"rate_hz": self.rate_hz, "fix": self.fix, "noise_m": self.noise_m,
+                "fused": self.fused}
 
 
 @dataclass(frozen=True)

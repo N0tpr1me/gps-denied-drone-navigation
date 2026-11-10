@@ -22,7 +22,9 @@
                             #   fills it from the scenario); not part of the corruption
     gps: null               # or gps.GpsSource keys ({rate_hz: 10, fix: rtk_fixed}): the
                             #   bridge also sends a GPS (HIL_GPS) and the runners lay
-                            #   gps_on.params over the PX4 set, so EKF2 fuses it too
+                            #   gps_on.params over the PX4 set, so EKF2 fuses it too;
+                            #   with ``fused: false`` they lay gps_logged.params instead:
+                            #   the receiver is in the log only (RTK as scoring truth)
     gps_faults: []          # scripted GPS failures (gps.py), timed from the anchor
     vision_yaw: null        # or vision_yaw.VisionYaw keys ({offset_deg: 30}): EKF2's heading
                             #   made wrong on purpose, through the vision yaw; the runners lay

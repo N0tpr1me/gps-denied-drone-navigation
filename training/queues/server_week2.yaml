@@ -130,21 +130,24 @@ jobs:
     launch: training/configs/structure_hold_ppo_v22.yaml
     set: {seed: 1}
     hours: 0.8
-    why: "v22's recipe (v19 continued with the engage-time input) on seed 1"
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s1_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
 
   - id: seed_v22_s2
     gpu: true
     launch: training/configs/structure_hold_ppo_v22.yaml
     set: {seed: 2}
     hours: 0.8
-    why: "the same on seed 2"
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s2_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
 
   - id: seed_v22_s3
     gpu: true
     launch: training/configs/structure_hold_ppo_v22.yaml
     set: {seed: 3}
     hours: 0.8
-    why: "the same on seed 3"
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-*_structure_hold_ppo_v22_s3_63a05e0 (docs/gazebo_check.md, Seed repeatability); re-enable only to repeat it"
 
   - id: seed_check
     gpu: true
@@ -155,7 +158,8 @@ jobs:
       params.controllers.3.policy: "{run:seed_v22_s3}/policy.onnx"
     after: [seed_v22_s1, seed_v22_s2, seed_v22_s3]
     hours: 0.75
-    why: "the three re-trainings against the released v22 in the Gazebo-like check: the spread of rough-cell p95, lift and wobble is how much of a check score is seed luck"
+    enabled: false
+    why: "ran in the cloud on 2026-11-09 as runs/20261109-201321_gazebo_check_seeds_s7001_63a05e0: about 5 % seed spread in pooled p95, verdicts that turn on single replay cells (docs/gazebo_check.md, Seed repeatability)"
 
   # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL
   - id: gz_edges_tuned
