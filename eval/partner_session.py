@@ -26,6 +26,17 @@ Per run, from the log alone:
   the Gate 2 rule (crash judged on the 60 s hold only), and its trip reason is reported.
 
 Runs marked ``aborted`` in the sheet are listed with their reason and not scored.
+
+Outdoors there is no mocap. A sheet with ``truth: rtk`` is scored on the RTK receiver's
+samples in the log instead (``eval.rtk_truth``): RTK-fixed samples only, turned into ENU
+metres about the first surveyed wall point (or ``rtk.origin``), with the estimate fitted to
+them over the same take-off window and the receiver's stamping lag measured there too. The
+wall is ``wall.survey``: points on its face measured with the RTK rover. Each run says how
+much of its hold had a fixed solution (``truth_coverage``; the rest is left out of the
+numbers, and a hold under ``RTK_MIN_COVERAGE`` is not scored) and whether EKF2 fused GPS
+(``truth_independent``): if it did, the truth is the estimate's own source and the report
+says so on that run instead of scoring it quietly. ``eval.rtk_check`` checks all of this
+on Gazebo flights, where the simulator's truth is in the same log (``docs/rtk-truth.md``).
 """
 
 from __future__ import annotations
@@ -41,7 +52,17 @@ import yaml
 
 from eval.baselines.run_baseline import aggregate, compare, table
 from eval.metrics import Surface, compute_metrics
-from eval.partner_report import git_commit, render
+from eval.partner_report import COVERAGE_WARN, git_commit, render
+from eval.rtk_truth import (
+    RTK_TOPICS,
+    SENSOR_GPS,
+    covered,
+    fit_delay,
+    fit_frame,
+    gps_fused,
+    read_rtk,
+    wall_from_survey,
+)
 from eval.ulog import (
     GROUNDTRUTH,
     MOCAP,
@@ -65,6 +86,14 @@ TRIP_NAMES = {0: "none", 1: "test_fault", 2: "estimate_invalid", 3: "estimate_st
               4: "tilt", 5: "position_error", 6: "estimate_reset", 7: "landed", 8: "range_lost",
               9: "estimate_frozen", 10: "estimate_runaway"}
 HOLD_S, SETTLE_S = 60.0, 2.0
+# RTK truth: a hold with a fixed solution for less of its time than RTK_MIN_COVERAGE is not
+# scored (its numbers would describe some other part of the hold); under the report's
+# COVERAGE_WARN it is scored and listed.
+RTK_MIN_COVERAGE = 0.5
+
+
+def is_rtk(session: dict[str, Any]) -> bool:
+    return str(session.get("truth", "")).strip().lower() == "rtk"
 
 
 def seconds(msg: dict[str, np.ndarray], start_us: int) -> np.ndarray:
@@ -108,6 +137,25 @@ def mode_stretch(status: dict[str, np.ndarray], start_us: int, nav_state: int,
 def armed_at(status: dict[str, np.ndarray], start_us: int) -> float | None:
     armed = np.asarray(status["arming_state"]) == ARMING_STATE_ARMED
     return float(seconds(status, start_us)[int(np.argmax(armed))]) if armed.any() else None
+
+
+def armed_span(status: dict[str, np.ndarray], start_us: int) -> tuple[float, float]:
+    """From arming to the last armed sample, log seconds (the whole log without the flag)."""
+    t = seconds(status, start_us)
+    armed = np.flatnonzero(np.asarray(status.get("arming_state", [])) == ARMING_STATE_ARMED)
+    return (float(t[armed[0]]), float(t[armed[-1]])) if armed.size else (float(t[0]),
+                                                                         float(t[-1]))
+
+
+def align_window(run: dict[str, Any], session: dict[str, Any], status: dict[str, np.ndarray],
+                 start_us: int, m0: float) -> tuple[float, float]:
+    """Where the estimate is fitted to the truth: the run's or the session's ``align``, or
+    from arming to the mode switch."""
+    align = run.get("align") or session.get("align")
+    if not align or align == "auto":
+        t_arm = armed_at(status, start_us)
+        align = (t_arm if t_arm is not None else 0.0, m0)
+    return float(align[0]), float(align[1])
 
 
 def setpoint_at(topics: Topics, start_us: int, controller: str, t0: float) -> np.ndarray:
@@ -165,22 +213,58 @@ def score_run(topics: Topics, start_us: int, run: dict[str, Any], session: dict[
 
     hold_point = setpoint_at(topics, start_us, controller, window[0])
     row: dict[str, Any] = {"file": run["file"], "controller": controller}
-    if GROUNDTRUTH not in topics and MOCAP in topics:
-        align = run.get("align") or session.get("align")
-        if not align or align == "auto":
-            t_arm = armed_at(vs, start_us)
-            align = (t_arm if t_arm is not None else 0.0, m0)
-        psi, offset, rms = mocap_fit(topics, start_us, (float(align[0]), float(align[1])))
-        hold_point = rotate_z(hold_point[None], psi)[0] + offset
-        row.update(align_window_s=[float(align[0]), float(align[1])],
-                   align_yaw_deg=math.degrees(psi), align_rms_m=rms)
-    trace = trace_from_topics(topics, start_us, hold_point=hold_point,
-                              allow_estimate=bool(session.get("allow_estimate", False)))
     wall = session.get("wall") or {}
-    surface = Surface(wall["point"], wall["normal"]) if wall else None
+    truth, extra = None, {}
+    if is_rtk(session):
+        cfg = session.get("rtk") or {}
+        survey = wall.get("survey")
+        if wall and not survey:
+            raise ValueError("with truth: rtk the wall is wall.survey, points on its face "
+                             "measured with the RTK rover (latitude, longitude, altitude)")
+        rtk = read_rtk(topics, start_us, cfg.get("origin") or (survey[0] if survey else None),
+                       str(cfg.get("altitude", "msl")))
+        align = align_window(run, session, vs, start_us, m0)
+        delay = cfg.get("delay_s", "auto")
+        delay = fit_delay(topics, start_us, rtk, align) if delay == "auto" else float(delay)
+        rtk = rtk.delayed(delay)
+        psi, offset, rms, yaw_fitted = fit_frame(topics, start_us, rtk, align)
+        hold_point = rotate_z(hold_point[None], psi)[0] + offset
+        cover = covered(rtk, *window)
+        if cover < RTK_MIN_COVERAGE:
+            raise ValueError(f"RTK fixed for {100 * cover:.0f} % of the hold, under the "
+                             f"{100 * RTK_MIN_COVERAGE:.0f} % a score needs")
+        flown = armed_span(vs, start_us)
+        row.update(truth="rtk", align_window_s=list(align), align_yaw_deg=math.degrees(psi),
+                   align_rms_m=rms, align_yaw_fitted=yaw_fitted, rtk_delay_s=delay,
+                   rtk_origin=list(rtk.origin), rtk_rate_hz=1.0 / rtk.period_s,
+                   truth_coverage=cover,
+                   truth_coverage_flight=covered(rtk, *flown))
+        # Truth must be logged, not fused: with GPS in EKF2 the estimate follows the same
+        # receiver, so a wrong solution is in both, and the moments it loses its fix (left
+        # out of the score) are the estimate's worst. Not a reason to drop the run, but
+        # never one to pass over in silence.
+        fused = gps_fused(topics, start_us, (flown[0], window[1]))
+        row["truth_independent"] = None if fused is None else not fused
+        truth, extra = (rtk.source, rtk.t, rtk.pos), {"max_gap_s": rtk.max_gap_s}
+        surface = None
+        if survey:
+            point, normal, fit = wall_from_survey(survey, rtk.origin, hold_point)
+            surface = Surface(point, normal)
+            row["wall_fit_rms_m"] = fit
+    else:
+        if GROUNDTRUTH not in topics and MOCAP in topics:
+            align = align_window(run, session, vs, start_us, m0)
+            psi, offset, rms = mocap_fit(topics, start_us, align)
+            hold_point = rotate_z(hold_point[None], psi)[0] + offset
+            row.update(align_window_s=list(align), align_yaw_deg=math.degrees(psi),
+                       align_rms_m=rms)
+        surface = Surface(wall["point"], wall["normal"]) if wall else None
+    trace = trace_from_topics(topics, start_us, hold_point=hold_point, truth=truth,
+                              allow_estimate=bool(session.get("allow_estimate", False)))
     gusts = [(float(a), float(b)) for a, b in run.get("gusts", [])]
     radius = session.get("contact_radius_m")
-    extra = {"contact_radius_m": float(radius)} if radius else {}
+    if radius:
+        extra["contact_radius_m"] = float(radius)
     metrics = compute_metrics(trace, surface, gusts, window, **extra)
 
     trip = None
@@ -223,8 +307,13 @@ def load_session_topics(path: Path) -> tuple[Topics, int]:
         from pyulog import ULog
     except ImportError as e:
         raise ImportError("reading .ulg needs pyulog: pip install -e .[ulog]") from e
-    log = ULog(str(path), message_name_filter_list=TOPICS + [VEHICLE_STATUS, STATUS])
-    return {d.name: d.data for d in log.data_list if d.multi_id == 0}, int(log.start_timestamp)
+    log = ULog(str(path), message_name_filter_list=TOPICS + RTK_TOPICS + [VEHICLE_STATUS,
+                                                                           STATUS])
+    topics = {d.name: d.data for d in log.data_list if d.multi_id == 0}
+    # A drone may carry two receivers; the RTK one is not always the first.
+    topics.update({f"{SENSOR_GPS}#{d.multi_id}": d.data for d in log.data_list
+                   if d.name == SENSOR_GPS and d.multi_id > 0})
+    return topics, int(log.start_timestamp)
 
 
 def score_session(sheet: Path, loader=load_session_topics) -> dict[str, Any]:
@@ -256,9 +345,24 @@ def report(result: dict[str, Any]) -> str:
     s = result["session"]
     out = [f"# Partner session: {s.get('drone', '?')} at {s.get('site', '?')}, "
            f"{s.get('date', '?')}", ""]
-    for batch in result["batches"].values():
-        out += [table(batch), ""]
     b = result["batches"]
+    rtk = [r for bt in b.values() for r in bt["rows"] if r.get("truth") == "rtk"]
+    if rtk:
+        cover = [r["truth_coverage"] for r in rtk]
+        out += [f"Truth: RTK GPS, RTK-fixed samples only (`{rtk[0]['position_source']}`), "
+                f"logged and not fused. Fixed for {100 * float(np.mean(cover)):.0f} % of the "
+                f"scored hold time (worst hold {100 * min(cover):.0f} %); the rest is left "
+                "out of every number.", ""]
+        fused = sum(r["truth_independent"] is False for r in rtk)
+        if fused:
+            out += [f"**WARNING: EKF2 fused GPS on {fused} of {len(rtk)} scored holds.** On "
+                    "those the RTK truth is not independent of the drone's own estimate: "
+                    "a wrong solution is in both and does not show, and the moments the "
+                    "receiver loses its fix, when the estimate suffers most, are the moments "
+                    "left out of the score. Read their hold error as a best case. They are "
+                    "listed below.", ""]
+    for batch in b.values():
+        out += [table(batch), ""]
     if len(b) == 2:
         out += [compare(b["tuned_px4"], b["structure_hold"]), ""]
     early = [r for bt in b.values() for r in bt["rows"] if r["ended_early"]]
@@ -266,6 +370,17 @@ def report(result: dict[str, Any]) -> str:
         out.append(f"- ended early: {r['file']} ({r['controller']}, {r['scenario']} run "
                    f"{r['seed']}), window {r['window_s'][0]:.1f} to {r['window_s'][1]:.1f} s, "
                    f"trip {r['trip_reason']}, next nav_state {r['next_nav_state']}")
+    for r in rtk:
+        who = f"{r['file']} ({r['controller']}, {r['scenario']} run {r['seed']})"
+        if r["truth_coverage"] < COVERAGE_WARN:
+            out.append(f"- RTK fixed for {100 * r['truth_coverage']:.0f} % of the hold: {who}; "
+                       "the rest of that hold is not scored")
+        if r["truth_independent"] is False:
+            out.append(f"- GPS was fused: {who}: the RTK truth is not independent of the "
+                       "estimate on this hold")
+        elif r["truth_independent"] is None:
+            out.append(f"- could not check whether GPS was fused: {who} (the log has no "
+                       "estimator_status_flags)")
     for a in result["aborted"]:
         out.append(f"- aborted, not scored: {a['file']} ({a['controller']}, {a['case']} run "
                    f"{a['run']}): {a.get('reason') or 'no reason given'}")

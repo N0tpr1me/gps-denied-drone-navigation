@@ -8,6 +8,11 @@
 # Frames: positions are ENU (x east, y north, z up) in the MOCAP system's frame, metres.
 # If your mocap software shows another axis order, write down what it shows and say so in
 # notes; we convert it.
+#
+# Outdoors, with an RTK receiver as the truth instead of mocap (docs/partner-pack.md, "Truth
+# for scoring outdoors"): use the lines marked "# rtk>" below in place of the mocap ones
+# (remove the marker). Positions are then latitude and longitude in degrees and altitude in
+# metres, as your RTK rover reports them.
 
 drone: "<maker> <model>, <mass with battery> kg, <prop size>"
 site: "<facility, indoor or outdoor>"
@@ -26,13 +31,28 @@ wall:
   point: [0.0, 0.0, 0.0]
   normal: [1.0, 0.0, 0.0]
 
+# RTK truth: the receiver is logged, never fused (rtk_truth.params). altitude says which of
+# the receiver's two altitudes your surveyed points are in: msl (above mean sea level) or
+# ellipsoid. delay_s is how late the receiver's samples are stamped; auto measures it over
+# the take-off. The wall is two or more points on its face measured with the RTK rover,
+# [latitude, longitude, altitude]: two points along its foot for a vertical wall, three or
+# more spread over the face for a leaning pier or the underside of a deck.
+# rtk> truth: rtk
+# rtk> rtk:
+# rtk>   altitude: msl
+# rtk>   delay_s: auto
+# rtk> wall:
+# rtk>   survey:
+# rtk>     - [47.3979710, 8.5461637, 488.20]
+# rtk>     - [47.3980250, 8.5461637, 488.25]
+
 contact_radius_m: 0.25          # your drone's prop reach (centre to prop tip), m: closer
                                 # than this to the wall counts as a contact
 baseline_mode: hold             # tuned PX4 holds in Hold mode (as in our Gazebo benchmark);
                                 # "position" if you hold in Position mode with sticks centred
 hold_s: 60                      # the scored hold, from the mode switch
 settle_s: 2                     # first seconds after the switch left out of the score
-align: auto                     # EKF-to-mocap fit from arming to the mode switch; or [t0, t1]
+align: auto                     # EKF-to-truth fit from arming to the mode switch; or [t0, t1]
 
 notes: ""
 

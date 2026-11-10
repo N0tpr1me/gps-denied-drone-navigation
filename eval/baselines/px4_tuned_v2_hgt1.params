@@ -1,0 +1,28 @@
+# NOT a baseline: px4_tuned_v2.params with EKF2_HGT_REF 1 instead of 0, exactly as that file
+# read from 2026-11-01 to 2026-11-02, kept only to reproduce the numbers flown in those two
+# days (docs/baseline.md, "What moved tuned PX4 from 0.43 to 0.51 m"). PX4 v1.17 numbers 1 GPS
+# height; with no GPS EKF2 falls back to the barometer, so the height SOURCE is the same as
+# on 0. What differs is where EKF2 puts its height origin at boot, and that alone moved the
+# scored hold error. Do not fly a benchmark on this file, and never a real drone
+# (eval/log_health.py warns on 1: the moment a GPS fix appears GPS becomes the reference).
+# Everything else is px4_tuned_v2.params, line for line.
+1	1	EKF2_EV_CTRL	7	6
+1	1	EKF2_HGT_REF	1	6
+1	1	EKF2_GPS_CTRL	0	6
+1	1	SYS_HAS_GPS	0	6
+1	1	EKF2_EV_DELAY	100.0	9
+1	1	EKF2_EV_NOISE_MD	1	6
+1	1	EKF2_EVP_NOISE	0.1	9
+1	1	EKF2_EVV_NOISE	0.1	9
+1	1	MC_ROLLRATE_P	0.1466	9
+1	1	MC_ROLLRATE_I	0.1958	9
+1	1	MC_ROLLRATE_D	0.0029	9
+1	1	MC_ROLL_P	6.5	9
+1	1	MC_PITCHRATE_P	0.1102	9
+1	1	MC_PITCHRATE_I	0.1466	9
+1	1	MC_PITCHRATE_D	0.00212	9
+1	1	MC_PITCH_P	6.5	9
+1	1	MPC_XY_P	1.5	9
+1	1	MPC_XY_VEL_P_ACC	3.0	9
+1	1	MPC_XY_VEL_I_ACC	2.0	9
+1	1	MPC_XY_VEL_D_ACC	0.3	9
