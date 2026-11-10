@@ -168,7 +168,99 @@ with the pack down to 3.5 V a cell. That is the airframe, not the policy, and
 
 ## How the controllers fly with each factor on
 
-RESULTS_PLACEHOLDER
+Mock, the benchmark x500 through the EKF2-like fusion on barometer height
+(`gz_x500_sitl`), holds 1 to 2 m from the wall in 0 to 8 m/s wind with two gusts, 20 s
+episodes, 768 episodes a row (3 seeds x 256), the same episodes for every controller. v22 is
+the released policy, v24 the wall-range policy being released, PD the cascaded PD yardstick.
+Each number is the mean per-episode p95 error on true position, with the change from that
+controller's own nominal row. **These are mock numbers against the PD, not Gazebo against
+tuned PX4**, and neither policy was trained on any of these conditions. Runs
+`20261110-122610`, `-122630`, `-122650` and `-125017` in `experiments/LOG.md`.
+
+| Factor | v22 p95 (m) | v22 crash | v24 p95 (m) | v24 crash | PD p95 (m) | PD crash |
+| --- | --- | --- | --- | --- | --- | --- |
+| nominal (standard day, nominal battery, dry) | 0.175 | 0.0% | 0.153 | 0.1% | 0.338 | 0.9% |
+| hot and humid (30-40 degC, sea level) | 0.174 (-0%) | 0.0% | 0.152 (-1%) | 0.1% | 0.334 (-1%) | 0.9% |
+| hot and high (25-35 degC, 1000-2000 m) | 0.175 (-0%) | 0.0% | 0.153 (-0%) | 0.1% | 0.329 (-3%) | 0.9% |
+| cold (-15-0 degC, cold battery, sag 10-20 %) | 0.177 (+1%) | 0.0% | 0.155 (+1%) | 0.1% | 0.342 (+1%) | 0.9% |
+| low battery (3.4-3.6 V a cell, sag 5-15 %) | 0.176 (+0%) | 0.0% | 0.154 (+0%) | 0.1% | 0.338 (+0%) | 0.9% |
+| rain 10-50 mm/h (airframe, camera and rangefinder) | 0.212 (+21%) | 0.0% | 0.182 (+19%) | 0.1% | 0.447 (+32%) | 2.7% |
+| up and down draughts to 3 m/s | 0.176 (+0%) | 0.0% | 0.154 (+1%) | 0.1% | 0.339 (+0%) | 0.9% |
+| a close hold (0.8-1.2 m), no rotor effects | 0.170 (-3%) | 0.0% | 0.148 (-3%) | 0.1% | 0.288 (-15%) | 6.2% |
+| rotors near the wall and the ground (hold at 0.8-1.2 m) | 0.171 (-2%) | 0.0% | 0.148 (-3%) | 0.1% | 0.302 (-10%) | 6.4% |
+| under a deck 0.8-1.5 m overhead (no rotor effects) | 0.168 (-4%) | 0.0% | 0.145 (-5%) | 0.1% | 0.320 (-5%) | 0.9% |
+| under that deck, with the rotors feeling it | 0.169 (-3%) | 0.0% | 0.144 (-6%) | 0.0% | 0.321 (-5%) | 0.9% |
+| pressure steps 0.2-1 m (doors, ventilation), one per 20 s | 0.511 (+192%) | 0.9% | 0.500 (+227%) | 0.7% | 0.673 (+99%) | 2.5% |
+| wind on the barometer's port (4-12 % of dynamic pressure) | 0.193 (+10%) | 0.0% | 0.169 (+10%) | 0.1% | 0.351 (+4%) | 0.9% |
+| IMU drift (gyro bias to 0.03 rad/s, attitude tipped to 2 deg) | 0.231 (+32%) | 0.0% | 0.185 (+21%) | 0.1% | 0.345 (+2%) | 0.9% |
+| vibration (gyro 0.1 rad/s, accelerometer 0.5 m/s2) | 0.246 (+40%) | 0.0% | 0.209 (+37%) | 0.1% | 0.372 (+10%) | 0.9% |
+| poor seeing (low light, flicker, glare): noise x1-3, drift x1-3, losses x1-5 | 0.215 (+23%) | 0.0% | 0.180 (+18%) | 0.1% | 0.453 (+34%) | 2.7% |
+| bad seeing (smoke, blank or wet walls, people): noise x2-5, drift x2-6, losses x5-20 | 0.364 (+108%) | 0.0% | 0.301 (+96%) | 0.0% | 0.783 (+132%) | 9.0% |
+| rangefinder on glass or water (reads 0.5-3 m too far, 20-80 % of the time) | 0.175 (+0%) | 0.0% | 0.816 (+433%) | 58.7% | 0.338 (+0%) | 0.9% |
+| rangefinder losing the wall (black, wet or sunlit: dropouts 0.5 Hz, 5 % stray returns) | 0.175 (+0%) | 0.0% | 0.155 (+1%) | 0.1% | 0.338 (+0%) | 0.9% |
+| a field day: everything above at once, moderate | 0.270 (+54%) | 0.0% | 0.354 (+132%) | 11.2% | 0.447 (+32%) | 2.3% |
+
+What the table says, row group by row group:
+
+- **Air, battery, draughts: no effect** (within 1 %) as long as the drone can still hover.
+  PX4's hover-thrust estimate does the work; the hold needs little thrust above hover even in
+  8 m/s of wind. The limit is the airframe's, described above, not the controller's.
+- **Rotors near the wall, the ground or a deck: no effect on the policies.** The close-hold
+  row is the same hold without the rotor effects: the PD's extra crashes (6 %) come from
+  holding closer, the rotor effects add 5 % to its error and nothing to v22 or v24. A wall
+  pull of up to 5 % of thrust at 1 m is a steady push like wind, which the policies already
+  reject. The ranges are literature-shaped, so this is "not sensitive", not "measured".
+- **Rain: about 20 % looser**, all of it from what the camera and the rangefinder make of
+  the drops. The water on the airframe does nothing measurable.
+- **Pressure steps on the barometer are the largest effect on everyone**: one 0.2 to 1 m step
+  per 20 s takes v22 from 0.18 to 0.51 m and the PD from 0.34 to 0.67 m. It is not the
+  controller. EKF2's height follows the barometer, the drone holds the height EKF2 reports,
+  and the scorer measures the true height. Wind on the barometer's port is the same thing in
+  small (+10 %).
+- **A drifting or vibrating IMU: 20 to 40 % looser for the policies**, 2 to 10 % for the PD.
+  The policies read the gyro directly and were trained on little gyro noise and no bias;
+  they still hold a third tighter than the PD in absolute terms.
+- **Poor seeing: graceful.** At the "poor" level v22 and v24 lose about 20 %, at the "bad"
+  level (outside the envelope) they double to 0.30 to 0.36 m with no crash, where the PD
+  goes to 0.78 m and 9 % crashes. This is the condition the policies were built for.
+- **A rangefinder that reads through glass or water crashes v24: 59 % of episodes.** v22 and
+  the PD do not read the rangefinder and are untouched. v24 uses the range to correct the
+  position estimate, so when the beam reads long, v24 closes the gap: it moves toward the
+  face by as much as the reading is long, and hits it when that is more than the standoff
+  minus the prop reach (10 % crashes for readings 0.5 to 1 m long, 82 % for 2 to 3 m). The
+  spike gate does not stop it, because the long readings agree with each other. A
+  rangefinder that just loses the wall (black, wet, sunlit) is harmless: v24 falls back to
+  flying like v22. Two cautions on this row: the glass numbers are assumed, and the mock
+  takes the range reference as the true standoff, where the module latches it from the
+  reading at engage (a beam already through the glass at engage would push the drone away
+  from the face instead, the safe way).
+- **The field day** (everything at once, moderate): v22 0.27 m with no crash. v24's 11 %
+  crashes are the one episode in five with a rangefinder on glass.
+
+## What follows from it
+
+1. **v24 and glass.** The safety manual already rules out glass, mesh and water spray for the
+   rangefinder, but with v22 the price was a lost guard; with v24 it is a crash, and the wall
+   guard reads the same sensor so it does not catch it. Before v24 flies near any face the
+   rangefinder may see through or bounce off, either the module refuses a range that steps
+   by more than the gate while the position estimate did not move (v24 then flies like v22),
+   or a policy is trained with glass in the mix
+   (`training/configs/structure_hold_ppo_v24_field.yaml`, below). Until one of them is
+   shown to work, v24's release notes and the safety manual need the stronger wording.
+2. **Height where the pressure moves.** In a tunnel with trains, a plant room, a building
+   with doors and ventilation, the barometer is the weak sensor. The envelope already allows
+   a downward rangefinder as the height reference (`EKF2_HGT_REF` 2); this result is the
+   reason to prefer it there. The mock does not model that height source yet, so the gain is
+   not measured.
+3. **Training.** Gyro bias, vibration, poor seeing and glass are things training can teach.
+   Air, battery, draughts and rotor effects are not worth training time on this airframe.
+
+## The field-conditions candidate
+
+`training/configs/structure_hold_ppo_v24_field.yaml` continues v24 with every new factor on
+at moderate strength (glass on one rangefinder in five, poor seeing in half the episodes, a
+drifting IMU, pressure steps, draughts, air and battery inside what the x500 can hover).
+Its first seed is training in the cloud as this page is written; the result goes here.
 
 ## Not done, and why
 
