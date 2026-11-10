@@ -90,6 +90,32 @@ ACCEPTANCE_M = 0.5  # each waypoint's acceptance radius: a tunnel plan, not PX4'
 DEFAULT_PROFILE = "route_vio"
 METRICS = ("cross_track_p95_m", "cross_track_max_m", "track_p95_m", "min_clearance_m",
            "end_error_m", "time_s")
+# Gazebo's real-time factor, sampled beside the flight (``<run>/rtf_samples.txt``, lines of
+# "<utc time> <rtf>", written by whatever watches the containers, e.g. every 15 s). Numbers
+# are comparable only at real time (the GPU server's load dropped Gazebo to 0.5 to 0.8 and
+# moved tuned PX4's error by a fifth), so a flight whose worst sample is under this is flagged.
+# Samples in the first RTF_SKIP_S after the first one are dropped: Gazebo reports near zero
+# while it starts, long before PX4 arms and the mission (the scored window) begins.
+RTF_FLAG = 0.9
+RTF_SKIP_S = 20.0
+
+
+def rtf_of(run_dir: Path) -> dict[str, Any]:
+    """Mean, worst and count of a flight's real-time-factor samples (NaN, 0 when none)."""
+    f = run_dir / "rtf_samples.txt"
+    samples = []
+    if f.exists():
+        for line in f.read_text().splitlines():
+            parts = line.split()
+            try:
+                t = datetime.fromisoformat(parts[0].replace("Z", "+00:00")).timestamp()
+                samples.append((t, float(parts[-1])))
+            except (IndexError, ValueError):
+                continue
+    t0 = samples[0][0] if samples else 0.0
+    vals = [v for t, v in samples if t >= t0 + RTF_SKIP_S]
+    return {"rtf_mean": statistics.fmean(vals) if vals else math.nan,
+            "rtf_min": min(vals) if vals else math.nan, "rtf_n": len(vals)}
 
 
 def mission_json(rw: RouteWorld) -> dict[str, Any]:
@@ -263,7 +289,10 @@ def fly_one(rw: RouteWorld, profile: str, seed: int, params_path: Path, image: s
 
 def row_of(r: dict[str, Any]) -> dict[str, Any]:
     m = r.get("metrics") or {}
-    flown = "never became armable" not in str((r.get("flight") or {}).get("error", ""))
+    # Never armed (the preflight checks, or a denied arm() before mission_flight.py tried
+    # again) is a flight not flown: the drone stayed on the floor.
+    err = str((r.get("flight") or {}).get("error", ""))
+    flown = "never became armable" not in err and "origin: arm()" not in err
     row = {"route": r["route"], "seed": r["seed"], "run": r["run"], "ok": r["ok"],
            "flown": flown, "crash": bool(m.get("crash", flown)),
            "contact": bool(m.get("contact", False)), "completed": bool(m.get("completed")),
@@ -273,6 +302,7 @@ def row_of(r: dict[str, Any]) -> dict[str, Any]:
     for k in METRICS:
         v = m.get(k)
         row[k] = float(v) if v is not None else math.nan
+    row.update(rtf_of(REPO_ROOT / r["run"]))
     return row
 
 
@@ -291,6 +321,8 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             agg[f"{k}_mean"] = statistics.fmean(vals) if vals else math.nan
             worst = min if k == "min_clearance_m" else max
             agg[f"{k}_worst"] = worst(vals) if vals else math.nan
+        rtf = [r["rtf_min"] for r in rs if not math.isnan(r.get("rtf_min", math.nan))]
+        agg["rtf_min"] = min(rtf) if rtf else math.nan
         out[name] = agg
     return out
 
@@ -303,18 +335,25 @@ def table(batch: dict[str, Any]) -> str:
     lines = [f"Stock PX4 Mission mode, `{batch['label']}` (`{batch['params']}`), profile "
              f"`{batch['profile']}`, commit {batch['commit']}", "",
              "| route | seed | cross-track p95 m | worst m | min clearance m | done | crash "
-             "| time / planned s |", "|---|---|---|---|---|---|---|---|"]
+             "| time / planned s | RTF mean / min |", "|---|---|---|---|---|---|---|---|---|"]
     for r in batch["rows"]:
         lines.append(f"| {r['route']} | {r['seed']} | {fmt(r['cross_track_p95_m'])} "
                      f"| {fmt(r['cross_track_max_m'])} | {fmt(r['min_clearance_m'])} "
                      f"| {'yes' if r['completed'] else 'no'} | {'yes' if r['crash'] else 'no'} "
-                     f"| {fmt(r['time_s'], 1)} / {fmt(r['planned_s'], 1)} |")
+                     f"| {fmt(r['time_s'], 1)} / {fmt(r['planned_s'], 1)} "
+                     f"| {fmt(r.get('rtf_mean', math.nan))} / "
+                     f"{fmt(r.get('rtf_min', math.nan))} |")
     lines += ["", "| route | cross-track p95 mean / worst m | min clearance worst m | done "
-              "| crashes |", "|---|---|---|---|---|"]
+              "| crashes | RTF min |", "|---|---|---|---|---|---|"]
     for name, a in batch["aggregate"].items():
         lines.append(f"| {name} | {fmt(a['cross_track_p95_m_mean'])} / "
                      f"{fmt(a['cross_track_p95_m_worst'])} | {fmt(a['min_clearance_m_worst'])} "
-                     f"| {a['completed']}/{a['n']} | {a['crashes']}/{a['n']} |")
+                     f"| {a['completed']}/{a['n']} | {a['crashes']}/{a['n']} "
+                     f"| {fmt(a.get('rtf_min', math.nan))} |")
+    slow = [r for r in batch["rows"] if r.get("rtf_min", math.nan) < RTF_FLAG]
+    if slow:
+        lines += ["", f"Below real time (a sample under {RTF_FLAG}): " + ", ".join(
+            f"{r['route']} seed {r['seed']} ({fmt(r['rtf_min'])})" for r in slow)]
     return "\n".join(lines) + "\n"
 
 
@@ -325,7 +364,9 @@ def log_line(r: dict[str, Any], batch: dict[str, Any], when: str) -> str:
               f"{fmt(r['cross_track_max_m'])} m, min clearance {fmt(r['min_clearance_m'])} m, "
               f"{'contact' if r['contact'] else 'no contact'}, "
               f"{'finished' if r['completed'] else 'not finished'} in {fmt(r['time_s'], 1)} s "
-              f"(target {fmt(r['planned_s'], 1)} s)")
+              f"(target {fmt(r['planned_s'], 1)} s)"
+              + (f", Gazebo RTF {fmt(r['rtf_mean'])} (min {fmt(r['rtf_min'])})"
+                 if r.get("rtf_n") else ""))
     return (f"| {when} | {r['run']} | {batch['commit']} | sim2real/route_follow/run_mission "
             f"{batch['label']} (stock PX4 Mission mode): {r['route']} seed {r['seed']}, "
             f"{batch['profile']} estimate, `{batch['params']}`, GPS off | {batch['host']} "
@@ -358,6 +399,47 @@ def rescore(batch_dir: Path, contact_radius_m: float) -> dict[str, Any]:
         "\n".join(log_line(r, batch, w) for r, w in lines) + "\n")
     print(table(batch))
     return batch
+
+
+def pool(batch_dirs: list[Path], out: Path, replace: bool = False) -> dict[str, Any]:
+    """Merge batches of one label, profile and parameter set flown in parts (seed halves,
+    each under the one-hour rule) into one batch: rows re-read from each flight's
+    ``route_summary.json`` (so the real-time factor is picked up), routes in their first
+    batch's order, then seeds. With ``replace`` a later batch's flight takes the place of an
+    earlier one of the same route and seed (a re-flight of one that never armed or ran below
+    real time); what it replaced is kept under ``replaced``."""
+    batches = [json.loads((d / "batch.json").read_text()) for d in batch_dirs]
+    for key in ("label", "profile", "params"):
+        vals = {b[key] for b in batches}
+        if len(vals) != 1:
+            raise ValueError(f"pooled batches must share one {key}, got {sorted(vals)}")
+    rows = [row_of(json.loads((REPO_ROOT / r["run"] / "route_summary.json").read_text()))
+            for b in batches for r in b["rows"]]
+    replaced = []
+    if replace:
+        last = {(r["route"], r["seed"]): i for i, r in enumerate(rows)}
+        replaced = [r for i, r in enumerate(rows) if last[(r["route"], r["seed"])] != i]
+        rows = [r for i, r in enumerate(rows) if last[(r["route"], r["seed"])] == i]
+    pairs = [(r["route"], r["seed"]) for r in rows]
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("pooled batches repeat a (route, seed) pair")
+    routes = list(dict.fromkeys(name for b in batches for name in b["routes"]))
+    rows.sort(key=lambda r: (routes.index(r["route"]), r["seed"]))
+    pooled = {**batches[0], "commit": ",".join(dict.fromkeys(b["commit"] for b in batches)),
+              "routes": routes, "seeds": sorted({r["seed"] for r in rows}), "rows": rows,
+              "aggregate": aggregate(rows), "pooled_from": [str(d) for d in batch_dirs],
+              "replaced": replaced}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "batch.json").write_text(json.dumps(pooled, indent=2) + "\n")
+    text = table(pooled)
+    if replaced:
+        text += "\nRe-flown, the first flight left out: " + ", ".join(
+            f"{r['route']} seed {r['seed']} ("
+            + ("never armed" if not r["flown"] else f"RTF min {fmt(r['rtf_min'])}") + ")"
+            for r in replaced) + "\n"
+    (out / "table.md").write_text(text)
+    print(text)
+    return pooled
 
 
 def run_batch(args: argparse.Namespace) -> dict[str, Any]:
@@ -435,11 +517,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", default="1", help="flights at once, or 'auto'")
     ap.add_argument("--cpus-per-job", type=int, default=4)
     ap.add_argument("--runs-dir", type=Path, default=REPO_ROOT / "runs")
+    ap.add_argument("--pool", nargs="+", type=Path, metavar="BATCH_DIR",
+                    help="merge flown batches of one label (e.g. seed halves) and exit")
+    ap.add_argument("--out", type=Path, help="where --pool writes the pooled batch")
+    ap.add_argument("--replace", action="store_true",
+                    help="with --pool: a later batch's flight replaces an earlier one of "
+                         "the same route and seed (a re-flight)")
     ap.add_argument("--dry-run", action="store_true",
                     help="build every route's world and mission and print the plan; no Docker")
     args = ap.parse_args(argv)
     if args.rescore:
         rescore(args.rescore, args.contact_radius_m)
+        return 0
+    if args.pool:
+        if not args.out:
+            ap.error("--pool needs --out")
+        pool(args.pool, args.out, args.replace)
         return 0
     if not args.label or not args.params:
         ap.error("--label and --params are required unless --rescore is given")

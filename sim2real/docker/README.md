@@ -51,6 +51,10 @@ other over Docker's bridge network. Each container already has its own network n
 so the MAVLink ports do not clash. The stock runner's rows record Gazebo's real-time factor
 (`rtf_min`); fewer jobs if it sags.
 
+The other runners do not record it themselves: run `./rtf_sampler.sh &` beside a batch and it
+appends a sample every 15 s to `rtf_samples.txt` in each running flight's folder
+(`sim2real.route_follow.run_mission` reads it into its tables).
+
 ## Building in the Claude cloud container
 
 The cloud container has Docker but blocks `packages.osrfoundation.org`, where `ubuntu.sh`

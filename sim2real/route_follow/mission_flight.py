@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 from mavsdk import System
+from mavsdk.action import ActionError
 from mavsdk.mission import MissionItem, MissionPlan
 
 MAVLINK_URL = "udpin://0.0.0.0:14540"
@@ -102,6 +103,25 @@ async def wait_until_armable(drone: System, timeout_s: float) -> float:
     raise RuntimeError("health stream ended")
 
 
+async def arm_when_allowed(drone: System, timeout_s: float = 30.0) -> int:
+    """Arm, trying again while PX4 denies it; returns the number of tries. The health stream
+    can say armable a moment before EKF2 calls the heading stable ("Preflight Fail: heading
+    estimate not stable" in px4.log), and a single denied ``arm()`` left one flight in 32 on
+    the floor. A drone that never arms is a flight not flown, not a crash."""
+    start = time.monotonic()
+    tries = 0
+    while True:
+        tries += 1
+        try:
+            await drone.action.arm()
+            return tries
+        except ActionError as exc:
+            if time.monotonic() - start > timeout_s:
+                raise TimeoutError(f"vehicle never became armable: arming denied for "
+                                   f"{timeout_s:.0f} s ({exc})") from exc
+            await asyncio.sleep(1.0)
+
+
 async def fly(args: argparse.Namespace) -> dict:
     m = json.loads(Path(args.mission).read_text())
     drone = System()
@@ -130,7 +150,7 @@ async def fly(args: argparse.Namespace) -> dict:
         await wait_for(lambda: not math.isnan(tel.down), 10, "local position")
         ground_down = tel.down
         await drone.action.set_takeoff_altitude(m["takeoff_alt_m"])
-        await drone.action.arm()
+        result["arm_tries"] = await arm_when_allowed(drone)
         mark("armed")
         await drone.action.takeoff()
         await wait_for(lambda: ground_down - tel.down >= m["takeoff_alt_m"] - 0.2, 60,

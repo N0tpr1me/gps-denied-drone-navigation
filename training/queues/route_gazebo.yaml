@@ -16,6 +16,9 @@ gpu_job_cpus: 4
 
 jobs:
   # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL
+  # Flown in the cloud on 2026-11-10, not here (Gazebo benchmarks moved there): one flight at
+  # a time, seed halves pooled with run_mission --pool, real-time factor sampled beside each
+  # flight. Results in docs/route-follow.md "The 8-seed baseline".
   # First the plumbing: a perfect estimate, 4 routes x 2 seeds. Go/no-go for the rest of the
   # lane: every flight takes off, flies the mission to its last waypoint and lands, the estimate
   # and wind traces verify, EKF2 fuses vision with GPS off. A failure here is the harness, not
