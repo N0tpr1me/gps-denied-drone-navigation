@@ -26,7 +26,7 @@ on PX4 v1.17.0. The code is the authority: the parameter table below is checked 
  gyro, attitude, land detector, hover thrust ──────────┤
                                                        ▼
                                   Structure Hold module (one work-queue item, 100 Hz)
-                         policy (MLP) ─ fallback ─ watchdog ─ wall guard ─ keep-out
+          pass path ─ policy (MLP) ─ fallback ─ watchdog ─ wall guard ─ keep-out
                                                        │
          Structure Hold (ext1):  vehicle_rates_setpoint ──▶ PX4 rate controller ──▶ mixer
          Structure Land/Hover (ext2/ext3): trajectory_setpoint ──▶ PX4 position controller
@@ -88,7 +88,7 @@ reckons.
 | `trajectory_setpoint` | Every tick in Structure Land and Structure Hover | xy position on the guarded point, yaw, descent rate (Land) or held height (Hover); acceleration-only xy in the range hold (`SH_HB_RANGE`) |
 | `vehicle_command` | On a trip or refusal | `DO_SET_MODE` for each handback target in turn |
 | `register_ext_component_request`, `arming_check_reply`, `config_control_setpoints` | At start and on every commander poll | Mode registration, availability, and which PX4 controllers commander must enable |
-| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, keep-out distance, nearest obstacle and shift, loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
+| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, keep-out distance, nearest obstacle and shift, the surface pass's state and how far it has moved the hold point (`pass_state`, `pass_offset_ned`), loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
 | STATUSTEXT (via `mavlink_log`) | Whenever a safety function acts, at each engage, near a watchdog limit, and every `SH_GCS_PER` s while a mode flies | Below |
 | `debug_array` (MAVLink `DEBUG_FLOAT_ARRAY` "SH_STATUS") | 5 Hz; PX4 streams it at 1 Hz on a ground-station link, 10 Hz onboard | The live numbers: state, hold error, wall distance, clearance, guard shift, fix age, time left before the no-fix trip, closest watchdog limit and how much of it is used, trip, tilt (`docs/pilot-status.md`) |
 
@@ -111,6 +111,33 @@ Hover moves up to ext2. On the PX4 shell: `commander mode ext1` / `ext2` / `ext3
 in. Fly to the standoff in Position mode, face the structure, switch in. A switch while
 the vehicle still moves is fine: it stops and holds (checked at about 2 m/s in SITL,
 `sitl_test.py --moving-engage`), but the hold point is where the switch happened.
+
+**Surface pass** (`SH_PASS_LEN`, 0 = off by default; `docs/surface-passes.md`). With a
+length set, each engage flies one pass: the hold point stays at the engage point for
+`SH_PASS_T0` seconds, then moves `SH_PASS_LEN` metres in a straight line at right angles to
+the heading at engage, level (positive to the right of the nose, negative to the left) or,
+with `SH_PASS_DIR` 1, straight up (positive) or down. It speeds up at 0.5 m/s^2 to
+`SH_PASS_SPD`, slows down the same way, and holds at the end. The nose stays on the engage
+heading and the standoff is the one at engage, so square up to the face first: each 5 deg
+off square changes the standoff by 0.09 m per metre flown. The four values are read at the
+engage; changing them mid-pass changes nothing until the next one. The same policy flies
+it: its velocity input is taken relative to the moving point, so nothing else changes.
+
+- The wall guard and the keep-out act on the moving point, as on a still one.
+- A short dropout of the position fix does not hold the pass back: EKF2 dead-reckons and
+  the vehicle follows the point as before. Once the fix has been stale for 2 s the point
+  brakes and waits, and goes on when the fix is fresh, so a pass through a long dropout
+  takes that much longer. With the brake-and-hover fallback on (`SH_FB_EN` 1) it waits from
+  `SH_FB_T` instead, because the vehicle brakes then.
+- The pass ends early, braking to a stop where the point then stays for the rest of the
+  hold, when an obstacle seen by the collision-prevention sensors is within the keep-out of
+  where the point would come to rest (0.25 m ahead at 0.5 m/s, plus 0.1 m), when the wall
+  guard has used up `SH_SHIFT_MAX`, or when a pass down comes within 1 m of the ground
+  (PX4's `dist_bottom`, when valid). The pilot is told why.
+- To stop a pass by hand, switch to Position mode. To fly the next one, engage again; set
+  `SH_PASS_LEN` 0 for a plain hold. There is no raster or route: one straight line per
+  engage, and whatever starts the next one (the pilot, a companion computer setting the
+  parameter and the mode) is the integrator's.
 
 **Disengage.** Switch to any other mode. Position mode is stock PX4 and always works.
 
@@ -168,6 +195,10 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_KO_DIST` | -1.0 | -1 to 5 | m | Keep-out from obstacles PX4's collision-prevention sensors see (not the structure ahead, which keeps `SH_WALL_MIN`). -1 follows PX4's `CP_DIST` (off unless you set it); 0 off |
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
 | `SH_SHIFT_MAX` | 3.0 | 0 to 10 | m | Retreat cap: the wall guard and the keep-out each move the hold point at most this far in one hold, then stop and tell the pilot. Keep it above the biggest estimate jump your drone can meet (1.5 m with GPS on). 0 removes the cap |
+| `SH_PASS_LEN` | 0.0 | -10 to 10 | m | Surface pass: after the engage the hold point moves this far along the wall at the same standoff, then holds there. Positive to the right of the nose, negative to the left (up and down with `SH_PASS_DIR` 1). 0 no pass: a plain hold. Read at each engage |
+| `SH_PASS_DIR` | 0 | 0 or 1 | | Pass direction: 0 along the wall, 1 up or down it |
+| `SH_PASS_SPD` | 0.5 | 0.1 to 1 | m/s | Pass cruise speed; it speeds up and slows down at 0.5 m/s^2. Tested at 0.5 m/s |
+| `SH_PASS_T0` | 3.0 | 0 to 60 | s | Hold this long after the engage before the pass starts |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
 | `SH_HB_RANGE` | 1 | 0 or 1 | | Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |
@@ -227,8 +258,10 @@ Inspector).
 | Warning | `Structure Hold: wall guard moved the hold point <s> m back, to <d> m from the wall` | The guard pushed the hold point |
 | Warning | `Structure Hold: keep-out moved the hold point <s> m, to <d> m from the nearest obstacle` | The keep-out pushed the hold point (first push of each engage) |
 | Warning | `Structure Hold: keep-out <d> m is on but no obstacle data is coming in` | At engage, with the keep-out on and no fresh `obstacle_distance` or side range |
+| Warning | `Structure Hold: pass stopped after <s> m: <reason>` | A surface pass ended early (`keep-out`, `wall guard cap` or `ground`); the hold point stays where it stopped |
 | Warning | `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | The fallback starts and ends |
 | Warning | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | Bench test |
+| Info | `Structure Hold: pass <l> m at <v> m/s` / `pass done` | A surface pass starts moving (`SH_PASS_LEN`, `SH_PASS_SPD`) and reaches its end |
 | Info | `Structure Hold: locked out until disarm` | After a latched trip |
 | Info | `Structure Hold: handing back to <mode>` | Each handback target in turn |
 | Info | `Structure Hover: position back, holding on the estimate` | `SH_HB_RANGE` 1 only |
@@ -291,6 +324,10 @@ it beats the released policy in our simulator checks and in Gazebo
   sensors, at least `SH_KO_DIST` from any obstacle they see, by moving the point away from
   what is too close; it never steers round anything (`docs/decisions.md`, keep-out row).
   An obstacle that keeps coming keeps pushing the hold point away.
+- A surface pass is one straight line along a flat face. It does not follow a curved or
+  stepped surface, plan a raster, or look for obstacles beyond what PX4's
+  collision-prevention sensors report; without those sensors nothing on board sees what is
+  on the line (`docs/safety-manual.md`, F48).
 - It does not choose the standoff: the hold point is where the vehicle was at engage,
   pushed back by the wall guard if too close.
 - It does not cover stock modes: in Position mode, Land and failsafes PX4 flies as stock,

@@ -40,6 +40,7 @@ px4_add_module(
 		Handback.hpp
 		RangeHover.hpp
 		ParamLimits.hpp
+		PassPath.hpp
 		HoldController.hpp
 		PolicyController.hpp
 		MlpPolicy.hpp

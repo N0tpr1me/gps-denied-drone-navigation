@@ -81,6 +81,12 @@ jobs:
           g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
               -I../structure_hold test_keep_out.cpp -o test_keep_out
           ./test_keep_out
+      - name: Surface pass path unit tests
+        run: |
+          cd sim2real/px4/tests
+          g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+              -I../structure_hold test_pass_path.cpp -o test_pass_path
+          ./test_pass_path
       - name: Parameter limit unit tests
         run: |
           cd sim2real/px4/tests

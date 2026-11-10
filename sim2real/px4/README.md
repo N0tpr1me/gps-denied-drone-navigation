@@ -361,7 +361,8 @@ venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structur
 uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946,952 B,
 about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
 in. With the VIO runaway trip and the EKF2 cut (2026-11-09) `px4_fmu-v6x_structurehold` is at
-99.27 % (1,951,816 B, about 14 KB spare); with the pre-arm VIO check (2026-11-09) at 99.38 % (1,953,832 B, about 12 KB spare). The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+99.27 % (1,951,816 B, about 14 KB spare); with the pre-arm VIO check (2026-11-09) at 99.38 % (1,953,832 B, about 12 KB spare). With the surface pass on top (2026-11-10) it is at 99.55 %
+(1,957,176 B, about 9 KB spare): room has to be made before much more goes in. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it
@@ -407,6 +408,21 @@ after it stops, accepted after 10 s still and 5 s after silence; the normal flig
 First run (2026-11-09): refused 1.8 s after the VIO started to run (both times), allowed
 11.0 s after it was still and 5.1 s after it went silent. SIH's EKF2 does not fuse this VIO; what
 EKF2 and stock PX4 do with it is the Gazebo flight in `docs/field-faults.md`.
+
+`--pass-len 5` flies a surface pass (`SH_PASS_LEN`, `docs/surface-passes.md`) as the hold:
+the hold point must stay put for `SH_PASS_T0`, announce the pass, move the length at right
+angles to the engage heading on the 0.5 m/s^2 trapezoid, say `pass done` and stay; the
+vehicle must stay within 0.5 m of the moving point and end within 0.3 m of the far end.
+`--pass-up` flies it up the wall. With `--wall`, `--pass-wall-step-m 0.5` brings the face
+0.5 m closer over the second half of the pass (the wall guard must move the point back and
+the pass must finish); with `--keep-out`, `--pass-pole-m 3.5` stands the pole on the line of
+the pass (the pass must brake to a stop short of it, with the `pass stopped` warning). First
+runs (2026-11-09): a plain 5 m pass never more than 0.18 m behind the point, 0.79 m from the
+stepped face, 0.92 m from the pole with a 1 m keep-out.
+
+`pass_flight.py` is stock PX4 flying the same pass in Offboard mode on trajectory setpoints
+(position, velocity and acceleration at 50 Hz), the tuned PX4 yardstick of the Gazebo pass
+scenarios; `run_estimate.py` flies it when the scenario has a `pass` block.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
 Structure Land, `commander mode ext3` hovers in Structure Hover, `commander mode posctl` disengages,
@@ -455,6 +471,8 @@ g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equ
     -I../structure_hold test_handback.cpp -o test_handback && ./test_handback
 g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
     -I../structure_hold test_range_hover.cpp -o test_range_hover && ./test_range_hover
+g++ -std=c++14 -O2 -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wfloat-equal \
+    -I../structure_hold test_pass_path.cpp -o test_pass_path && ./test_pass_path
 python -m pytest sim2real/px4/tests
 ```
 
@@ -470,6 +488,8 @@ sequence of the decided rows (including the `SH_HB_RANGE` one); `test_range_hove
 flies the range hover on a point mass with a tilt lag (a 4 m/s wind into the wall, with and
 without the wind feed-forward, a drifting entry, an entry inside the standoff);
 `test_watchdog.cpp` has one test per watchdog rule, the frozen fix included;
+`test_pass_path.cpp` flies the surface pass's path tick by tick against the mock's closed
+form (both ways, up and down, the wait on a stale fix, the braking stop);
 `test_params.cpp` and `test_param_limits.py` keep the
 module's limits equal to `structure_hold_params.c`. The c++14 flags mirror PX4's own build.
 

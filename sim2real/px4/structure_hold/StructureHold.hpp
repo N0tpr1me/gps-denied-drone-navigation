@@ -30,6 +30,11 @@
  * prevention reads (obstacle_distance and horizontal distance_sensors) keeps the hold point
  * of all three modes that far from any obstacle (KeepOut.hpp). Not avoidance: the point
  * only moves away from what is measured too close.
+ *
+ * Surface pass (SH_PASS_LEN, off by default): after the engage the hold point slides that
+ * far along the wall, or up it, at the same standoff and holds where it stops (PassPath.hpp,
+ * docs/surface-passes.md). The policy reads its velocity relative to the moving point, so
+ * it needs no new input; the wall guard and the keep-out act on the moving point.
  */
 
 #pragma once
@@ -82,6 +87,7 @@
 #include "HoldController.hpp"
 #include "KeepOut.hpp"
 #include "ParamLimits.hpp"
+#include "PassPath.hpp"
 #include "PilotStatus.hpp"
 #include "PolicyController.hpp"
 #include "RangeHover.hpp"
@@ -122,6 +128,8 @@ public:
 	static constexpr float HOVER_WALL_RANGE_M = 5.f;  // a trip hands back to Structure Hover inside this
 	static constexpr float GUARD_SPEED_TAU_S = 0.3f;  // low-pass on the guard's push rate (feed-forward)
 	static constexpr float LAND_SLOW_MPS = 0.3f;      // Structure Land's descent while it lags the guard
+	static constexpr float PASS_FLOOR_M = 1.f;        // a pass down the wall stops this far above the ground
+	static constexpr float PASS_AHEAD_M = 0.1f;       // a pass looks this far past its braking distance for obstacles
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
 	static constexpr hrt_abstime LIVE_INTERVAL = 200_ms;    // the live array; MAVLink streams it at its own rate
@@ -162,6 +170,7 @@ private:
 	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m,
 					   bool range_only = false);
 	void controlStep(const hrt_abstime now);
+	matrix::Vector3f passStep(const hrt_abstime now);  // moves the hold point; returns its velocity
 	void engageGuarded(const vehicle_local_position_s &lpos, bool descend);
 	void guardedStep(const hrt_abstime now);
 	bool rangeHoverWanted(const hrt_abstime now) const;
@@ -293,6 +302,13 @@ private:
 	void cutVision(bool cut);
 	float _last_estimate_age_s{0.f};
 
+	// Surface pass (SH_PASS_LEN, PassPath.hpp): the path, how far it has moved the hold
+	// point since engage, and the time of its last step.
+	structure_hold::PassPath _pass{};
+	matrix::Vector3f _pass_offset{};
+	hrt_abstime _pass_us{0};
+	const char *_pass_stop_why{""};  // what ended the pass early, for the pilot's line
+
 	// Forward rangefinder and the floor it puts under the hold point (WallGuard.hpp):
 	// the newest forward-facing distance_sensor sample from any instance.
 	structure_hold::RangeSample _range{};
@@ -391,6 +407,10 @@ private:
 		(ParamFloat<px4::params::SH_KO_DIST>) _param_ko_dist,
 		(ParamFloat<px4::params::SH_SHIFT_MAX>) _param_shift_max,
 		(ParamFloat<px4::params::SH_GCS_PER>) _param_gcs_per,
+		(ParamFloat<px4::params::SH_PASS_LEN>) _param_pass_len,
+		(ParamInt<px4::params::SH_PASS_DIR>) _param_pass_dir,
+		(ParamFloat<px4::params::SH_PASS_SPD>) _param_pass_spd,
+		(ParamFloat<px4::params::SH_PASS_T0>) _param_pass_t0,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

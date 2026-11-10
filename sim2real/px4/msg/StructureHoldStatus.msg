@@ -52,6 +52,13 @@ float32 obstacle_clearance_m  # [m] hold point to the nearest obstacle point (no
 float32 keep_out_shift_m      # [m] how far the keep-out has moved the hold point since engage
 uint8 keep_out_points         # obstacle points (obstacle_distance bins and side rangefinders) used this tick
 bool keep_out_no_room         # the keep-out could not be met everywhere: the hold point sits between obstacles
+uint8 PASS_OFF = 0             # no surface pass this engage (SH_PASS_LEN 0; PassPath.hpp)
+uint8 PASS_WAITING = 1         # the settle before it starts (SH_PASS_T0)
+uint8 PASS_MOVING = 2          # the hold point is moving (or held back on a stale estimate)
+uint8 PASS_DONE = 3            # the whole length flown; holding at its end
+uint8 PASS_STOPPED = 4         # ended early where it was (keep-out, retreat cap, ground)
+uint8 pass_state
+float32[3] pass_offset_ned     # [m] how far the surface pass has moved the hold point since engage, NED
 float32 watchdog_used         # fraction of the closest watchdog limit used (1 trips; PilotStatus.hpp); -1 when no mode flies
 uint8 watchdog_closest        # TRIP_* code of that limit (3, 4, 5 or 9), 0 when no mode flies
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])

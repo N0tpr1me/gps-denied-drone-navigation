@@ -133,3 +133,43 @@ def test_scenario_world_and_surface2_are_checked():
     with pytest.raises(ValueError, match="non-zero"):
         Scenario.from_dict({**base, "surface2": {"point": [0, 0, 4],
                                                  "normal_toward": [0, 0, 0]}})
+
+
+PASSES = ["wall1m_pass_calm_0ms", "wall1m_pass_wind_4ms", "wall1m_pass_wind_8ms"]
+
+
+@pytest.mark.parametrize("name", PASSES)
+def test_pass_scenarios_fly_the_benchmark_wind_along_the_wall(name):
+    # docs/surface-passes.md "In Gazebo": the wall1m benchmark with a 5 m pass in its hold.
+    sc, base = load_scenario(name), load_scenario(name.replace("_pass", ""))
+    p = sc.surface_pass
+    assert p is not None and base.surface_pass is None
+    assert (p.length_m, p.speed_mps, p.start_s, p.up) == (5.0, 0.5, 3.0, False)
+    assert sc.wall_clearance == base.wall_clearance == 1.0
+    assert sc.disturbance.mean_speed == base.disturbance.mean_speed
+    assert sc.disturbance.gust_speed == base.disturbance.gust_speed
+    # The pass runs to the right of the nose (-y here) and stays on the 20 m wall.
+    assert sc.spawn.yaw_deg == 0.0 and abs(sc.spawn.y - p.length_m) < 10.0
+    # The hold covers the settle, the pass and a hold at its end; the gusts land in it.
+    cruise_s = (p.length_m - p.speed_mps ** 2 / 0.5) / p.speed_mps
+    flown = p.start_s + 2 * p.speed_mps / 0.5 + cruise_s
+    assert sc.hover.hover_s >= flown + 10.0
+    for start in list(sc.disturbance.gust_start)[:sc.disturbance.num_gusts]:
+        assert p.engage_at_s + 2.0 < start < p.engage_at_s + sc.hover.hover_s - 3.0
+    assert sc.surface_pass.module_params() == [
+        "SH_PASS_LEN=5.0", "SH_PASS_DIR=0", "SH_PASS_SPD=0.5", "SH_PASS_T0=3.0"]
+    assert sc.surface_pass.flight_args()[-2:] == ["--engage-at-boot-s", str(p.engage_at_s)]
+
+
+def test_pass_block_is_checked_against_the_module_limits():
+    base = {"name": "x", "pass": {"length_m": 5.0}}
+    assert Scenario.from_dict(base).surface_pass.engage_at_s == 0.0
+    assert "--engage-at-boot-s" not in Scenario.from_dict(base).surface_pass.flight_args()
+    up = Scenario.from_dict({"name": "x", "pass": {"length_m": -2.0, "up": True}}).surface_pass
+    assert "--pass-up" in up.flight_args() and "SH_PASS_DIR=1" in up.module_params()
+    for bad in ({"length_m": 0.0}, {"length_m": 12.0}, {"speed_mps": 2.0}, {"start_s": -1.0},
+                {"engage_at_s": -5.0}):
+        with pytest.raises(ValueError):
+            Scenario.from_dict({"name": "x", "pass": {"length_m": 5.0, **bad}})
+    with pytest.raises(TypeError):
+        Scenario.from_dict({"name": "x", "pass": {"lenght_m": 5.0}})

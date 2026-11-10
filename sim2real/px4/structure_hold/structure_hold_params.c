@@ -526,6 +526,68 @@ PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
 PARAM_DEFINE_INT32(SH_HB_RANGE, 1);
 
 /**
+ * Surface pass: length (0 = no pass)
+ *
+ * With a length set, every engage of Structure Hold flies one pass: the hold point waits
+ * SH_PASS_T0 after the engage, then slides this far along the wall at the same standoff,
+ * at SH_PASS_SPD, and holds where it stopped (PassPath.hpp, docs/surface-passes.md).
+ * Positive is to the right as the drone faces the structure, negative to the left; with
+ * SH_PASS_DIR 1 positive is up and negative down. The wall guard and the keep-out keep
+ * acting on the moving point, a keep-out move ends the pass where it is, and the pass waits
+ * once the position estimate has been stale for 2 s (from SH_FB_T with the fallback on).
+ * A change takes effect at the next engage. Off by default: 0 is the plain hold.
+ *
+ * @unit m
+ * @min -10.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_LEN, 0.0f);
+
+/**
+ * Surface pass: direction
+ *
+ * 0: along the wall, level. 1: up or down the wall (a pier, a column); a pass down stops
+ * 1 m above the ground when PX4 has a valid distance to it, and otherwise the pilot has to
+ * leave it the room.
+ *
+ * @value 0 Along the wall
+ * @value 1 Up or down the wall
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_PASS_DIR, 0);
+
+/**
+ * Surface pass: cruise speed
+ *
+ * The hold point speeds up at 0.5 m/s^2 to this, and slows down at the same rate to stop
+ * at the end. Released policies are scored on passes from 0.2 to 1 m/s
+ * (docs/surface-passes.md).
+ *
+ * @unit m/s
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_SPD, 0.5f);
+
+/**
+ * Surface pass: settle time before it starts
+ *
+ * Seconds of plain hold after the engage before the hold point starts to move, counted
+ * only while the position estimate is fresh.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_T0, 3.0f);
+
+/**
  * Ground station: period of the one-line status while a mode flies
  *
  * While Structure Hold, Structure Hover or Structure Land flies, the pilot gets one line of

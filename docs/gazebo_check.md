@@ -427,3 +427,28 @@ What it says:
 - Seed luck in the verdict is larger than that. Two of the three fail, each on a cell the other two pass: seed 2 on the seed 1 replay alone (0.269 m where the other seeds hold 0.116 to 0.170; one jump at 35 s decides it), seed 3 on the ring rule and the seed 3 replay. The 128-episode replay cells and the ring rule move between seeds of the same recipe by more than a candidate usually differs from the reference on them.
 - For judging candidates: a pooled p95 gain inside about 10 % of the reference, or a pass or fail that rests on one replay cell or on the ring rule by less than about 30 %, is within one seed's luck and says nothing about the recipe. The releases so far were outside it (v9, v10, v11, v19 at ratios 0.72 to 0.82; v24 against v22 at 0.77 on the server the same day); v20's 0.96 was inside it. A candidate whose case rests on a margin inside the band should be trained on three seeds and judged on all three before anything is said about it, and a replay-cell failure by one seed is a watch item, not a verdict, until a second seed repeats it.
 - All three re-trainings hold 6 to 10 % tighter than v22 in the pooled cells and sit at the hold point where v22 sits 0.013 m below it. The likeliest reason is the height source, not the seed (above): the recipe trained on the barometer fusion lands where the check flies. That is a reason to retrain the release on the barometer fusion before the next Gazebo re-fly, and the mock has not predicted Gazebo on its own before, so it is a Proposed step, not a release.
+
+## The pass-trained candidate pass_s0 (2026-11-10)
+
+`pass_s0` (`training/policies/structure_hold_pass_s0.onnx`, v22 continued on surface passes
+with 30 % plain holds, `docs/surface-passes.md`) in `eval/configs/gazebo_check_v28.yaml` with
+`params.candidates.pass_s0`, v22 the reference, 128 episodes per cell and controller, run
+`20261110-035256_gazebo_check_v28_s7001_343782e` (cloud CPU, 27 min).
+
+| controller | p95 (m) | lift (m) | ring (median rms) | fast ring (median, rad/s) | toward the wall (m) | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| v22 | 0.176 | −0.013 | 0.0034 | 0.017 | 0.057 | reference |
+| pass_s0 | 0.137 | −0.002 | 0.0038 | 0.015 | 0.061 | does not beat v22 (p95 ratio 0.78, interval 0.76 to 0.80): fails `ring_not_higher` only (+14 %, the limit is 5 %) |
+
+It passes the other 17 rules: no crash in the rough cells, the three seed replays tighter than
+v22 (0.116 / 0.118 / 0.170 against 0.183 / 0.163 / 0.216 m), calm clean 0.050 against 0.055 m,
+the re-engage cells no worse. The one failure is the 1.2 to 2.2 Hz roll ring, 0.0038 against
+0.0034: both under a twentieth of the 0.1 wobble threshold, a quarter of the 0.0154 with which
+v11 failed the rule before it rang in Gazebo, and a margin the seed repeatability study above
+puts inside one seed's luck (the same recipe's seeds span 0.0033 to 0.0044). In its 24 Gazebo
+pass flights its rate commands were smoother than v22's (`docs/surface-passes.md`).
+
+As the rule is written it does not go to a release re-fly: the verdict is "does not beat v22"
+and v22 stays released. Whether a ring this small should count (an absolute floor under the
+relative rule, as the lift rule got on 2026-11-03) is in "Ideas parked" of `docs/decisions.md`
+and is Zain's call; the hold p95 gain, 22 %, is outside seed luck.
