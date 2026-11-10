@@ -1,0 +1,473 @@
+# Generated from structure_hold_params.c by sim2real/px4/tools/params_yaml.py; do not
+# edit by hand. PX4 v1.18 reads parameter definitions from YAML only; v1.16 and v1.17
+# read the C file and never see this one (CMakeLists.txt).
+module_name: structure_hold
+parameters:
+- group: Structure Hold
+  definitions:
+    SH_EN:
+      description:
+        short: Start the Structure Hold module at boot
+        long: The mode registers with commander at start and is idle until engaged.
+      type: boolean
+      default: 1
+      reboot_required: true
+    SH_WD_EST_TO:
+      description:
+        short: 'Watchdog: position fix timeout'
+        long: |-
+          No fresh position fix (see SH_FIX_SRC) or no vehicle_local_position update for longer
+          than this trips the watchdog. Sits above the dropouts the brake-and-hover fallback is
+          meant to fly through (up to 3 s in the mock) and at EKF2's own no-aiding limit
+          (EKF2_NOAID_TOUT, 5 s): an estimate EKF2 marks invalid trips the watchdog at once
+          regardless of this value (docs/fallback.md, docs/decisions.md).
+      type: float
+      default: 5.0
+      unit: s
+      min: 0.05
+      max: 10.0
+      decimal: 2
+    SH_WD_POS_ERR:
+      description:
+        short: 'Watchdog: maximum hold error'
+        long: Distance between the held setpoint and the estimate beyond which the watchdog trips.
+      type: float
+      default: 2.0
+      unit: m
+      min: 0.2
+      max: 10.0
+      decimal: 1
+    SH_WD_TILT:
+      description:
+        short: 'Watchdog: maximum tilt'
+      type: float
+      default: 45.0
+      unit: deg
+      min: 10
+      max: 80
+      decimal: 0
+    SH_WD_FRZ_T:
+      description:
+        short: 'Watchdog: frozen position fix'
+        long: |-
+          Trips the watchdog when the position fix (the VIO odometry, SH_FIX_SRC) keeps arriving on
+          time but has not moved by more than 0.1 mm for this long while flying, and refuses an
+          engage while it is so. A stuck camera pipeline or VIO process can republish its last pose
+          forever: the stale trip never sees it and EKF2 keeps it valid. A real VIO on a flying
+          vehicle is never that still for long. After the trip the decided handback order applies;
+          with SH_HB_RANGE 1 Structure Hover treats a frozen fix as no estimate and holds the wall
+          distance on the rangefinder. Needs the odometry fix (no effect when the fix is EKF2's
+          local position). Default 1 s (Decided 2026-11-02, docs/decisions.md); 0 = off.
+      type: float
+      default: 1.0
+      unit: s
+      min: 0.0
+      max: 10.0
+      decimal: 1
+    SH_WD_VIO_DV:
+      description:
+        short: 'Watchdog: VIO runaway, velocity disagreement with the IMU'
+        long: |-
+          Trips the watchdog when the VIO's velocity (the odometry fix, SH_FIX_SRC) has changed by
+          more than this much more than the IMU says the vehicle's velocity changed, over 3 s, for
+          0.5 s in a row; and refuses an engage while it is so. A VIO that locks onto moving dust
+          runs away with its position and velocity agreeing with each other, on time, with no
+          tracking loss reported (docs/field-faults.md, "Heavy dust"): only the IMU disagrees. The
+          VIO is then not trusted until it reports a restart (ODOMETRY reset_counter) or the
+          vehicle disarms: the handback takes the horizontal estimate as gone (Altitude mode, never
+          Position mode), and with SH_HB_RANGE 1 Structure Hover holds the wall distance on the
+          rangefinder. Needs the odometry fix with a velocity in NED or the body frame. 0 = off.
+      type: float
+      default: 0.8
+      unit: m/s
+      min: 0.0
+      max: 10.0
+      decimal: 1
+    SH_WD_EV_CUT:
+      description:
+        short: Stop EKF2 fusing a VIO that ran away
+        long: |-
+          EKF2 keeps fusing a runaway VIO (SH_WD_VIO_DV) and turns its own attitude estimate to
+          agree with it, so the drone physically accelerates with the runaway even in a mode that
+          flies no position: in Gazebo, Structure Hover on the rangefinder slid 84 to 88 m along
+          the wall (docs/field-faults.md, "Heavy dust"). With 1, once the runaway is caught while
+          one of the module's modes flies or hands back, the module clears EKF2_EV_CTRL's position
+          and velocity bits (yaw kept) so EKF2 stops fusing the VIO, and puts the old value back
+          when the VIO reports a restart (ODOMETRY reset_counter) or the vehicle disarms. Not while
+          another mode flies with the module on standby, nor in Structure Land. 0: EKF2 untouched.
+      type: boolean
+      default: 1
+    SH_WD_GND_V:
+      description:
+        short: 'Pre-arm: VIO speed with the vehicle at rest that blocks arming'
+        long: |-
+          A VIO started in drifting dust can take the grains for motion and run away while the
+          vehicle sits on the ground (docs/vio-render.md: up to 2.8 m/s before take-off). EKF2 fuses
+          it, and a take-off in any position mode then follows it. While the vehicle is disarmed
+          and the land detector has it at rest (IMU only), the module averages the VIO's velocity
+          over 1 s; over this limit for 2 s in a row it tells commander to refuse arming, in every
+          mode, and tells the pilot. Arming is allowed again once the VIO has reported under the
+          limit for 10 s at rest, or has gone silent for 5 s. A runaway caught by SH_WD_VIO_DV
+          while disarmed blocks and clears the same way. Never acts once armed. 0 = off.
+      type: float
+      default: 0.3
+      unit: m/s
+      min: 0.0
+      max: 5.0
+      decimal: 2
+    SH_RST_HOLD:
+      description:
+        short: 'Watchdog: entry hold-off after an estimator reset'
+        long: |-
+          Structure Hold refuses to engage (commander keeps the current mode, or the module hands
+          straight back if it was already switched in) for this long after EKF2 reset its
+          horizontal position (vehicle_local_position.xy_reset_counter), because a hold point
+          captured while the estimate settles after a reset is not where the vehicle is. Not
+          latched: the mode becomes available again when the time has passed. A reset during a
+          hold never trips the watchdog; the policy is trained on them. Off by default (0):
+          stock PX4 captures the same settling estimate, so in the mock replay of the v11 seed 3
+          sequence a 10 s hold-off moved the crashes into the stock phase without preventing
+          them (docs/baseline.md, v11 section). An operator choice, not a fix.
+      type: float
+      default: 0.0
+      unit: s
+      min: 0.0
+      max: 60.0
+      decimal: 1
+    SH_TEST_FAULT:
+      description:
+        short: 'Test hook: force a watchdog trip'
+        long: |-
+          Set to 1 to trip the watchdog on the next tick (hands back to stock PX4). Clears
+          itself. For SITL and flight tests of the handback path only.
+      type: boolean
+      default: 0
+    SH_BENCH:
+      description:
+        short: 'Bench test only: allow engaging on the ground'
+        long: |-
+          Structure Hold refuses to engage while the land detector says the vehicle is on the
+          ground (a hold point on the ground is no hold, and the policy never learned a take-off),
+          and hands back at idle thrust. The props-off bench test (docs/bench-test.md) needs the
+          mode engaged on the ground, so this lifts that refusal. Props off only; never fly with
+          it set. The mode still cannot be armed into.
+      type: boolean
+      default: 0
+    SH_P_POS:
+      description:
+        short: 'Placeholder hold controller: position gain'
+      type: float
+      default: 0.95
+      unit: 1/s
+      min: 0.1
+      max: 3.0
+      decimal: 2
+    SH_P_VEL:
+      description:
+        short: 'Placeholder hold controller: velocity gain'
+      type: float
+      default: 1.8
+      unit: 1/s
+      min: 0.1
+      max: 6.0
+      decimal: 2
+    SH_P_ATT:
+      description:
+        short: 'Placeholder hold controller: attitude gain'
+      type: float
+      default: 6.5
+      unit: 1/s
+      min: 1.0
+      max: 12.0
+      decimal: 2
+    SH_V_MAX:
+      description:
+        short: 'Placeholder hold controller: maximum velocity setpoint'
+      type: float
+      default: 1.0
+      unit: m/s
+      min: 0.2
+      max: 5.0
+      decimal: 1
+    SH_VEL_SRC:
+      description:
+        short: Velocity source for the controllers
+        long: |-
+          0: velocity from the local position estimate (normal). 1: velocity differentiated from
+          the estimated position inside the module and low-pass filtered, for simulators whose
+          velocity estimate is unusable (PX4 v1.17.0 SIH, see sim2real/px4/README.md).
+      type: enum
+      values:
+        0: Estimator velocity
+        1: Differentiated estimator position
+      default: 0
+    SH_CTRL:
+      description:
+        short: Controller flying the hold
+        long: |-
+          1: policy v2 (PolicyWeights.hpp, generated from training/policies) with the classical
+          brake-and-hover fallback. 0: the skeleton's placeholder P cascade (SH_P_*).
+      type: enum
+      values:
+        0: Placeholder cascade
+        1: Policy with fallback
+      default: 1
+    SH_FB_EN:
+      description:
+        short: Brake-and-hover fallback enable
+        long: |-
+          While the estimate has had no fresh position fix for SH_FB_T or longer, the fallback
+          brakes on the dead-reckoned velocity and hovers level until the next fix
+          (docs/fallback.md). -1: the compiled-in policy's own default (policy.json
+          output.fallback: on for v2, off for v3, which handles dropouts itself). 0: the policy
+          flies through every dropout. 2: test hook, the fallback flies every tick (checks the
+          rule and the frame conversions on their own).
+      type: enum
+      values:
+        -1: Policy default
+        0: 'Off'
+        1: 'On'
+        2: Forced (test)
+      default: -1
+      min: -1
+      max: 2
+    SH_FB_T:
+      description:
+        short: 'Brake-and-hover fallback: take-over time'
+        long: |-
+          Time without a fresh position fix after which the fallback takes over from the policy.
+          0.5 s in the mock sweep (docs/fallback.md); keep below SH_WD_EST_TO.
+      type: float
+      default: 0.5
+      unit: s
+      min: 0.05
+      max: 5.0
+      decimal: 2
+    SH_FIX_SRC:
+      description:
+        short: What counts as a fresh position fix
+        long: |-
+          0: vehicle_visual_odometry samples (VIO / the estimate bridge) once any has arrived since
+          boot, otherwise vehicle_local_position updates. 1: visual odometry only. 2: local
+          position updates only (every EKF2 output counts, so the estimate is never stale; for
+          GPS or SIH flights).
+      type: enum
+      values:
+        0: Auto
+        1: Visual odometry
+        2: Local position
+      default: 0
+    SH_FIX_GAP:
+      description:
+        short: Fix interval beyond which the estimate is flagged stale to the policy
+        long: |-
+          The policy's stale observation is 1 once the last fix is older than this; the fallback
+          uses the stale time itself (SH_FB_T). Set to about twice the fix source's period.
+      type: float
+      default: 0.1
+      unit: s
+      min: 0.01
+      max: 1.0
+      decimal: 2
+    SH_YAW_GUARD:
+      description:
+        short: 'Yaw guard: hold the heading with the module''s own loop'
+        long: |-
+          1: the module holds the wall-facing heading captured at engage with a P loop (SH_YAW_P)
+          and ignores the policy's yaw output. 0: the policy's yaw output flies. -1: the
+          compiled-in policy's own default (policy.json output.yaw): on for v2, which has no
+          heading term and yaws freely; off for v3, which holds heading itself and hits the wall
+          when the guard replaces its yaw.
+      type: enum
+      values:
+        -1: Policy default
+        0: 'Off'
+        1: 'On'
+      default: -1
+      min: -1
+      max: 1
+    SH_YAW_P:
+      description:
+        short: Yaw guard gain
+        long: Yaw rate per radian of heading error, as the mock's PD yardstick and the fallback.
+      type: float
+      default: 3.0
+      unit: 1/s
+      min: 0.5
+      max: 10.0
+      decimal: 1
+    SH_RATE_MAX:
+      description:
+        short: Body rate setpoint limit for the policy and the fallback
+        long: |-
+          Applies to the commanded roll, pitch and yaw rates after the action scaling. 0: the
+          compiled-in policy's own action scale (policy.json output.max_rate_rad_s: 6 rad/s for
+          v2, 2 rad/s for v3). A real airframe's rate loop may need a lower clamp (v2 flew SIH
+          only at 1 to 2 rad/s).
+      type: float
+      default: 0.0
+      unit: rad/s
+      min: 0.0
+      max: 6.0
+      decimal: 1
+    SH_FB_K:
+      description:
+        short: 'Brake-and-hover fallback: braking gain'
+        long: |-
+          Acceleration setpoint per m/s of dead-reckoned velocity (K_BRAKE in docs/fallback.md,
+          retuned 2.5 to 1.5 for the lagged rate loop with policy v3).
+      type: float
+      default: 1.5
+      unit: 1/s
+      min: 0.2
+      max: 5.0
+      decimal: 2
+    SH_FB_TILT:
+      description:
+        short: 'Brake-and-hover fallback: attitude gain'
+        long: |-
+          Body rate per radian of tilt error of the fallback's attitude loop (K_TILT in
+          docs/fallback.md, retuned 8 to 4 for the lagged rate loop with policy v3); scale with
+          the airframe's rate loop.
+      type: float
+      default: 4.0
+      unit: 1/s
+      min: 1.0
+      max: 12.0
+      decimal: 1
+    SH_WALL_MIN:
+      description:
+        short: 'Wall guard: minimum standoff from the measured wall'
+        long: |-
+          With a forward-facing rangefinder (distance_sensor, orientation forward), the hold point
+          is kept at least this far from the wall it measures, along the heading at engage: when
+          the range says the hold point is closer, the point moves straight back by the shortfall
+          and never forward again during that hold (WallGuard.hpp). This is the floor for the
+          Gazebo seed 3 strike, where a hold point captured on a jumped estimate lay on the wall
+          face (docs/real-flight-gap.md). Without a usable range sample (stale over 0.2 s, out of
+          the sensor's range, bad signal, or the vehicle yawed more than 35 deg off the wall
+          normal) the guard does nothing. Set it above the prop reach plus margin (x500: 0.36 m
+          reach). 0 turns the guard off; distances are still reported in structure_hold_status.
+      type: float
+      default: 0.7
+      unit: m
+      min: 0.0
+      max: 5.0
+      decimal: 2
+    SH_KO_DIST:
+      description:
+        short: 'Keep-out: minimum distance from obstacles that PX4''s collision prevention sees'
+        long: |-
+          The hold point of Structure Hold, Structure Hover and Structure Land is kept at least this
+          far from every obstacle in PX4's collision-prevention data: obstacle_distance (a 360 deg
+          lidar, or OBSTACLE_DISTANCE from a companion computer) and distance sensors facing a
+          horizontal direction other than forward (KeepOut.hpp). PX4's own collision prevention
+          only bends the sticks in Position mode, so without this the hold ignored them. A point
+          too close moves the hold point straight away from it by the shortfall, never back toward
+          it. The structure ahead is not an obstacle: points on the wall face (within 0.3 m of the
+          wall the forward rangefinder or the lidar's forward 10 deg measures) keep SH_WALL_MIN
+          instead. Not obstacle avoidance: nothing is planned and an obstacle moving in keeps
+          pushing the hold point away. Readings older than 0.5 s are ignored, and Structure Hover
+          on the rangefinder alone (SH_HB_RANGE) does not use it.
+          -1 (default) follows PX4's CP_DIST, which is -1 (off) unless the drone maker set up
+          collision prevention; 0 turns it off; above 0 is the distance in metres.
+      type: float
+      default: -1.0
+      unit: m
+      min: -1.0
+      max: 5.0
+      decimal: 2
+    SH_SHIFT_MAX:
+      description:
+        short: 'Guards: how far the hold point may retreat in one hold'
+        long: |-
+          The wall guard and the keep-out only ever move the hold point away (a ratchet). Each of
+          them moves it at most this far, summed over a hold, so a rangefinder stuck reading short
+          or an obstacle that keeps coming (a person walking up) cannot walk the vehicle backwards
+          without limit, possibly toward something no sensor sees. At the cap the point stops and
+          the pilot is told once (critical). Keep it well above the biggest estimate jump the drone
+          can meet: with GPS on the wall guard has to answer a 1.5 m jump in full. 0 removes the
+          cap. The count restarts at every engage.
+      type: float
+      default: 3.0
+      unit: m
+      min: 0.0
+      max: 10.0
+      decimal: 1
+    SH_WALL_REQ:
+      description:
+        short: 'Wall guard: require a forward range to engage'
+        long: |-
+          When set, the mode reports itself unavailable to commander while no usable forward
+          range sample is coming in, so it cannot be engaged without the floor of SH_WALL_MIN.
+          A range lost during a hold does not trip the watchdog: the hold point keeps the shift
+          it already has. Off by default so vehicles without a forward rangefinder (the Gazebo
+          benchmark x500) fly as before.
+      type: boolean
+      default: 0
+    SH_LAND_EN:
+      description:
+        short: 'Structure Land: register the guarded landing mode'
+        long: |-
+          Registers a second external mode, "Structure Land" (after Structure Hold, so ext2), that
+          lands next to the structure: PX4's own position controller descends at MPC_LAND_SPEED
+          with its land detector and touchdown, and the module owns only the xy setpoint, which the
+          wall guard keeps at least SH_WALL_MIN from the measured wall the whole way down. Stock
+          Land holds xy on the estimate alone, so after a handback on a jumped estimate it walks
+          the vehicle into the wall as the estimate recovers (docs/baseline.md, wall guard on
+          Gazebo seed 3). Available in flight only, and also after a latched watchdog trip. Its
+          own watchdog trips (stale or invalid estimate, tilt, xy error) hand back to stock Land
+          first, since the landing was already asked for, then to Position mode, Hold and Land
+          as Structure Hold's do. Without a usable forward range it is a plain position-holding landing.
+      type: boolean
+      default: 1
+      reboot_required: true
+    SH_HB_GUARD:
+      description:
+        short: 'Handback: guarded hover first when a wall is measured'
+        long: |-
+          Registers a third external mode, "Structure Hover" (ext3): the Structure Land setpoint
+          without the descent, so PX4's own position controller hovers on a point the wall guard
+          keeps at least SH_WALL_MIN from the measured wall. A watchdog trip in Structure Hold
+          hands back into it first when a usable forward range sees the wall within 5 m, then
+          falls through to Position mode as before if commander refuses it. Stock Position mode
+          holds the estimate alone, and after a trip on a jumped estimate it creeps toward the
+          wall as the estimate recovers (Gazebo seed 3: 0.59 to 0.31 m clearance before the
+          landing). The pilot leaves it for Position mode as usual. Available in flight only, also
+          after a latched trip. 0: hand back to Position mode directly.
+      type: boolean
+      default: 1
+      reboot_required: true
+    SH_HB_RANGE:
+      description:
+        short: 'Structure Hover: hold the wall distance on the rangefinder when the position is lost'
+        long: |-
+          On by default (Decided 2026-11-02, docs/decisions.md, docs/field-faults.md). With the
+          horizontal position estimate gone, the decided handback goes to Altitude mode, which holds
+          the height and keeps the vehicle level: a wind blowing into the wall then pushes it onto
+          the face (the 8 s link-loss field fault in Gazebo). With 1, a trip in Structure Hold next
+          to a measured wall (as SH_HB_GUARD) goes to Structure Hover even without a horizontal
+          estimate, and Structure Hover, whenever the estimate is invalid or stale, holds the
+          measured wall distance on the forward rangefinder alone (never under SH_WALL_MIN), leans
+          into the wind it was holding against before the estimate went, and keeps the height on
+          PX4's own altitude control. Once the estimate is back and fresh for 1 s it holds the
+          point on the estimate again. A lost range hands back as before (Altitude mode, Hold,
+          Land). Structure Hover then no longer needs a local position to be selected. Needs
+          SH_HB_GUARD 1 and SH_WALL_MIN > 0. 0: Altitude mode, the earlier decided order.
+      type: boolean
+      default: 1
+    SH_GCS_PER:
+      description:
+        short: 'Ground station: period of the one-line status while a mode flies'
+        long: |-
+          While Structure Hold, Structure Hover or Structure Land flies, the pilot gets one line of
+          text this often: how far the vehicle is from its hold point, how far from the wall, and
+          how old the position fix is (docs/pilot-status.md). The engage line and the warnings
+          near a watchdog limit are sent whatever this is set to, and so is the live number array
+          (DEBUG_FLOAT_ARRAY "SH_STATUS"). 0 turns the periodic line off.
+      type: float
+      default: 10.0
+      unit: s
+      min: 0.0
+      max: 60.0
+      decimal: 0

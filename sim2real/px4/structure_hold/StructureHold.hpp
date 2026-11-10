@@ -68,6 +68,16 @@
 #include <uORB/topics/vehicle_rates_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 
+// How an external mode tells commander which controllers to run changed in PX4 v1.18:
+// v1.16 and v1.17 take a vehicle_control_mode on config_control_setpoints, v1.18 takes a
+// setpoint type on setpoint_config and that topic is gone. The header's presence picks.
+#if __has_include(<uORB/topics/setpoint_config.h>)
+#include <uORB/topics/setpoint_config.h>
+#define SH_HAS_SETPOINT_CONFIG 1
+#else
+#define SH_HAS_SETPOINT_CONFIG 0
+#endif
+
 #include "Handback.hpp"
 #include "HoldController.hpp"
 #include "KeepOut.hpp"
@@ -80,9 +90,20 @@
 
 using namespace time_literals;
 
+// PX4 v1.18 made ModuleBase a plain class that keeps the running instance in a per-module
+// Descriptor; up to v1.17 it is a template on the module's own class with static members.
+// Nothing in the headers says which, so CMakeLists.txt looks and sets SH_MODULE_DESCRIPTOR.
+#ifdef SH_MODULE_DESCRIPTOR
+class StructureHold : public ModuleBase, public ModuleParams, public px4::WorkItem
+#else
 class StructureHold : public ModuleBase<StructureHold>, public ModuleParams, public px4::WorkItem
+#endif
 {
 public:
+#ifdef SH_MODULE_DESCRIPTOR
+	static Descriptor desc;
+#endif
+
 	StructureHold();
 	~StructureHold() override;
 
@@ -117,6 +138,10 @@ public:
 
 private:
 	void Run() override;
+
+	// ModuleBase's record of the running instance, in either of its two forms.
+	static void setInstance(StructureHold *instance);
+	static StructureHold *runningInstance();
 
 	// Mode registration with commander
 	void sendRegistration(const char *name, uint64_t &request_id);
@@ -185,7 +210,11 @@ private:
 	// Publications
 	uORB::Publication<register_ext_component_request_s> _register_request_pub{ORB_ID(register_ext_component_request)};
 	uORB::Publication<unregister_ext_component_s> _unregister_pub{ORB_ID(unregister_ext_component)};
+#if SH_HAS_SETPOINT_CONFIG
+	uORB::Publication<setpoint_config_s> _setpoint_config_pub{ORB_ID(setpoint_config)};
+#else
 	uORB::Publication<vehicle_control_mode_s> _config_control_setpoints_pub{ORB_ID(config_control_setpoints)};
+#endif
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<vehicle_rates_setpoint_s> _rates_setpoint_pub{ORB_ID(vehicle_rates_setpoint)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};

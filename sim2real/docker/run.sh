@@ -9,7 +9,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
-IMAGE="${SITL_IMAGE:-structure-hold/px4-sitl:v1.17.0}"
+# PX4_TAG: the PX4 release the image is built from and named after. v1.17.0 is the pinned
+# benchmark release (docs/decisions.md). Other releases build and fly for compatibility only
+# (docs/px4-versions.md): PX4_TAG=v1.16.2 ./run.sh build, then pass the image to a runner
+# with --image.
+PX4_TAG="${PX4_TAG:-v1.17.0}"
+IMAGE="${SITL_IMAGE:-structure-hold/px4-sitl:${PX4_TAG}}"
 
 cmd="${1:-sitl}"
 shift || true
@@ -17,7 +22,8 @@ shift || true
 case "${cmd}" in
     build)
         # Context is sim2real/ so the image picks up the PX4 module (../px4) and the Gazebo world and wind plugin (../gazebo).
-        docker build -t "${IMAGE}" -f "${HERE}/Dockerfile" "$@" "${HERE}/.."
+        docker build -t "${IMAGE}" -f "${HERE}/Dockerfile" --build-arg "PX4_TAG=${PX4_TAG}" \
+            "$@" "${HERE}/.."
         ;;
     build-watch)
         docker build -t "${IMAGE}-watch" -f "${HERE}/Dockerfile.watch" \

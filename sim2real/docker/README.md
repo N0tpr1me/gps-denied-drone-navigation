@@ -7,6 +7,10 @@ renders.
 
 - PX4 **v1.17.0**, pinned in `docs/decisions.md`. Moving the pin means re-tuning the
   baseline, so change the `PX4_TAG` build arg, the tag in `run.sh` and the decision row together.
+- Other releases, for compatibility checks only (`docs/px4-versions.md`): `PX4_TAG=v1.16.2
+  ./run.sh build` builds `structure-hold/px4-sitl:v1.16.2` beside the pinned image, and every
+  runner takes it with `--image`. The default everywhere stays v1.17.0, and no benchmark
+  number comes from another release.
 - MAVSDK-Python 3.17.4 inside the image for scripted flights.
 - Nothing graphical by default: Gazebo runs server-only (`HEADLESS=1`). The watch image
   below adds an opt-in browser view.

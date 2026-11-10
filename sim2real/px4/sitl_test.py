@@ -1023,7 +1023,12 @@ def keep_out_step(v: Vehicle, args: argparse.Namespace, result: dict) -> None:
         "after_last3s_mean_m": round(sum(tail) / len(tail), 3),
         "scans_sent": v.scans,
     }
-    v.pole = None
+    # The lidar stays on for the rest of the flight, seeing nothing (the pole far out of its
+    # range), as a real one would. Switched off, PX4's own collision prevention (CP_DIST)
+    # finds its obstacle data stale and commands Hold 5 s into the next Position stretch,
+    # the same 5 s the check after the disengage waits: it then passed or failed by 0.1 s
+    # on every PX4 version (docs/px4-versions.md).
+    v.pole = pole_at(1000.0)
     # Beyond the keep-out the pole changes nothing (the policy's own wander in SIH is a few
     # cm to 0.2 m, as in the range-fault check).
     checks["keep_out_ignores_far_obstacle"] = not far_warned and far_moved <= args.range_fault_tol

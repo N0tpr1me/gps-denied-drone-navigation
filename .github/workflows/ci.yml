@@ -114,4 +114,5 @@ jobs:
       - name: Shell scripts parse
         run: |
           bash -n sim2real/px4/install.sh && bash -n sim2real/px4/sitl_test.sh
+          bash -n sim2real/px4/version_check.sh
           bash -n sim2real/auterion/sitl_app_test.sh && bash -n sim2real/auterion/stage_app.sh
