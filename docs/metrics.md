@@ -13,7 +13,8 @@ disagree, the code is what produced the numbers; fix whichever is wrong in its o
   estimate: with a corrupted estimate, scoring against it hides the error we measure. The
   ulog reader refuses to fall back to the estimate unless asked (`--allow-estimate`).
 - **Hold setpoint** `p_sp(t)`, ENU. A fixed hold point, or PX4's position setpoint held
-  between samples.
+  between samples. For a Gazebo hold it is the setpoint at the start of the scored hold, in
+  the truth's frame ("Gazebo holds" below).
 - **Wall**: a point on the plane and its unit normal `n`, pointing from the drone toward the
   surface (the structure-frame x axis in `docs/conventions.md`).
 - **Gusts**: `(start, end)` times in seconds. A step or impulse has `start == end`.
@@ -69,6 +70,26 @@ python -m eval.metrics flight.ulg --wall-point 0,1,0 --wall-normal 0,1,0 --gust 
 
 The ulog reader (`eval/ulog.py`) is the PX4 boundary for logs: it converts NED to ENU and
 FRD body rates to FLU, and takes upward thrust as `-thrust_body[2]`.
+
+Gazebo holds (Decided 2026-11-10, `docs/decisions.md`; `eval.ulog.gazebo_reference`, used by
+both runners of `eval.baselines.run_baseline`): the score is how far the drone was from where
+it was asked to stay, so the setpoint is prepared in two steps before `compute_metrics` sees
+it.
+
+1. The height EKF2 read on the ground before lift-off, minus Gazebo's true height (the mean
+   from 3 s to 0.5 s before the truth lifts 0.2 m), comes out of the setpoint. On barometer
+   height that offset is 0.01 to 0.45 m; it is where the estimator's frame starts, there with
+   the motors off, and not hold error. Whatever the estimate does after lift-off stays in.
+2. The setpoint is the one in force at the start of the scored window, one fixed point.
+   Stock PX4 moves its setpoint when EKF2 resets, and a drone that then sits on the moved
+   setpoint has still left the place it was holding. Structure Hold's hold point is fixed
+   already. A surface pass keeps its moving reference and only loses the offset.
+
+Each flight's metrics also carry `p95_logged_setpoint_m` (the p95 against the setpoint
+exactly as logged, the number in every Gazebo table before 2026-11-10), `ground_offset_m`
+and `setpoint_moved_m`. `python -m eval.baselines.run_baseline --rescore <batch.json>` scores
+a flown batch again from its logs; `python -m eval.height_split <batch.json>` prints what
+each step did. `min_clearance_m` and `contacts` use the truth alone and do not change.
 
 Real flights: with no SITL ground truth the reader scores against `vehicle_mocap_odometry`
 (mocap over MAVLink `ODOMETRY`, estimator type MOCAP, logged with `SDLOG_PROFILE` bit 7 at up

@@ -290,3 +290,31 @@ def test_pass_checks_rejudged_on_truth():
     hold["pass"].update(travel_m=5.0, standoff_max_m=1.2)
     run_gazebo.judge_hold_on_truth(summary, hold, 1.0)
     assert summary["checks"]["pass_reached_end"] and not summary["checks"]["pass_standoff_held"]
+
+
+def test_rescore_keeps_the_estimates_own_verdicts(tmp_path, monkeypatch):
+    """Scoring a flown folder again must not file the truth's verdicts of the first scoring
+    as the estimate's."""
+    import json
+
+    import yaml
+
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(
+        {"scenario": "wall1m_calm_0ms", "scenario_seed": 3}))
+    flight = {"checks": {"position_held": True, "altitude_held": True, "landed": True},
+              "estimate_checks": {"position_held": False, "altitude_held": True},
+              "passed": True}
+    (tmp_path / "hold_summary.json").write_text(json.dumps(
+        {"flight": flight, "flight_ok": True, "estimate_ok": True, "wind_ok": True,
+         "gps_ok": True, "vision_fused": True, "ok": True}))
+    hold = {"metrics": {"p95_m": 0.2}, "truth_drift": {"xy_max_m": 0.3, "z_max_m": 1.4}}
+    monkeypatch.setattr(run_gazebo, "score_hold", lambda *a, **k: ({}, hold))
+    for _ in range(2):  # twice: the second pass must see the same estimate verdicts
+        report = run_gazebo.rescore(tmp_path)
+        assert report["metrics"] == {"p95_m": 0.2}
+        assert report["flight"]["estimate_checks"] == {"position_held": False,
+                                                       "altitude_held": True}
+        assert report["flight"]["checks"]["position_held"]       # truth: held
+        assert not report["flight"]["checks"]["altitude_held"]   # truth: 1.4 m off
+        assert not report["ok"]
+    assert json.loads((tmp_path / "hold.json").read_text()) == hold

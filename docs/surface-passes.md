@@ -220,6 +220,11 @@ end, 30 s in all. To keep the two like for like:
   as the hold benchmark trims); crash and wall contact judged on it;
 - one flight at a time in a cloud container, real-time factor recorded per flight.
 
+(Scoring note, 2026-11-10: these flights were scored before Gazebo scoring took the height
+offset EKF2 has on the ground out of the reference, `docs/metrics.md`. A pass flown from
+now on keeps its moving reference and loses that offset, so its 3-D p95 comes out lower
+for both controllers; the standoff and along-pass columns are not affected.)
+
 Beside the 3-D p95 the table has the error along the wall normal (the standoff, the camera's
 distance to the surface) and along the pass (how far behind or ahead of the point).
 
