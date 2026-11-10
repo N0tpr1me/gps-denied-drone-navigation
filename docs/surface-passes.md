@@ -219,7 +219,83 @@ end, 30 s in all. To keep the two like for like:
 Beside the 3-D p95 the table has the error along the wall normal (the standoff, the camera's
 distance to the surface) and along the pass (how far behind or ahead of the point).
 
-RESULTS_PLACEHOLDER
+### Result: v22 against tuned PX4, 8 seeds a pass
+
+Flown 2026-11-09 and 10 in a cloud container, 48 flights, one at a time
+(`experiments/LOG.md`). v22 is the released policy as it is, never trained on a moving point.
+
+| Pass | Controller | 3-D p95 m, mean / worst | Standoff p95 m, mean / median / worst | Along the pass p95 m, mean / worst | Height p95 m, mean | Crashes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 m/s | tuned PX4 | 0.35 / 0.81 | 0.18 / 0.08 / 0.77 | 0.14 / 0.20 | 0.23 | 0/8 |
+| 8 m/s | v22 | 0.29 / 0.40 | 0.08 / 0.06 / 0.19 | 0.12 / 0.17 | 0.26 | 0/8 |
+| 4 m/s | tuned PX4 | 0.32 / 0.79 | 0.16 / 0.07 / 0.76 | 0.14 / 0.21 | 0.21 | 0/8 |
+| 4 m/s | v22 | 0.24 / 0.29 | 0.09 / 0.07 / 0.28 | 0.12 / 0.17 | 0.18 | 0/8 |
+| Calm | tuned PX4 | 0.33 / 0.80 | 0.16 / 0.06 / 0.77 | 0.14 / 0.21 | 0.21 | 0/8 |
+| Calm | v22 | 0.25 / 0.32 | 0.10 / 0.07 / 0.30 | 0.12 / 0.16 | 0.20 | 0/8 |
+
+What it says, plainly:
+
+- **Both fly the pass.** Every flight covered its 5 m; no crash, no wall contact, no
+  failsafe during a pass. Neither came more than 0.14 m (tuned PX4) or 0.08 m (v22) closer to
+  the wall than the point it was following.
+- **With a healthy estimate the two are level.** Leaving seed 6 out, the standoff p95 is 0.08
+  to 0.09 m for tuned PX4 and 0.09 to 0.10 m for v22, and along the pass 0.14 against
+  0.12 m. Tuned PX4 is given the exact path with its velocity and acceleration ahead of time;
+  v22 only sees a point that moves. The wind hardly matters to either at this speed.
+- **v22's margin is the estimate fault, as on the hold.** Seed 6 has a 1.3 m VIO jump toward
+  the wall 20 s in, during the hold at the end of the pass. Tuned PX4 followed it 1.07 to
+  1.15 m away from the wall in all three passes (standoff p95 0.76 to 0.77 m); v22 moved 0.06
+  to 0.15 m. That one seed is most of the difference in the means: 0.16 to 0.18 m against
+  0.08 to 0.10 m standoff, and 16 to 25 % on the 3-D p95.
+- **Dropouts are v22's weaker seed.** Seed 7 has two 1.5 s VIO dropouts in the cruise and a
+  3 s one in the end hold. v22's standoff p95 there was 0.19 to 0.30 m (away from the wall),
+  tuned PX4's 0.11 to 0.14 m.
+- **The 3-D number is mostly height, and the height is the barometer's.** Both fly on
+  barometer height (`eval/baselines/px4_tuned_v2.params`), whose offset from the true height
+  is different in every flight (0.04 to 0.39 m p95 here, the same seed giving 0.10 m in one
+  flight and 0.37 m in the next) and is there before the engage. Neither controller can see
+  it, which is why the standoff and along-pass columns are the ones to read
+  (`docs/baro-successor.md` is the work on it).
+
+Per seed, standoff p95 (m):
+
+| Pass, controller | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 m/s, tuned PX4 | 0.07 | 0.13 | 0.07 | 0.07 | 0.07 | 0.77 | 0.14 | 0.08 |
+| 8 m/s, v22 | 0.07 | 0.12 | 0.07 | 0.04 | 0.06 | 0.05 | 0.19 | 0.06 |
+| 4 m/s, tuned PX4 | 0.04 | 0.14 | 0.05 | 0.05 | 0.06 | 0.76 | 0.11 | 0.07 |
+| 4 m/s, v22 | 0.08 | 0.12 | 0.04 | 0.04 | 0.06 | 0.10 | 0.28 | 0.04 |
+| Calm, tuned PX4 | 0.04 | 0.15 | 0.05 | 0.05 | 0.06 | 0.77 | 0.11 | 0.07 |
+| Calm, v22 | 0.08 | 0.12 | 0.05 | 0.05 | 0.07 | 0.08 | 0.30 | 0.04 |
+
+Against the mock: there v22 held 0.17 to 0.19 m 3-D and 0.11 to 0.12 m standoff on these
+passes and the PD 0.33 to 0.38 m. Gazebo's v22 standoff (0.08 to 0.10 m) is no worse than the
+mock's; the 3-D number is larger by the barometer offset, which the pass set's fusion has at
+a quarter of this size. The mock's 50 % margin was against the PD, which touched the wall;
+tuned PX4 with the trajectory fed forward is a much better pilot than that PD on a pass.
+
+Run quality: the real-time factor is sampled every 3 s in each flight, and the bridge log
+prints the simulation time every 10 s of wall time. Every 10 s stretch of all 48 flights ran
+at 0.99 or above. A few flights show a single lower sample (0.66 to 0.86), a stall of well
+under a second, as in the earlier cloud batches (`docs/bridge-holds.md` "Run quality"). The
+scored window is the 30 s less its first 2 s for tuned PX4 and a second longer for the
+module, whose script takes that long to hand back.
+
+### What the first batch changed in the module
+
+The first module build braked the pass whenever the fix was older than 0.5 s. v22's first 8
+seeds at 8 m/s were otherwise as above (3-D 0.28 m, standoff 0.08 m), but on seed 7 the two
+1.5 s dropouts braked and restarted the point twice, about 2.5 s apart, and v22 surged: up to
+0.6 m ahead of the point, 0.4 m past the end of the pass before it came back (along-pass p95
+0.51 m; tuned PX4 0.16 m on the same seed). EKF2 dead-reckons a 1.5 s dropout well; it was
+the stop and start that upset the policy. The same flight with the wait out of the way
+(`SH_FB_T` 5) stayed within 0.08 m of the point through both dropouts (along p95 0.17 m).
+
+So the pass now waits only once the fix has been stale 2 s (`PASS_BLIND_S`), or from
+`SH_FB_T` when the brake-and-hover fallback is on, and the 8 m/s batch was flown again with
+that build: seed 7 along the pass 0.17 m, the batch's worst. That is one design change found
+on one seed and confirmed on the same eight, so treat 2 s as a first value. A pass through a
+dropout longer than 2 s is not in these scenarios while the point moves.
 
 ## Not done yet
 
