@@ -289,7 +289,10 @@ def fly_one(rw: RouteWorld, profile: str, seed: int, params_path: Path, image: s
 
 def row_of(r: dict[str, Any]) -> dict[str, Any]:
     m = r.get("metrics") or {}
-    flown = "never became armable" not in str((r.get("flight") or {}).get("error", ""))
+    # Never armed (the preflight checks, or a denied arm() before mission_flight.py tried
+    # again) is a flight not flown: the drone stayed on the floor.
+    err = str((r.get("flight") or {}).get("error", ""))
+    flown = "never became armable" not in err and "origin: arm()" not in err
     row = {"route": r["route"], "seed": r["seed"], "run": r["run"], "ok": r["ok"],
            "flown": flown, "crash": bool(m.get("crash", flown)),
            "contact": bool(m.get("contact", False)), "completed": bool(m.get("completed")),
@@ -398,11 +401,13 @@ def rescore(batch_dir: Path, contact_radius_m: float) -> dict[str, Any]:
     return batch
 
 
-def pool(batch_dirs: list[Path], out: Path) -> dict[str, Any]:
+def pool(batch_dirs: list[Path], out: Path, replace: bool = False) -> dict[str, Any]:
     """Merge batches of one label, profile and parameter set flown in parts (seed halves,
     each under the one-hour rule) into one batch: rows re-read from each flight's
     ``route_summary.json`` (so the real-time factor is picked up), routes in their first
-    batch's order, then seeds."""
+    batch's order, then seeds. With ``replace`` a later batch's flight takes the place of an
+    earlier one of the same route and seed (a re-flight of one that never armed or ran below
+    real time); what it replaced is kept under ``replaced``."""
     batches = [json.loads((d / "batch.json").read_text()) for d in batch_dirs]
     for key in ("label", "profile", "params"):
         vals = {b[key] for b in batches}
@@ -410,6 +415,11 @@ def pool(batch_dirs: list[Path], out: Path) -> dict[str, Any]:
             raise ValueError(f"pooled batches must share one {key}, got {sorted(vals)}")
     rows = [row_of(json.loads((REPO_ROOT / r["run"] / "route_summary.json").read_text()))
             for b in batches for r in b["rows"]]
+    replaced = []
+    if replace:
+        last = {(r["route"], r["seed"]): i for i, r in enumerate(rows)}
+        replaced = [r for i, r in enumerate(rows) if last[(r["route"], r["seed"])] != i]
+        rows = [r for i, r in enumerate(rows) if last[(r["route"], r["seed"])] == i]
     pairs = [(r["route"], r["seed"]) for r in rows]
     if len(set(pairs)) != len(pairs):
         raise ValueError("pooled batches repeat a (route, seed) pair")
@@ -417,11 +427,18 @@ def pool(batch_dirs: list[Path], out: Path) -> dict[str, Any]:
     rows.sort(key=lambda r: (routes.index(r["route"]), r["seed"]))
     pooled = {**batches[0], "commit": ",".join(dict.fromkeys(b["commit"] for b in batches)),
               "routes": routes, "seeds": sorted({r["seed"] for r in rows}), "rows": rows,
-              "aggregate": aggregate(rows), "pooled_from": [str(d) for d in batch_dirs]}
+              "aggregate": aggregate(rows), "pooled_from": [str(d) for d in batch_dirs],
+              "replaced": replaced}
     out.mkdir(parents=True, exist_ok=True)
     (out / "batch.json").write_text(json.dumps(pooled, indent=2) + "\n")
-    (out / "table.md").write_text(table(pooled))
-    print(table(pooled))
+    text = table(pooled)
+    if replaced:
+        text += "\nRe-flown, the first flight left out: " + ", ".join(
+            f"{r['route']} seed {r['seed']} ("
+            + ("never armed" if not r["flown"] else f"RTF min {fmt(r['rtf_min'])}") + ")"
+            for r in replaced) + "\n"
+    (out / "table.md").write_text(text)
+    print(text)
     return pooled
 
 
@@ -503,6 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pool", nargs="+", type=Path, metavar="BATCH_DIR",
                     help="merge flown batches of one label (e.g. seed halves) and exit")
     ap.add_argument("--out", type=Path, help="where --pool writes the pooled batch")
+    ap.add_argument("--replace", action="store_true",
+                    help="with --pool: a later batch's flight replaces an earlier one of "
+                         "the same route and seed (a re-flight)")
     ap.add_argument("--dry-run", action="store_true",
                     help="build every route's world and mission and print the plan; no Docker")
     args = ap.parse_args(argv)
@@ -512,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.pool:
         if not args.out:
             ap.error("--pool needs --out")
-        pool(args.pool, args.out)
+        pool(args.pool, args.out, args.replace)
         return 0
     if not args.label or not args.params:
         ap.error("--label and --params are required unless --rescore is given")

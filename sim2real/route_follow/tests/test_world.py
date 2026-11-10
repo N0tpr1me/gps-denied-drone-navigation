@@ -201,3 +201,33 @@ def test_pool_merges_seed_halves(tmp_path) -> None:
     assert "Below real time" in (out / "table.md").read_text()
     with pytest.raises(ValueError, match="repeat"):
         pool([parts[0], parts[0]], tmp_path / "again")
+
+
+def test_pool_replaces_a_reflown_flight(tmp_path) -> None:
+    """A flight that never armed is not a crash, and its re-flight takes its place."""
+    first = tmp_path / "first"
+    first.mkdir()
+    row = _flight(first, "tunnel_bend", 1, None)
+    summary = first / "tunnel_bend_1" / "route_summary.json"
+    report = json.loads(summary.read_text())
+    report.pop("metrics")
+    report["ok"] = False
+    report["flight"] = {"error": "ActionError: COMMAND_DENIED: 'Command Denied'; "
+                                 "origin: arm(); params: ()"}
+    summary.write_text(json.dumps(report))
+    batch = {"label": "x", "profile": "route_vio", "params": "p", "commit": "c",
+             "routes": ["tunnel_bend"], "seeds": [1], "rows": [row]}
+    (first / "batch.json").write_text(json.dumps(batch))
+    again = tmp_path / "again"
+    again.mkdir()
+    batch["rows"] = [_flight(again, "tunnel_bend", 1, [0.0, 1.0, 1.0])]
+    batch["commit"] = "d"
+    (again / "batch.json").write_text(json.dumps(batch))
+    with pytest.raises(ValueError, match="repeat"):
+        pool([first, again], tmp_path / "strict")
+    pooled = pool([first, again], tmp_path / "pooled", replace=True)
+    assert len(pooled["rows"]) == 1 and pooled["rows"][0]["completed"]
+    assert pooled["commit"] == "c,d"
+    old = pooled["replaced"][0]
+    assert not old["flown"] and not old["crash"]
+    assert "never armed" in (tmp_path / "pooled" / "table.md").read_text()
