@@ -1,0 +1,19 @@
+# Surface pass benchmark (docs/surface-passes.md "In Gazebo"): as wall1m_calm_0ms, but the
+# hold is a 5 m pass along the wall at the same 1 m standoff. Still air: the control for the
+# two wind scenarios.
+name: wall1m_pass_calm_0ms
+seed: 1
+# 1 m from the wall (x = 0), nose toward it, 2.5 m up the wall's width (20 m, y -10 to 10):
+# the pass goes to the right of the nose, from y = 2.5 to y = -2.5.
+spawn: {x: -1.0, y: 2.5, z: 0.0, yaw_deg: 0.0}
+wall: {point: [0.0, 0.0, 0.0], normal_toward: [1.0, 0.0, 0.0]}
+disturbance:
+  mean_speed: 0.0
+  num_gusts: 0
+  turb_sigma: 0.0
+# The hold: 3 s still, 11 s for the 5 m (0.5 m/s, 0.5 m/s^2), 16 s still at the end.
+hover: {altitude: 2.5, hover_s: 30.0}
+# Every controller starts its hold when PX4's clock (the simulation's) reads engage_at_s:
+# both runners are airborne and settled before then, and wait for it, so the two meet the
+# same gusts at the same point of the pass.
+pass: {length_m: 5.0, speed_mps: 0.5, start_s: 3.0, engage_at_s: 60.0}

@@ -1,0 +1,110 @@
+# The hold datasheet sweep, wind away from the wall (the drone in its lee): where Structure Hold breaks, and how tuned
+# PX4's yardstick (the cascaded PD) breaks beside it (docs/hold-datasheet.md; the GPU server's
+# week-2 queue, training/queues/server_week2.yaml). One of three files that differ only in
+# `mean_heading_deg` (into 0, along 90, lee 180) and in the 0 m/s cells (into only: calm air
+# has no direction). Each cell is one wind speed, one distance from the wall and one estimate
+# quality; eval.gate1 scores v22 and the PD on the same episodes with 95 % intervals, and
+# eval.hold_datasheet turns the three report.json files into the table. The cells inside the
+# released envelope (8 m/s or less, clean or vio_default) are `envelope` cells, so the verdict
+# says whether v22 still beats the PD there; the rest are measured, not judged.
+#   python -m training.launch --config eval/configs/hold_datasheet_lee.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/hold_datasheet_lee.yaml --device cuda
+name: hold_datasheet_lee
+entrypoint: eval.gate1
+seed: 7201  # unused: the protocol seeds are params.seeds
+expected_hours: 0.9  # 40 cells x 2 controllers x 512 episodes of 60 s (about 1.7 h on 4 CPU cores; the GPU is for the whole sweep)
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released
+  gate_controller: v22
+  seeds: [7201]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 512
+  bootstrap: 1000
+  base_env:
+    airframe: gz_x500_sitl  # the benchmark drone as Gazebo flies it: EKF2-like fusion on the barometer
+    episode_length_s: 60.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    # vio_default, stated in full so a changed default cannot move the sweep.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      mean_heading_deg: 180.0
+      num_gusts: 2
+      gust_start: [15.0, 40.0]  # both inside the 60 s hold
+      gust_duration: [1.0, 2.0]
+      gust_speed: [2.0, 4.0]
+      turb_tau: 1.0
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  cells:
+    - {name: lee_w04_d1_clean, label: "4 m/s away from the wall (the drone in its lee), 1 m, clean estimate", envelope: true, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 1.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w04_d1_vio, label: "4 m/s away from the wall (the drone in its lee), 1 m, vio_default", envelope: true, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 1.0}}
+    - {name: lee_w04_d1_degraded, label: "4 m/s away from the wall (the drone in its lee), 1 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 1.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w04_d1_dropout3, label: "4 m/s away from the wall (the drone in its lee), 1 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 1.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w04_d3_clean, label: "4 m/s away from the wall (the drone in its lee), 3 m, clean estimate", envelope: true, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 3.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w04_d3_vio, label: "4 m/s away from the wall (the drone in its lee), 3 m, vio_default", envelope: true, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 3.0}}
+    - {name: lee_w04_d3_degraded, label: "4 m/s away from the wall (the drone in its lee), 3 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 3.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w04_d3_dropout3, label: "4 m/s away from the wall (the drone in its lee), 3 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 4.0, turb_sigma: 0.5}, hold_distance: 3.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w08_d1_clean, label: "8 m/s away from the wall (the drone in its lee), 1 m, clean estimate", envelope: true, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 1.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w08_d1_vio, label: "8 m/s away from the wall (the drone in its lee), 1 m, vio_default", envelope: true, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 1.0}}
+    - {name: lee_w08_d1_degraded, label: "8 m/s away from the wall (the drone in its lee), 1 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 1.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w08_d1_dropout3, label: "8 m/s away from the wall (the drone in its lee), 1 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 1.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w08_d3_clean, label: "8 m/s away from the wall (the drone in its lee), 3 m, clean estimate", envelope: true, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 3.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w08_d3_vio, label: "8 m/s away from the wall (the drone in its lee), 3 m, vio_default", envelope: true, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 3.0}}
+    - {name: lee_w08_d3_degraded, label: "8 m/s away from the wall (the drone in its lee), 3 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 3.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w08_d3_dropout3, label: "8 m/s away from the wall (the drone in its lee), 3 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 8.0, turb_sigma: 1}, hold_distance: 3.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w10_d1_clean, label: "10 m/s away from the wall (the drone in its lee), 1 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 1.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w10_d1_vio, label: "10 m/s away from the wall (the drone in its lee), 1 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 1.0}}
+    - {name: lee_w10_d1_degraded, label: "10 m/s away from the wall (the drone in its lee), 1 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 1.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w10_d1_dropout3, label: "10 m/s away from the wall (the drone in its lee), 1 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 1.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w10_d3_clean, label: "10 m/s away from the wall (the drone in its lee), 3 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 3.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w10_d3_vio, label: "10 m/s away from the wall (the drone in its lee), 3 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 3.0}}
+    - {name: lee_w10_d3_degraded, label: "10 m/s away from the wall (the drone in its lee), 3 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 3.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w10_d3_dropout3, label: "10 m/s away from the wall (the drone in its lee), 3 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 10.0, turb_sigma: 1.25}, hold_distance: 3.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w12_d1_clean, label: "12 m/s away from the wall (the drone in its lee), 1 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 1.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w12_d1_vio, label: "12 m/s away from the wall (the drone in its lee), 1 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 1.0}}
+    - {name: lee_w12_d1_degraded, label: "12 m/s away from the wall (the drone in its lee), 1 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 1.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w12_d1_dropout3, label: "12 m/s away from the wall (the drone in its lee), 1 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 1.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w12_d3_clean, label: "12 m/s away from the wall (the drone in its lee), 3 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 3.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w12_d3_vio, label: "12 m/s away from the wall (the drone in its lee), 3 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 3.0}}
+    - {name: lee_w12_d3_degraded, label: "12 m/s away from the wall (the drone in its lee), 3 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 3.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w12_d3_dropout3, label: "12 m/s away from the wall (the drone in its lee), 3 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 12.0, turb_sigma: 1.5}, hold_distance: 3.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w14_d1_clean, label: "14 m/s away from the wall (the drone in its lee), 1 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 1.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w14_d1_vio, label: "14 m/s away from the wall (the drone in its lee), 1 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 1.0}}
+    - {name: lee_w14_d1_degraded, label: "14 m/s away from the wall (the drone in its lee), 1 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 1.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w14_d1_dropout3, label: "14 m/s away from the wall (the drone in its lee), 1 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 1.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+    - {name: lee_w14_d3_clean, label: "14 m/s away from the wall (the drone in its lee), 3 m, clean estimate", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 3.0, estimate: {delay_min_s: 0.0, delay_max_s: 0.0, pos_noise_std_m: 0.0, vel_noise_std_mps: 0.0, bias_walk_std_m_per_sqrt_s: 0.0, bias_max_m: 0.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.0}}}
+    - {name: lee_w14_d3_vio, label: "14 m/s away from the wall (the drone in its lee), 3 m, vio_default", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 3.0}}
+    - {name: lee_w14_d3_degraded, label: "14 m/s away from the wall (the drone in its lee), 3 m, degraded VIO (dust, fog, low light: field_degrade levels for the whole hold)", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 3.0, estimate: {pos_noise_std_m: 0.05, vel_noise_std_mps: 0.2, bias_walk_std_m_per_sqrt_s: 0.1, bias_max_m: 2.0, jump_rate_hz: 0.0, dropout_rate_hz: 0.25, dropout_min_s: 0.2, dropout_max_s: 0.5}}}
+    - {name: lee_w14_d3_dropout3, label: "14 m/s away from the wall (the drone in its lee), 3 m, 2 to 3 s dropouts about every 20 s", envelope: false, env: {disturbance: {mean_speed: 14.0, turb_sigma: 1.75}, hold_distance: 3.0, estimate: {dropout_rate_hz: 0.05, dropout_min_s: 2.0, dropout_max_s: 3.0}}}
+smoke:
+  num_envs: 4
+  bootstrap: 50
+  seeds: [7201]
+  base_env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+  cells:
+    - {name: lee_w08_d1_vio, label: "8 m/s away from the wall (the drone in its lee), 1 m, vio_default", env: {disturbance: {mean_speed: 8.0, turb_sigma: 1.0}, hold_distance: 1.0}}

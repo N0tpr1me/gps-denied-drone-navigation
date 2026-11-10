@@ -3,7 +3,7 @@
 # Gazebo benchmark flies: the reference v22 and the candidates, which come in by name as the
 # queue trains them (training/queues/airframe_sizes.yaml):
 #   python -m training.launch --config eval/configs/gazebo_check_v27.yaml --device cpu \
-#       --set params.policies.v27=runs/<run>/policy.onnx
+#       --set params.candidates.v27=runs/<run>/policy.onnx
 # A wider airframe spread must not cost the x500 its hold: v27 goes to Gazebo only if it
 # passes here as any candidate (eval/gazebo_check.py, docs/gazebo_check.md).
 name: gazebo_check_v27

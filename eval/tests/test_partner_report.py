@@ -4,12 +4,21 @@ import json
 import math
 import statistics
 
+import numpy as np
 import pytest
 import yaml
 
 from eval.partner_report import headline, main, render, strip_chart, summarise
 from eval.partner_session import score_session
-from eval.tests.test_partner_session import SESSION, START_US, flight
+from eval.tests.test_partner_session import (
+    RTK_FIXED,
+    RTK_FLOAT,
+    RTK_SESSION,
+    SESSION,
+    START_US,
+    flight,
+    rtk_flight,
+)
 
 
 def scored(tmp_path, early=False):
@@ -90,3 +99,57 @@ def test_strip_chart_survives_a_hold_point_metres_off():
               "structure_hold": {"p95_runs": [(1, 0.2)]}}]
     svg = strip_chart(cases)
     assert svg.startswith("<svg") and "<circle" in svg and "<rect" in svg
+
+
+# --- RTK truth on the page -----------------------------------------------------------------
+
+def scored_rtk(tmp_path, fused=(), floating=()):
+    """Two holds per controller on RTK truth; ``fused`` and ``floating`` name the files flown
+    with GPS in the estimate, and with 15 s of the hold on a float solution."""
+    runs = [{"file": f"{c}_{i}.ulg", "controller": c, "case": "pier", "run": i}
+            for i in (1, 2) for c in ("tuned_px4", "structure_hold")]
+    sheet = tmp_path / "session.yaml"
+    sheet.write_text(yaml.safe_dump({"drone": "Test X4", "site": "river pier",
+                                     "date": "2027-05-01", **RTK_SESSION, "runs": runs}))
+
+    def loader(path):
+        run = next(r for r in runs if r["file"] == path.name)
+        topics = rtk_flight(run["controller"], gnss=path.name in fused)
+        if path.name in floating:
+            gps = topics["sensor_gps"]
+            t = (gps["timestamp"] - START_US) * 1e-6
+            gps["fix_type"] = np.where((t >= 40.0) & (t < 55.0), RTK_FLOAT, RTK_FIXED)
+        return topics, START_US
+
+    return json.loads(json.dumps(score_session(sheet, loader), default=str))
+
+
+def test_the_page_names_rtk_as_the_truth_and_how_much_of_the_holds_it_covered(tmp_path):
+    page = render(scored_rtk(tmp_path), "abc1234", "2027-05-02 10:00 UTC")
+    assert "scored on RTK GPS truth" in page and "motion-capture" not in page
+    assert "100 % of the scored hold time" in page
+    assert "fixed solutions only" in page and "estimate to RTK over the take-off" in page
+    assert "not independent" not in page and 'class="warn"' not in page
+
+
+def test_a_mocap_session_still_says_motion_capture(tmp_path):
+    page = render(scored(tmp_path), "abc1234", "2027-05-02 10:00 UTC")
+    assert "scored on motion-capture truth" in page and "RTK" not in page
+
+
+def test_fused_gps_is_a_warning_at_the_top_of_the_page(tmp_path):
+    result = scored_rtk(tmp_path, fused={"structure_hold_2.ulg"})
+    page = render(result, "abc1234", "2027-05-02 10:00 UTC")
+    assert 'class="warn"' in page and "fused GPS on 1 of 4 scored holds" in page
+    assert page.index('class="warn"') < page.index('class="head"')
+    events = " ".join(summarise(result)["events"])
+    assert "Structure Hold, pier run 2" in events and "not independent" in events
+    assert "pier run 1" not in events
+
+
+def test_a_hold_partly_without_a_fixed_solution_is_listed(tmp_path):
+    result = scored_rtk(tmp_path, floating={"tuned_px4_1.ulg"})
+    events = " ".join(summarise(result)["events"])
+    assert "Tuned PX4, pier run 1" in events and "RTK fixed for 74 % of the hold" in events
+    page = render(result, "abc1234", "2027-05-02 10:00 UTC")
+    assert "93 % of the scored hold time" in page and "worst hold 74 %" in page

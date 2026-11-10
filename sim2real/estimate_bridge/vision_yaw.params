@@ -1,0 +1,9 @@
+# PX4 parameters laid over the benchmark's set when a profile has a `vision_yaw` block (the
+# runners do this themselves): EKF2 takes its heading from the vision stream's attitude, which
+# the bridge sends turned by the scripted heading error (sim2real/estimate_bridge/vision_yaw.py,
+# docs/heading-error.md).
+#
+# EKF2_EV_CTRL 15: fuse EV horizontal position, vertical position, 3D velocity and yaw (7 plus
+#   bit 3). With vision yaw active EKF2 stops using the compass for heading and fuses the
+#   positions, sent in MAV_FRAME_LOCAL_NED, as they are.
+1	1	EKF2_EV_CTRL	15	6

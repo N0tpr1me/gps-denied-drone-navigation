@@ -32,6 +32,30 @@
  * has stayed inside that tolerance, timed by the fixes' own sample times, so a fix that
  * stops arriving is the stale trip's, not this one's.
  *
+ * A runaway fix (PX4 param SH_WD_VIO_DV, docs/field-faults.md "Heavy dust"): a VIO that locks
+ * onto something moving (rotor-blown dust: Basalt in heavy dust tracked the drifting grains
+ * and ran away by kilometres without reporting a tracking loss, docs/vio-render.md) reports a
+ * position and a velocity that agree with each other and keep arriving on time, so neither
+ * the stale nor the frozen check sees it. What it cannot fake is the IMU: RunawayFix compares
+ * how much the VIO's velocity changed over the last 3 s with how much the IMU says the
+ * vehicle's velocity changed over the same time. The vehicle's own motion cancels out (it is
+ * in both), so what is left is the change in the VIO's velocity error. A relocalisation jump
+ * moves the position, not the velocity, so it does not count. A VIO that ran away is not
+ * trusted again until it reports a restart (its reset counter) or the vehicle disarms: one
+ * that stopped accelerating can still be metres per second off, and a fresh comparison
+ * would not see that.
+ *
+ * Before take-off (PX4 param SH_WD_GND_V): Basalt started in drifting dust took the grains
+ * for motion while the drone sat on the floor and ran off at up to 2.8 m/s before take-off
+ * (docs/vio-render.md). On the ground there is a plainer witness than the comparison above:
+ * the land detector's at-rest flag (the IMU alone has seen no movement for a second). A VIO
+ * that reports a speed while the vehicle is at rest is wrong, whatever frame its velocity is
+ * in. StillFix averages the VIO's velocity over 1 s slots, and after two slots in a row over
+ * the limit the module blocks arming in every mode (its arming-check reply to commander),
+ * until the VIO has agreed with at-rest for ten slots or has gone silent (EKF2 then no
+ * longer fuses it). Slots in which the vehicle was not at rest (carried, bumped) prove
+ * nothing either way and are dropped.
+ *
  * This header is deliberately free of PX4 dependencies so it compiles and runs in a plain
  * g++ unit test (tests/test_watchdog.cpp) without a PX4 tree.
  */
@@ -55,6 +79,7 @@ enum class Trip : uint8_t {
 	Landed = 7,           // entry refused: the land detector says the vehicle is on the ground
 	RangeLost = 8,        // Structure Hover on the range alone (SH_HB_RANGE) lost its range
 	EstimateFrozen = 9,   // the position fix arrives on time but has not moved (SH_WD_FRZ_T)
+	EstimateRunaway = 10, // the fix's velocity ran away from the IMU's (SH_WD_VIO_DV)
 };
 
 struct WatchdogLimits {
@@ -75,6 +100,7 @@ struct WatchdogInputs {
 	float position_error_m{0.f};
 	bool test_fault{false};
 	float fix_frozen_s{0.f};  // how long the fix has not moved (FrozenFix)
+	bool fix_runaway{false};  // the fix's velocity ran away from the IMU's (RunawayFix)
 };
 
 /** How long the position fix has stayed put: see the header comment. */
@@ -116,6 +142,273 @@ private:
 	bool _have{false};
 };
 
+/** Whether the fix's velocity has run away from the IMU's: see the header comment. */
+class RunawayFix
+{
+public:
+	static constexpr uint64_t SLOT_US = 250000;    // the difference is averaged over 0.25 s slots
+	static constexpr int SLOTS = 12;               // compared 12 slots apart: 3 s, more with gaps
+	static constexpr uint64_t WINDOW_US = 3000000;
+	static constexpr uint64_t IMU_GAP_US = 500000;  // a longer IMU gap starts over
+	static constexpr uint64_t FIX_GAP_US = 2000000; // so does a longer fix gap (the VIO lost)
+	static constexpr int TRIP_SLOTS = 2;           // over the limit this many slots in a row
+
+	/** The limit in m/s over the window; 0 = off (never runaway). */
+	void setLimit(float limit_mps) { _limit = limit_mps; }
+	float limit() const { return _limit; }
+
+	/** Every local position sample: its sample time and the mean earth-frame acceleration,
+	 * gravity removed, since the previous one (vehicle_local_position ax, ay, az: the IMU
+	 * alone, EKF2's bias estimate subtracted). */
+	void inertial(uint64_t t_us, float ax, float ay, float az)
+	{
+		if (!(std::isfinite(ax) && std::isfinite(ay) && std::isfinite(az))) {
+			return;
+		}
+
+		if (_imu_t > 0 && t_us > _imu_t && t_us - _imu_t < IMU_GAP_US) {
+			const float dt = static_cast<float>(t_us - _imu_t) * 1e-6f;
+			_v_imu[0] += ax * dt;
+			_v_imu[1] += ay * dt;
+			_v_imu[2] += az * dt;
+
+		} else if (_imu_t > 0) {
+			restart();  // a hole in the IMU integral: the window would span it
+		}
+
+		_imu_t = t_us;
+	}
+
+	/** Every fix sample: its sample time, its velocity in NED (NaN: none) and the VIO's
+	 * reset counter. Short tracking losses (dust) leave gaps between fixes; the IMU integral
+	 * runs on through them, so the comparison spans them, scaled back to the window. */
+	void fix(uint64_t t_us, float vn, float ve, float vd, uint8_t reset_counter)
+	{
+		if (_counter_seen && reset_counter != _counter) {
+			restart();
+			_runaway = false;  // the VIO says it restarted
+		}
+
+		_counter = reset_counter;
+		_counter_seen = true;
+
+		if (!(std::isfinite(vn) && std::isfinite(ve) && std::isfinite(vd)) || _imu_t == 0) {
+			return;
+		}
+
+		if (_fix_t > 0 && (t_us <= _fix_t || t_us - _fix_t >= FIX_GAP_US)) {
+			restart();  // the VIO was lost, or a clock step
+		}
+
+		_fix_t = t_us;
+
+		if (_slot_n > 0 && t_us - _slot_t >= SLOT_US) {
+			closeSlot();  // this sample starts the next slot
+		}
+
+		if (_slot_n == 0) {
+			_slot_t = t_us;
+		}
+
+		_slot[0] += vn - _v_imu[0];
+		_slot[1] += ve - _v_imu[1];
+		_slot[2] += vd - _v_imu[2];
+		++_slot_n;
+	}
+
+	bool runaway() const { return _runaway; }
+
+	/** The latest change in the VIO's velocity error over the window, m/s (0 until a
+	 * window is full). */
+	float disagreement() const { return _disagreement; }
+
+	void reset()
+	{
+		restart();
+		_runaway = false;
+		_counter_seen = false;
+		_imu_t = 0;
+		_v_imu[0] = _v_imu[1] = _v_imu[2] = 0.f;
+	}
+
+private:
+	void restart()
+	{
+		_count = 0;
+		_over = 0;
+		_slot_n = 0;
+		_slot[0] = _slot[1] = _slot[2] = 0.f;
+		_fix_t = 0;
+		_disagreement = 0.f;
+	}
+
+	void closeSlot()
+	{
+		float *e = _ring[_head];
+
+		for (int i = 0; i < 3; i++) {
+			e[i] = _slot[i] / static_cast<float>(_slot_n);
+			_slot[i] = 0.f;
+		}
+
+		_ring_t[_head] = _slot_t;
+		_slot_n = 0;
+		const int oldest = (_head + 1) % (SLOTS + 1);
+		const uint64_t t_new = _ring_t[_head];
+		_head = oldest;
+
+		if (_count < SLOTS + 1) {
+			++_count;
+		}
+
+		if (_count <= SLOTS) {
+			return;  // the window is not full yet
+		}
+
+		const float *o = _ring[oldest];
+		const uint64_t span = t_new - _ring_t[oldest];
+		// Across tracking losses the slots span more than the window: scale the change back
+		// to it, so the limit means the same thing with and without gaps.
+		const float scale = span > WINDOW_US ? static_cast<float>(WINDOW_US) / static_cast<float>(span) : 1.f;
+		_disagreement = scale * std::sqrt((e[0] - o[0]) * (e[0] - o[0]) + (e[1] - o[1]) * (e[1] - o[1])
+						  + (e[2] - o[2]) * (e[2] - o[2]));
+		_over = (_limit > 0.f && _disagreement > _limit) ? _over + 1 : 0;
+
+		if (_over >= TRIP_SLOTS) {
+			_runaway = true;
+		}
+	}
+
+	float _limit{0.f};
+	float _v_imu[3] {0.f, 0.f, 0.f};  // the IMU's velocity integral, arbitrary start
+	uint64_t _imu_t{0};
+	uint64_t _fix_t{0};
+	float _slot[3] {0.f, 0.f, 0.f};   // running sum of (fix velocity - IMU integral)
+	int _slot_n{0};
+	uint64_t _slot_t{0};
+	float _ring[SLOTS + 1][3] {};     // slot means, the newest at _head - 1
+	uint64_t _ring_t[SLOTS + 1] {};   // and when each slot started
+	int _head{0};
+	int _count{0};
+	int _over{0};
+	float _disagreement{0.f};
+	bool _runaway{false};
+	uint8_t _counter{0};
+	bool _counter_seen{false};
+};
+
+/** Before take-off: a vehicle at rest whose VIO says it is moving. See the header comment. */
+class StillFix
+{
+public:
+	static constexpr uint64_t SLOT_US = 1000000;    // the VIO's velocity is averaged over 1 s
+	static constexpr int MIN_SAMPLES = 5;           // a slot with fewer fixes says nothing
+	static constexpr int MOVING_SLOTS = 2;          // over the limit this many slots in a row
+	static constexpr int STILL_SLOTS = 10;          // under it this many to be trusted again
+	static constexpr uint64_t SILENT_US = 5000000;  // no fix this long: nothing left to distrust
+
+	/** The VIO speed at rest that counts as moving, m/s; 0 = off (never moving). */
+	void setLimit(float limit_mps) { _limit = limit_mps; }
+
+	/** Every fix sample while disarmed: when it arrived, its velocity (any frame; NaN: the
+	 * VIO sends none) and whether the land detector has the vehicle at rest. */
+	void fix(uint64_t t_us, float vx, float vy, float vz, bool at_rest)
+	{
+		_last_t = t_us;
+
+		if (!(std::isfinite(vx) && std::isfinite(vy) && std::isfinite(vz))) {
+			return;
+		}
+
+		if (_n > 0 && (t_us < _slot_t || t_us - _slot_t >= SLOT_US)) {
+			closeSlot();  // this sample starts the next slot
+		}
+
+		if (_n == 0) {
+			_slot_t = t_us;
+			_rest = true;
+		}
+
+		_sum[0] += vx;
+		_sum[1] += vy;
+		_sum[2] += vz;
+		_rest = _rest && at_rest;
+		++_n;
+	}
+
+	/** Every tick: a VIO that went silent is no longer fused, so it no longer blocks. */
+	void tick(uint64_t now_us)
+	{
+		if (_moving && now_us > _last_t && now_us - _last_t > SILENT_US) {
+			reset();
+		}
+	}
+
+	/** Not trusted from now until it has been seen still (a runaway caught another way). */
+	void distrust()
+	{
+		_moving = true;
+		_still = 0;
+	}
+
+	bool moving() const { return _moving; }
+
+	/** The VIO's mean speed over the last slot at rest, m/s. */
+	float speed() const { return _speed; }
+
+	void reset()
+	{
+		_moving = false;
+		_over = 0;
+		_still = 0;
+		_n = 0;
+		_sum[0] = _sum[1] = _sum[2] = 0.f;
+		_speed = 0.f;
+	}
+
+private:
+	void closeSlot()
+	{
+		if (_rest && _n >= MIN_SAMPLES) {
+			const float n = static_cast<float>(_n);
+			_speed = std::sqrt(_sum[0] * _sum[0] + _sum[1] * _sum[1] + _sum[2] * _sum[2]) / n;
+
+			if (_limit > 0.f && _speed > _limit) {
+				_still = 0;
+
+				if (++_over >= MOVING_SLOTS) {
+					_moving = true;
+				}
+
+			} else {
+				_over = 0;
+
+				if (_moving && ++_still >= STILL_SLOTS) {
+					_moving = false;
+					_still = 0;
+				}
+			}
+
+		} else {
+			_over = 0;  // moved by hand or too few fixes: no proof either way
+		}
+
+		_n = 0;
+		_sum[0] = _sum[1] = _sum[2] = 0.f;
+	}
+
+	float _limit{0.f};
+	float _sum[3] {0.f, 0.f, 0.f};  // the slot's velocity sum: noise averages out, a runaway does not
+	int _n{0};
+	bool _rest{true};               // at rest through the whole slot so far
+	uint64_t _slot_t{0};
+	uint64_t _last_t{0};
+	int _over{0};
+	int _still{0};
+	float _speed{0.f};
+	bool _moving{false};
+};
+
 class Watchdog
 {
 public:
@@ -143,6 +436,10 @@ public:
 
 		if (_limits.max_fix_frozen_s > 0.f && !(in.fix_frozen_s < _limits.max_fix_frozen_s)) {
 			return Trip::EstimateFrozen;
+		}
+
+		if (in.fix_runaway) {
+			return Trip::EstimateRunaway;
 		}
 
 		if (!(in.tilt_rad <= _limits.max_tilt_rad)) {  // also catches NaN
@@ -223,6 +520,8 @@ public:
 		case Trip::RangeLost: return "range_lost";
 
 		case Trip::EstimateFrozen: return "estimate_frozen";
+
+		case Trip::EstimateRunaway: return "estimate_runaway";
 		}
 
 		return "unknown";
@@ -254,6 +553,8 @@ public:
 		case Trip::RangeLost: return "rangefinder lost while holding on it alone";
 
 		case Trip::EstimateFrozen: return "position fix stopped moving for SH_WD_FRZ_T";
+
+		case Trip::EstimateRunaway: return "VIO velocity ran away from the IMU's, past SH_WD_VIO_DV";
 		}
 
 		return "unknown";

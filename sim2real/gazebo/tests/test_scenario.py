@@ -19,6 +19,7 @@ NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
 RIG = ["wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
        "wall1m_wind_8ms_flow", "wall1m_lee_8ms_flow"]
 NAMES += [f"rig_{n}" for n in RIG]
+BRIDGE = ["deck_corner_8ms_flow", "deck_open_8ms_flow", "pier_lee_8ms_flow"]
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -120,3 +121,86 @@ def test_payload_rejects_negative_mass():
         Scenario.from_dict({"name": "x", "payload": {"mass_kg": -1.0}})
     with pytest.raises(TypeError):
         Scenario.from_dict({"name": "x", "payload": {"kg": 1.0}})
+
+
+def test_old_scenarios_fly_wall_slab_without_a_second_surface():
+    sc = load_scenario("wall1m_wind_8ms")
+    assert sc.world == "wall_slab" and sc.surface2_normal_toward is None
+    assert not sample_scenario(sc).has_surface2[0]
+
+
+@pytest.mark.parametrize("name", BRIDGE)
+def test_bridge_scenarios_load_in_their_worlds(name):
+    sc = load_scenario(name)
+    assert sc.name == name and sc.world in ("bridge_deck", "bridge_pier")
+    # 1 m from the abutment or pier face, or 6 m out under the deck alone.
+    assert sc.wall_clearance in (1.0, 6.0)
+    p = sample_scenario(sc)
+    assert p.has_wall[0]
+    if sc.world == "bridge_deck":
+        # The deck 1.5 m over the 2.5 m hold, and the crosswind sheds from its edges.
+        assert p.has_surface2[0]
+        assert sc.surface2_point[2] - sc.hover.altitude == pytest.approx(1.5)
+        assert p.surface2_shed_amp[0] > 0
+    else:
+        assert not p.has_surface2[0] and p.shed_amp[0] > 0  # the pier's wake
+
+
+def test_deck_shedding_follows_the_wind_across_the_deck():
+    # deck_open: the wind blows across the deck, all of it drives the shedding; the same
+    # wind along the bridge's axis would shed nothing.
+    sc = load_scenario("deck_open_8ms_flow")
+    across = sample_scenario(sc).surface2_shed_amp[0]
+    along = sample_scenario(replace(sc, wind_heading_deg=0.0)).surface2_shed_amp[0]
+    assert across > 0 and along == pytest.approx(0.0, abs=1e-9)
+
+
+def test_scenario_world_and_surface2_are_checked():
+    base = {"name": "x", "spawn": {"x": -1.0}}
+    with pytest.raises(ValueError, match="unknown world"):
+        Scenario.from_dict({**base, "world": "no_such_world"})
+    with pytest.raises(ValueError, match="surface2 needs"):
+        Scenario.from_dict({**base, "surface2": {"point": [0, 0, 4]}})
+    with pytest.raises(ValueError, match="non-zero"):
+        Scenario.from_dict({**base, "surface2": {"point": [0, 0, 4],
+                                                 "normal_toward": [0, 0, 0]}})
+
+
+PASSES = ["wall1m_pass_calm_0ms", "wall1m_pass_wind_4ms", "wall1m_pass_wind_8ms"]
+
+
+@pytest.mark.parametrize("name", PASSES)
+def test_pass_scenarios_fly_the_benchmark_wind_along_the_wall(name):
+    # docs/surface-passes.md "In Gazebo": the wall1m benchmark with a 5 m pass in its hold.
+    sc, base = load_scenario(name), load_scenario(name.replace("_pass", ""))
+    p = sc.surface_pass
+    assert p is not None and base.surface_pass is None
+    assert (p.length_m, p.speed_mps, p.start_s, p.up) == (5.0, 0.5, 3.0, False)
+    assert sc.wall_clearance == base.wall_clearance == 1.0
+    assert sc.disturbance.mean_speed == base.disturbance.mean_speed
+    assert sc.disturbance.gust_speed == base.disturbance.gust_speed
+    # The pass runs to the right of the nose (-y here) and stays on the 20 m wall.
+    assert sc.spawn.yaw_deg == 0.0 and abs(sc.spawn.y - p.length_m) < 10.0
+    # The hold covers the settle, the pass and a hold at its end; the gusts land in it.
+    cruise_s = (p.length_m - p.speed_mps ** 2 / 0.5) / p.speed_mps
+    flown = p.start_s + 2 * p.speed_mps / 0.5 + cruise_s
+    assert sc.hover.hover_s >= flown + 10.0
+    for start in list(sc.disturbance.gust_start)[:sc.disturbance.num_gusts]:
+        assert p.engage_at_s + 2.0 < start < p.engage_at_s + sc.hover.hover_s - 3.0
+    assert sc.surface_pass.module_params() == [
+        "SH_PASS_LEN=5.0", "SH_PASS_DIR=0", "SH_PASS_SPD=0.5", "SH_PASS_T0=3.0"]
+    assert sc.surface_pass.flight_args()[-2:] == ["--engage-at-boot-s", str(p.engage_at_s)]
+
+
+def test_pass_block_is_checked_against_the_module_limits():
+    base = {"name": "x", "pass": {"length_m": 5.0}}
+    assert Scenario.from_dict(base).surface_pass.engage_at_s == 0.0
+    assert "--engage-at-boot-s" not in Scenario.from_dict(base).surface_pass.flight_args()
+    up = Scenario.from_dict({"name": "x", "pass": {"length_m": -2.0, "up": True}}).surface_pass
+    assert "--pass-up" in up.flight_args() and "SH_PASS_DIR=1" in up.module_params()
+    for bad in ({"length_m": 0.0}, {"length_m": 12.0}, {"speed_mps": 2.0}, {"start_s": -1.0},
+                {"engage_at_s": -5.0}):
+        with pytest.raises(ValueError):
+            Scenario.from_dict({"name": "x", "pass": {"length_m": 5.0, **bad}})
+    with pytest.raises(TypeError):
+        Scenario.from_dict({"name": "x", "pass": {"lenght_m": 5.0}})

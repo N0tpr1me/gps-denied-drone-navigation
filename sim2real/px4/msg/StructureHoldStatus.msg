@@ -21,6 +21,7 @@ uint8 TRIP_ESTIMATE_RESET = 6 # entry refused: EKF reset its xy position within 
 uint8 TRIP_LANDED = 7         # entry refused: the land detector says the vehicle is on the ground (not latched)
 uint8 TRIP_RANGE_LOST = 8     # Structure Hover on the rangefinder alone (SH_HB_RANGE) lost its range
 uint8 TRIP_ESTIMATE_FROZEN = 9 # the position fix arrives on time but has not moved (SH_WD_FRZ_T)
+uint8 TRIP_ESTIMATE_RUNAWAY = 10 # the fix's velocity ran away from the IMU's (SH_WD_VIO_DV)
 uint8 trip_reason             # TRIP_*: last watchdog trip or refusal; cleared on disarm
 uint8 trip_count              # trips since boot
 
@@ -40,6 +41,9 @@ uint8 controller
 bool fallback_active          # the brake-and-hover fallback flew this tick
 bool yaw_guarded              # the yaw action flown is the module's heading hold (SH_YAW_GUARD)
 bool odometry_fix             # fixes counted from vehicle_visual_odometry (else local position)
+float32 vio_imu_dv            # [m/s] change of the fix's velocity minus the IMU's over 3 s (SH_WD_VIO_DV; Watchdog.hpp RunawayFix)
+bool vio_runaway              # the fix ran away from the IMU and is not trusted until the VIO restarts or a disarm
+bool arming_blocked           # disarmed, and the VIO reports motion with the vehicle at rest (SH_WD_GND_V): arming refused in every mode
 float32 wall_distance_m       # [m] forward rangefinder, perpendicular to the wall (WallGuard.hpp); -1 without a usable sample
 float32 hold_clearance_m      # [m] hold point to the measured wall along the structure x axis; -1 without a sample
 float32 standoff_shift_m      # [m] how far the wall guard has moved the hold point back since engage
@@ -48,6 +52,13 @@ float32 obstacle_clearance_m  # [m] hold point to the nearest obstacle point (no
 float32 keep_out_shift_m      # [m] how far the keep-out has moved the hold point since engage
 uint8 keep_out_points         # obstacle points (obstacle_distance bins and side rangefinders) used this tick
 bool keep_out_no_room         # the keep-out could not be met everywhere: the hold point sits between obstacles
+uint8 PASS_OFF = 0             # no surface pass this engage (SH_PASS_LEN 0; PassPath.hpp)
+uint8 PASS_WAITING = 1         # the settle before it starts (SH_PASS_T0)
+uint8 PASS_MOVING = 2          # the hold point is moving (or held back on a stale estimate)
+uint8 PASS_DONE = 3            # the whole length flown; holding at its end
+uint8 PASS_STOPPED = 4         # ended early where it was (keep-out, retreat cap, ground)
+uint8 pass_state
+float32[3] pass_offset_ned     # [m] how far the surface pass has moved the hold point since engage, NED
 float32 watchdog_used         # fraction of the closest watchdog limit used (1 trips; PilotStatus.hpp); -1 when no mode flies
 uint8 watchdog_closest        # TRIP_* code of that limit (3, 4, 5 or 9), 0 when no mode flies
 float32[4] action             # policy-convention action flown (FLU rates / max_rate, thrust in [-1, 1])

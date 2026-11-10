@@ -1,0 +1,45 @@
+# Surface passes (docs/surface-passes.md): v22 continued on a hold point that moves 5 m along
+# or up the wall, two seeds on the 2 GPUs, then both judged Gate 1 style on the held-out pass
+# cells against the PD, with v22 as it is beside them. Runs on its own or beside the other
+# queues; it needs nothing from them.
+#
+#   python -m training.queue training/queues/surface_passes.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/surface_passes.yaml --smoke
+#   python -m training.queue training/queues/surface_passes.yaml --max-gpus 2
+#
+# Every run is under 1 h and 1 GPU: each training is a chain of two sub-1 h parts (the project
+# rule allows checkpointed chains), so nothing here needs --approved. Check the first part's
+# env_steps_per_s in stdout.log; if a part would pass 1 h on this machine, cut `iterations` in
+# training/configs/structure_hold_ppo_pass.yaml.
+name: surface_passes
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # PPO moves more between seeds than between recipes (v23 to v25), so one recipe, two seeds.
+  - id: hold_pass
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass.yaml
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "v22 continued on passes (70 %) and plain holds (30 %), 4096 drones, 2 parts of 1200 iterations, seed 0"
+
+  - id: hold_pass_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass.yaml
+    set: {seed: 1}
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "hold_pass, seed 1"
+
+  - id: hold_pass_gate
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_pass.yaml
+    set:
+      params.policies.pass_s0: "{run:hold_pass}/policy.onnx"
+      params.policies.pass_s1: "{run:hold_pass_s1}/policy.onnx"
+    after: [hold_pass, hold_pass_s1]
+    hours: 0.8
+    why: "7 held-out pass cells, pass_s0 judged, pass_s1 and v22 beside it. Go/no-go: a seed PASSes against the PD and holds tighter than v22 (0.16 to 0.21 m) in every cell"

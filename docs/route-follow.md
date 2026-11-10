@@ -121,6 +121,9 @@ scores every world on its own and a mix of all of them, and
 | Scoring and the yardstick run | `eval/route_follow.py`, `eval/configs/route_follow_baseline.yaml` |
 | PPO training (smoke mode, exports `policy.onnx`) | `training/train_route_ppo.py`, `training/configs/route_follow_ppo.yaml` |
 | The tracked policy, v2 (mock only, not released); its scoring configs | `training/policies/route_follow_v2.onnx` + `.json`; `eval/configs/route_follow_v2.yaml`, `route_follow_worlds.yaml`, `route_follow_stress.yaml` |
+| Degraded sensors: the recipe and its 17-cell stress table | `training/configs/route_follow_ppo_degraded.yaml`, `eval/configs/route_follow_stress_degraded.yaml` |
+| Gazebo: route worlds, the Mission-mode baseline, its scoring | `sim2real/route_follow/` (README), profiles `sim2real/estimate_bridge/profiles/route_*.yaml` |
+| The server queue for both | `training/queues/route_gazebo.yaml` |
 
 Defaults worth knowing: 4 segments with turns up to 90 degrees and slopes up to 10 degrees
 (a short route turns less, one piece per 3 m at most); corridors 2 to 4 m wide and 2.4 to 4 m
@@ -141,14 +144,19 @@ Always on the true position, never the estimate:
 - tracking error to the moving target (p95);
 - closest approach to any wall, and wall contacts;
 - completion: within 0.5 m of the last waypoint when the flight ends;
-- crash rate.
+- crash rate: a wall contact, or (Gazebo) a mission PX4 never finished. Ending more than
+  0.5 m from the last waypoint because the estimate drifted is not completed, but not a crash.
 
 **Baselines.** In the mock: a cascaded PD tracking the same moving target with the target's
 velocity fed forward, on the estimate only (the shape of PX4's position controller), and the
 same PD with a classical wall-centring term from the left/right/up/down ranges, the best a
 hand-written controller does with the same sensors. Every mock result is reported against
 both. In SITL: stock PX4 Mission mode with the tuned parameters
-(`eval/baselines/px4_tuned_v2.params`) flying the same waypoints through the same estimate.
+(`eval/baselines/px4_tuned_v2.params`) flying the same waypoints through the same estimate,
+scored on the same walls (`sim2real/route_follow/walls.py` is the mock's geometry in NumPy,
+pinned to it by a test). In Gazebo the scored window runs from PX4 entering Mission mode to
+the landing command, so it includes the end hold, and the moving target starts at mission
+start.
 
 ## First results (mock, 2026-11-01)
 
@@ -309,6 +317,109 @@ Both go on the GPU server with the rest (`training/configs/route_follow_ppo_pipe
 `docs/gpu-server-plan.md`); the server's pipes stress run flies v2 beside the new policy as
 the comparison.
 
+## Degraded sensors (mock, 2026-11-09)
+
+Dust, fog and a worse VIO for the mock, as GPU plan item 7 asks. Off by default, so every
+earlier config scores the same.
+
+- **Rangefinder spoiling** (`range.dust_prob`): a dusty episode's beams return short (dust
+  in the beam, 0.2 to 0.9 of the true range, 10 % of samples) or nothing (20 %), on top of
+  the normal dropouts. The Structure Hold field faults' "degrade" does the same to the
+  forward rangefinder.
+- **VIO degradation:** more noise (0.05 m, 0.15 m/s) and a faster drift walk (0.03 m/sqrt(s),
+  cap 0.7 m).
+
+`training/configs/route_follow_ppo_degraded.yaml` is the pipes recipe with both (half the
+episodes dusty); `eval/configs/route_follow_stress_degraded.yaml` is the server's 13 stress
+cells plus dust, degraded VIO and both in a narrow pipe. Both pass their smoke runs; full
+training is two seeds on the GPU server (`training/queues/route_gazebo.yaml`).
+
+## Gazebo: route worlds and the Mission baseline (2026-11-09)
+
+`sim2real/route_follow/` (its README has the details) flies stock PX4 Mission mode, tuned
+(`px4_tuned_v2.params`), through four fixed routes drawn as Gazebo worlds, GPS off, on the
+estimate bridge, and scores the true position against the mock's own walls (contact at
+0.40 m, the x500): `tunnel_bend` (3 m tube, S-bend), `corridor_ramp` (3 x 2.6 m, two 90
+degree turns, a 5 degree ramp), `pipe_narrow` (1.8 m pipe, 0.5 m/s) and `drift_arched`
+(arched drift narrowed to 70 % on one stretch). Every corner is a fly-through waypoint with a
+0.5 m acceptance radius. Estimate profiles: `route_clean` (plumbing), `route_vio` (the mock's
+tunnel drift, the baseline), `route_drift` (drift doubled), `route_degrade` (20 s of dust or
+fog).
+
+First flights, **in the cloud container's image, one or two seeds**: a plumbing check, not
+the benchmark (that is 8 seeds per profile on the server). Cross-track p95 in metres (mean
+over seeds), closest wall approach, missions completed and crashes:
+
+| Profile | tunnel_bend | corridor_ramp | pipe_narrow | drift_arched |
+| --- | --- | --- | --- | --- |
+| `route_clean`, 1 seed | 0.07, 1.37 m, 1/1 | 0.07, 1.24 m, 1/1 | 0.14, 0.71 m, 1/1 | 0.11, 1.01 m, 1/1 |
+| `route_vio`, 2 seeds | 0.43, 0.54 m, 2/2 | 0.38, 0.85 m, 2/2 | 0.26 (1 seed), 0.37 m, 1/2, **1 crash** | 0.38, 0.83 m, 1/2 |
+| `route_drift`, 1 seed | 0.46, 0.79 m, 1/1 | 0.38, 1.01 m, 1/1 | 0.42, 0.45 m, 1/1 | 0.38, 0.82 m, 0/1 |
+| `route_degrade`, 1 seed | 0.71, 0.69 m, 0/1 | 0.51, 0.94 m, 1/1 | n/a, 0.14 m, 0/1, **1 crash** | 0.67, 0.63 m, 1/1 |
+
+What it says so far: on a clean estimate PX4 Mission mode tracks a route within 0.07 to
+0.14 m, so the world, mission and scoring add little error of their own. On the tunnel
+estimate the error is the estimate's drift (0.4 to 0.7 m on most routes), and the narrow
+pipe is where it touches the wall: 1 of 2 seeds on `route_vio`, and the dust run. "Not
+completed" without a crash means the drone ended more than 0.5 m from the last waypoint
+because the estimate had drifted. For scale only (different routes, the mock): v2's
+cross-track p95 on the mock's nominal tunnels and corridors is 0.20 to 0.23 m. The like for
+like comparison waits for the server batch and a policy flying the same worlds.
+
+### The 8-seed baseline (cloud, 2026-11-10)
+
+The benchmark batches of `training/queues/route_gazebo.yaml`, flown in a cloud container
+(Gazebo benchmarks moved there, `docs/gpu-server.md`): one flight at a time, each profile in
+two seed halves pooled with `run_mission --pool`, on main `9893e4b` plus the runner changes
+below. 104 flights, all at real time: Gazebo's real-time factor was sampled every 15 s beside
+each flight (`sim2real/docker/rtf_sampler.sh`) and averaged 1.00 in every batch.
+
+Tuned PX4 Mission mode (`px4_tuned_v2.params`), cross-track p95 in metres, mean over the
+flights that did not crash / worst flight; closest wall approach of any flight; missions
+completed; crashes (all of them wall contacts, none a mission PX4 gave up on):
+
+| Profile | tunnel_bend | corridor_ramp | pipe_narrow | drift_arched | All routes |
+| --- | --- | --- | --- | --- | --- |
+| `route_clean`, 2 seeds | 0.07 / 0.07, 1.37 m, 2/2, 0 | 0.08 / 0.09, 1.24 m, 2/2, 0 | 0.15 / 0.15, 0.69 m, 2/2, 0 | 0.12 / 0.13, 1.01 m, 2/2, 0 | 8/8 done, 0 crashes |
+| `route_vio`, 8 seeds | 0.39 / 0.72, 0.60 m, 8/8, 0 | 0.32 / 0.51, 0.33 m, 7/8, **1** | 0.32 / 0.45, 0.15 m, 6/8, **2** | 0.32 / 0.55, -0.11 m, 6/8, **1** | 27/32 done, **4 crashes** |
+| `route_drift`, 8 seeds | 0.50 / 0.81, 0.61 m, 6/8, 0 | 0.44 / 0.64, 0.35 m, 5/8, **1** | 0.32 / 0.42, 0.05 m, 3/8, **5** | 0.44 / 0.66, -0.06 m, 5/8, **1** | 19/32 done, **7 crashes** |
+| `route_degrade`, 8 seeds | 0.49 / 0.77, 0.68 m, 6/8, 0 | 0.51 / 0.75, 0.50 m, 5/8, 0 | n/a, -0.08 m, 0/8, **8** | 0.48 / 0.56, 0.08 m, 6/8, **1** | 17/32 done, **9 crashes** |
+
+What it says:
+
+- **The harness adds little.** On a perfect estimate every flight completes within 0.07 to
+  0.15 m, the same as the preview above.
+- **The baseline to beat is `route_vio`: 0.32 to 0.39 m cross-track, 4 wall contacts in 32
+  flights (12.5 %), 27 of 32 routes completed.** The error is the estimate's drift, which
+  Mission mode follows faithfully. Three of the four contacts are on seed 6, whose estimate
+  drifts most (0.7 to 0.8 m cross-track on every route); the fourth is the narrow pipe.
+- **The narrow pipe is where it breaks.** The 1.8 m pipe leaves 0.5 m of room each side of
+  the x500. Doubled drift puts 5 of 8 flights into its wall, and 20 s of dust or fog all 8.
+  The wide routes take both with at most one contact in 8, at 0.44 to 0.51 m cross-track.
+- A flight that is neither completed nor crashed ended more than 0.5 m from the last
+  waypoint because the estimate had drifted.
+
+For scale only (the mock, random routes, not these four): the PD yardstick's cross-track p95
+is 0.32 to 0.35 m and v2's 0.20 to 0.23 m, and v2 with rangefinders crashes in 6 % of narrow
+pipes against the PD's 31 %. So the mock's PD sits where PX4 Mission mode sits in Gazebo, and
+the pipe is the place a Route Follow policy with rangefinders has the most to gain. The like
+for like comparison still waits for a policy flying these four worlds as a PX4 mode.
+
+Three things about the flights themselves:
+
+- One flight of the 104 never took off: PX4 denied the single `arm()` because EKF2
+  called the heading unstable a moment after the health stream said armable.
+  `mission_flight.py` now tries again for up to 30 s, a flight that never arms counts as not
+  flown instead of as a crash, and that flight was flown again.
+- Three flights had one real-time-factor sample between 0.52 and 0.83 (everything else 0.92
+  or above). They were flown again and gave the same numbers to the centimetre (PX4 and
+  Gazebo run in lockstep), so a short dip of that size does not move the score; the tables
+  use the re-flights (`run_mission --pool --replace` keeps the first flights under
+  `replaced`).
+- The run folders carry two commits of the runner's branch before it was squashed: `1265564`
+  (the clean batch, `route_vio` and the drift seeds 1 to 4, 56 flights) and `7378c02` (the
+  rest, with the arming retry; the flight is otherwise the same).
+
 ## Plan, and what needs the GPU server
 
 1. **Now, no GPU:** this design, the tunnel and corridor envs, the classical baselines and a
@@ -316,7 +427,9 @@ the comparison.
 2. **GPU server:** full training runs (thousands of iterations on thousands of parallel
    drones; on the 4-core cloud container one policy would take many hours), then Isaac Lab.
 3. **Gazebo:** tunnel and corridor worlds, flown in SITL against tuned PX4 Mission mode on
-   the same waypoints. The policy is released only if Gazebo confirms the mock.
+   the same waypoints. The worlds and the Mission baseline are built and the 8-seed batches
+   flown (above, in the cloud; `training/queues/route_gazebo.yaml`). A policy flies them once
+   it is a PX4 mode. The policy is released only if Gazebo confirms the mock.
 4. **Module:** Route Follow as a second external mode with its watchdog, then a partner's
    drone.
 

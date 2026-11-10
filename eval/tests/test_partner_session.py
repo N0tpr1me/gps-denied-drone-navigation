@@ -15,6 +15,7 @@ from eval.partner_session import (
     score_session,
 )
 from eval.ulog import rotate_z
+from sim2real.estimate_bridge.gps import enu_to_lat_lon_alt
 
 START_US = 1_000_000
 DT = 0.02
@@ -31,13 +32,14 @@ def enu_to_ned(p):
     return p[:, 1], p[:, 0], -p[:, 2]
 
 
-def flight(controller="structure_hold", mode_end=82.0, truth="mocap", wobble=0.1):
+def flight(controller="structure_hold", mode_end=82.0, truth="mocap", wobble=0.1,
+           hold=HOLD_ENU, psi=PSI):
     """Arm at 5 s, climb and move to the hold point by 18 s, switch mode at 20 s, hold
     until ``mode_end``, then Position mode. The true position wobbles ``wobble`` m along
     east around the hold point while holding. The EKF estimate is exact (in its frame)."""
     t = np.arange(0.0, 100.0, DT)
     frac = np.clip((t - 5.0) / 13.0, 0.0, 1.0)[:, None]
-    p_ekf = frac * HOLD_ENU
+    p_ekf = frac * np.asarray(hold, dtype=float)
     holding = (t >= 20.0) & (t < mode_end)
     p_ekf[holding, 0] += wobble * np.sin(2 * np.pi * 0.5 * t[holding])
     ex, ey, ez = enu_to_ned(p_ekf)
@@ -48,6 +50,9 @@ def flight(controller="structure_hold", mode_end=82.0, truth="mocap", wobble=0.1
         topics["vehicle_mocap_odometry"] = {
             "timestamp": us(t), "timestamp_sample": us(t), "pose_frame": np.ones(len(t)),
             "position[0]": mx, "position[1]": my, "position[2]": mz}
+    elif truth == "rtk":
+        # The RTK frame is ENU about ORIGIN: the EKF frame turned and shifted, as mocap is.
+        topics["sensor_gps"] = rtk_topic(t[::5], (rotate_z(p_ekf, psi) + OFFSET)[::5])
     else:
         topics["vehicle_local_position_groundtruth"] = {"timestamp": us(t), "x": ex, "y": ey,
                                                         "z": ez}
@@ -57,7 +62,7 @@ def flight(controller="structure_hold", mode_end=82.0, truth="mocap", wobble=0.1
     topics["vehicle_status"] = {"timestamp": us(ts), "nav_state": nav,
                                 "arming_state": np.where(ts >= 5.0, 2, 1),
                                 "failsafe": np.zeros(len(ts), dtype=bool)}
-    hx, hy, hz = enu_to_ned(HOLD_ENU[None])
+    hx, hy, hz = enu_to_ned(np.asarray(hold, dtype=float)[None])
     sp_ned = np.where(holding[:, None] | (t[:, None] < 20.0), [hx[0], hy[0], hz[0]], np.nan)
     if controller == "structure_hold":
         topics["structure_hold_status"] = {
@@ -76,7 +81,26 @@ def flight(controller="structure_hold", mode_end=82.0, truth="mocap", wobble=0.1
     return topics
 
 
+ORIGIN = (47.397742, 8.545594, 488.0)  # the RTK frame's origin: latitude, longitude, altitude
+RTK_FIXED, RTK_FLOAT = 6, 5
+
+
+def rtk_topic(t, enu, fix=RTK_FIXED, late_s=0.0):
+    """``sensor_gps`` as a 10 Hz receiver logs the ENU track, stamped ``late_s`` after."""
+    llh = np.array([enu_to_lat_lon_alt(p, *ORIGIN) for p in enu])
+    return {"timestamp": us(t + late_s), "fix_type": np.broadcast_to(fix, len(t)).copy(),
+            "latitude_deg": llh[:, 0], "longitude_deg": llh[:, 1], "altitude_msl_m": llh[:, 2],
+            "altitude_ellipsoid_m": llh[:, 2]}
+
+
+def ekf_flags(gnss=False):
+    t = np.arange(0.0, 100.0, 0.5)
+    on = np.full(len(t), gnss)
+    return {"timestamp": us(t), "cs_gnss_pos": on, "cs_gnss_vel": on, "cs_ev_pos": ~on}
+
+
 SESSION = {"hold_s": 60.0, "settle_s": 2.0}
+RTK_SESSION = {**SESSION, "truth": "rtk", "rtk": {"origin": list(ORIGIN)}}
 RUN = {"file": "a.ulg", "case": "calm", "run": 1}
 
 
@@ -199,3 +223,173 @@ def test_hold_mode_on_the_ground_before_arming_is_not_the_hold():
     vs["nav_state"] = np.where(ts < 6.0, NAV_AUTO_LOITER, vs["nav_state"])  # armed at 5 s
     row = score_run(topics, START_US, {**RUN, "controller": "tuned_px4"}, SESSION)
     assert row["window_s"] == pytest.approx([22.0, 80.0])
+
+
+# --- RTK truth (outdoor flights) ----------------------------------------------------------
+
+def rtk_flight(controller="structure_hold", gnss=False, **kw):
+    topics = flight(controller, truth="rtk", **kw)
+    topics["estimator_status_flags"] = ekf_flags(gnss)
+    return topics
+
+
+@pytest.mark.parametrize("controller", ["structure_hold", "tuned_px4"])
+def test_rtk_hold_point_is_carried_into_the_rtk_frame(controller):
+    row = score_run(rtk_flight(controller), START_US, {**RUN, "controller": controller},
+                    RTK_SESSION)
+    expected = rotate_z(HOLD_ENU[None], PSI)[0] + OFFSET
+    assert np.allclose(row["hold_point_enu"], expected, atol=2e-3)
+    assert row["truth"] == "rtk" and row["position_source"] == "sensor_gps"
+    assert row["align_yaw_deg"] == pytest.approx(90.0, abs=0.05)
+    assert row["align_rms_m"] < 2e-3
+    assert row["p95_m"] == pytest.approx(0.1, abs=0.005)
+    assert row["truth_coverage"] == pytest.approx(1.0, abs=1e-3)
+    assert row["truth_independent"] is True
+    assert not row["ended_early"] and not row["crash"]
+
+
+def test_rtk_is_used_even_when_the_log_has_simulator_truth():
+    topics = {**rtk_flight(), **{k: v for k, v in flight(truth="groundtruth").items()
+                                 if k == "vehicle_local_position_groundtruth"}}
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+    assert row["position_source"] == "sensor_gps"
+    assert row["align_yaw_deg"] == pytest.approx(90.0, abs=0.05)
+
+
+def test_samples_that_are_not_rtk_fixed_are_left_out_and_counted():
+    # 15 s of the hold on a float solution that sits 0.8 m off: scored, it would be the p95.
+    topics = rtk_flight()
+    gps = topics["sensor_gps"]
+    t = (gps["timestamp"] - START_US) * 1e-6
+    floating = (t >= 40.0) & (t < 55.0)
+    gps["fix_type"] = np.where(floating, RTK_FLOAT, RTK_FIXED)
+    gps["latitude_deg"] = gps["latitude_deg"] + np.where(floating, 0.8 / 111_000.0, 0.0)
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+    assert row["truth_coverage"] == pytest.approx(1.0 - 15.1 / 58.0, abs=0.01)
+    assert row["truth_coverage_flight"] == pytest.approx(1.0 - 15.1 / 95.0, abs=0.01)
+    assert row["p95_m"] == pytest.approx(0.1, abs=0.005)
+    assert row["max_m"] < 0.12
+    assert row["metrics"]["scored_s"] == pytest.approx(58.0 - 15.1, abs=0.2)
+
+
+def test_a_hold_mostly_without_rtk_fixed_is_not_scored():
+    topics = rtk_flight()
+    gps = topics["sensor_gps"]
+    t = (gps["timestamp"] - START_US) * 1e-6
+    gps["fix_type"] = np.where(t >= 45.0, RTK_FLOAT, RTK_FIXED)
+    with pytest.raises(ValueError, match="RTK fixed for 39 % of the hold"):
+        score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+
+
+def test_fused_gps_is_reported_as_truth_that_is_not_independent():
+    row = score_run(rtk_flight(gnss=True), START_US, {**RUN, "controller": "structure_hold"},
+                    RTK_SESSION)
+    assert row["truth_independent"] is False
+    assert row["p95_m"] == pytest.approx(0.1, abs=0.005)  # scored all the same, and flagged
+    topics = rtk_flight()
+    del topics["estimator_status_flags"]
+    unknown = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+    assert unknown["truth_independent"] is None
+
+
+def test_the_wall_comes_from_surveyed_points():
+    # Two points on a wall 1 m past the hold point along RTK east, running north-south.
+    hold = rotate_z(HOLD_ENU[None], PSI)[0] + OFFSET
+    survey = [list(enu_to_lat_lon_alt(hold + d, *ORIGIN))
+              for d in ([1.0, -3.0, -1.5], [1.0, 4.0, -1.5])]
+    session = {**SESSION, "truth": "rtk", "wall": {"survey": survey}}
+    row = score_run(rtk_flight("tuned_px4", wobble=0.0), START_US,
+                    {**RUN, "controller": "tuned_px4"}, session)
+    assert row["min_clearance_m"] == pytest.approx(1.0, abs=2e-3)
+    assert row["wall_fit_rms_m"] == pytest.approx(0.0, abs=1e-3)
+    assert row["contacts"] == 0
+    # The ENU origin is the first surveyed point when the sheet names none.
+    assert np.allclose(row["hold_point_enu"], [-1.0, 3.0, 1.5], atol=2e-3)
+    with pytest.raises(ValueError, match="wall.survey"):
+        score_run(rtk_flight("tuned_px4"), START_US, {**RUN, "controller": "tuned_px4"},
+                  {**SESSION, "truth": "rtk", "wall": {"point": [0, 0, 0], "normal": [1, 0, 0]}})
+
+
+def test_the_receiver_lag_is_measured_and_taken_out():
+    topics = rtk_flight()
+    t = np.arange(0.0, 100.0, DT)[::5]
+    # What the receiver saw is the truth 0.2 s before the stamp PX4 gave it.
+    late = flight(truth="rtk")["sensor_gps"]
+    late["timestamp"] = us(t + 0.2)
+    topics["sensor_gps"] = late
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+    assert row["rtk_delay_s"] == pytest.approx(0.2, abs=0.011)
+    assert row["align_rms_m"] < 5e-3
+    fixed = score_run(topics, START_US, {**RUN, "controller": "structure_hold"},
+                      {**RTK_SESSION, "rtk": {"origin": list(ORIGIN), "delay_s": 0.0}})
+    # Climbing at 0.2 m/s, a 0.2 s lag left in is a few centimetres of misfit.
+    assert fixed["rtk_delay_s"] == 0.0 and fixed["align_rms_m"] > 0.01
+
+
+def test_the_report_names_rtk_its_coverage_and_fused_gps(tmp_path):
+    runs = [{"file": f"{c}_{i}.ulg", "controller": c, "case": "calm", "run": i}
+            for i, c in [(1, "tuned_px4"), (1, "structure_hold"), (2, "structure_hold")]]
+    sheet = tmp_path / "session.yaml"
+    sheet.write_text(yaml.safe_dump({"drone": "test", "site": "pier", "date": "2027-05-01",
+                                     **RTK_SESSION, "runs": runs}))
+
+    def loader(path):
+        run = next(r for r in runs if r["file"] == path.name)
+        topics = rtk_flight(run["controller"], gnss=run["run"] == 2)
+        if run["controller"] == "tuned_px4":
+            gps = topics["sensor_gps"]
+            t = (gps["timestamp"] - START_US) * 1e-6
+            gps["fix_type"] = np.where((t >= 40.0) & (t < 55.0), RTK_FLOAT, RTK_FIXED)
+        return topics, START_US
+
+    result = score_session(sheet, loader)
+    assert not result["errors"]
+    text = report(result)
+    assert "Truth: RTK GPS" in text and "RTK-fixed samples only" in text
+    assert "RTK fixed for 74 % of the hold: tuned_px4_1.ulg" in text
+    assert "GPS was fused: structure_hold_2.ulg" in text and "not independent" in text
+    assert "structure_hold_1.ulg" not in text.split("Truth: RTK GPS")[1]
+
+
+def test_a_straight_up_take_off_is_fitted_by_offset_alone_on_rtk():
+    # No sideways move, so no yaw can be fitted. RTK's frame is north-up like the EKF's, so
+    # the offset alone carries the hold point; mocap's heading is anyone's guess, so there
+    # the same take-off is refused.
+    up = [0.0, 0.0, 2.0]
+    row = score_run(rtk_flight(hold=up, psi=0.0), START_US,
+                    {**RUN, "controller": "structure_hold"}, RTK_SESSION)
+    assert row["align_yaw_fitted"] is False and row["align_yaw_deg"] == 0.0
+    assert np.allclose(row["hold_point_enu"], OFFSET + up, atol=2e-3)
+    assert row["p95_m"] == pytest.approx(0.1, abs=0.005)
+    moved = score_run(rtk_flight(), START_US, {**RUN, "controller": "structure_hold"},
+                      RTK_SESSION)
+    assert moved["align_yaw_fitted"] is True
+    with pytest.raises(ValueError, match="moves 0.00 m"):
+        score_run(flight(hold=up), START_US, {**RUN, "controller": "structure_hold"}, SESSION)
+
+
+def test_the_partner_rtk_parameters_log_the_receiver_and_keep_it_out_of_the_estimate():
+    from pathlib import Path
+
+    from sim2real.estimate_bridge.params import read_params
+
+    partner = Path(__file__).resolve().parents[2] / "sim2real/partner"
+    flight_set = read_params(partner / "structure_hold_flight.params")
+    rtk = read_params(partner / "rtk_truth.params")
+    # Everything the flight set logs, plus sensor_gps at the receiver's rate (bit 11).
+    assert rtk["SDLOG_PROFILE"] == flight_set["SDLOG_PROFILE"] | (1 << 11)
+    assert rtk["EKF2_GPS_CTRL"] == 0 and rtk["SYS_HAS_GPS"] == 0
+    assert set(rtk) == {"SDLOG_PROFILE", "EKF2_GPS_CTRL", "SYS_HAS_GPS"}
+
+
+def test_the_run_sheet_template_shows_the_rtk_fields():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2]
+            / "sim2real/partner/session_template.yaml").read_text()
+    # The RTK lines are there commented out; with them in place of the mocap ones the
+    # sheet must still parse and name what the scorer reads.
+    sheet = yaml.safe_load("\n".join(ln.removeprefix("# rtk> ") for ln in text.splitlines()))
+    assert sheet["truth"] == "rtk" and sheet["rtk"]["altitude"] == "msl"
+    assert sheet["rtk"]["delay_s"] == "auto"
+    assert len(sheet["wall"]["survey"]) >= 2 and len(sheet["wall"]["survey"][0]) == 3

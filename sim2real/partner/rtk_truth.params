@@ -1,0 +1,17 @@
+# RTK receiver as the truth for scoring outdoor flights (docs/partner-pack.md, "Truth for
+# scoring outdoors"; docs/rtk-truth.md).
+# Confidential. Copyright (c) 2026 Zain Ali. All rights reserved.
+# QGroundControl plain-text format. Load AFTER structure_hold_flight.params, then reboot.
+#
+# The receiver must be in the log and out of the estimate. Its own set-up (serial port,
+# GPS_1_CONFIG, corrections) stays what your drone already has.
+#
+# SDLOG_PROFILE 2195 = structure_hold_flight.params' 147 + high-rate sensors (bit 11, 2048):
+#   sensor_gps at the receiver's full rate. Without the bit PX4 v1.17 logs sensor_gps once a
+#   second, which the scorer refuses as a truth.
+# EKF2_GPS_CTRL 0: EKF2 fuses nothing from the receiver. Fused, the truth would be the
+#   estimate's own source; the scorer checks EKF2's aiding flags and says so on the report.
+# SYS_HAS_GPS 0: no GPS preflight requirement (the drone flies on its VIO).
+1	1	SDLOG_PROFILE	2195	6
+1	1	EKF2_GPS_CTRL	0	6
+1	1	SYS_HAS_GPS	0	6

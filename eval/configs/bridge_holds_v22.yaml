@@ -1,0 +1,100 @@
+# v22 against the cascaded PD yardstick in the air under a bridge (docs/bridge-holds.md):
+# holds under a deck (the disturbance model's second surface: its shelter and the vortices it
+# sheds from its edges in a wind across it, plus the abutment's near-wall flow) and in the
+# wake of a pier (vortex shedding at St U / D for a 1.5 m pier, reverse flow, wake
+# turbulence). The Gate 1 x500 fused set on barometer height (gate1_x500_ekf_baro_v22.yaml,
+# the sim's height source since 2026-11-03) with the cells changed. Not a gate: it says
+# whether the released policy holds as well under a bridge as at a flat wall, and whether
+# it needs the fine-tune in training/configs/structure_hold_ppo_bridge.yaml. The same three
+# scenes are the Gazebo scenarios deck_corner_8ms_flow, deck_open_8ms_flow and
+# pier_lee_8ms_flow. Seeds 9111 to 9113: inside the block training refuses, outside Gate 1's
+# three and near_wall_flow's.
+#   python -m training.launch --config eval/configs/bridge_holds_v22.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/bridge_holds_v22.yaml --device cpu
+name: bridge_holds_v22
+entrypoint: eval.gate1
+seed: 9111  # unused: the protocol seeds are params.seeds
+expected_hours: 0.5  # seven cells, two controllers, 512 episodes per seed
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released 2026-10-31
+  gate_controller: v22
+  seeds: [9111, 9112, 9113]
+  num_envs: 512
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true, height_source: baro}
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.05
+  # The hold is 2 m up (hold_height). Headings: 0 blows into the wall (the abutment or the
+  # pier face), 90 along it, which is across the deck (env.DECK_ACROSS), 180 away from it.
+  cells:
+    - {name: deck15_d1_diag, label: "deck 1.5 m over, 1 m from the abutment, 8 m/s at 45 deg",
+       headline: true,
+       env: {deck_clearance: 1.5, hold_distance: 1.0,
+             disturbance: &deck8 {mean_speed: 8.0, mean_heading_deg: 45.0,
+               wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+               shed_amp: [0.1, 0.4], surface2_shed_amp: [0.1, 0.4], surface2_shed_width: 1.0,
+               surface2_shed_strouhal: [0.1, 0.15]}}}
+    - {name: deck10_d1_diag, label: "deck 1.0 m over, 1 m from the abutment, 8 m/s at 45 deg",
+       env: {deck_clearance: 1.0, hold_distance: 1.0, disturbance: *deck8}}
+    - {name: deck15_open_across, label: "deck 1.5 m over, 6 m out, 8 m/s across the deck",
+       env: {deck_clearance: 1.5, hold_distance: 6.0,
+             disturbance: {mean_speed: 8.0, mean_heading_deg: 90.0,
+               wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+               shed_amp: [0.1, 0.4], surface2_shed_amp: [0.1, 0.4], surface2_shed_width: 1.0,
+               surface2_shed_strouhal: [0.1, 0.15]}}}
+    - {name: deck_any, label: "deck 1 to 3 m over, 1 to 3 m from the abutment, 8 m/s any heading",
+       env: {deck_clearance: [1.0, 3.0], hold_distance: [1.0, 3.0],
+             disturbance: {mean_speed: 8.0,
+               wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+               shed_amp: [0.1, 0.4], surface2_shed_amp: [0.1, 0.4], surface2_shed_width: 1.0,
+               surface2_shed_strouhal: [0.1, 0.15]}}}
+    - {name: pier_d1_lee, label: "pier wake, 1 m from the face, 8 m/s",
+       env: {hold_distance: 1.0,
+             disturbance: &pier8 {mean_speed: 8.0, mean_heading_deg: 180.0,
+               wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+               shed_amp: [0.2, 0.4], shed_width: 1.5, shed_strouhal: [0.13, 0.2]}}}
+    - {name: pier_d2_lee, label: "pier wake, 2 m from the face, 8 m/s",
+       env: {hold_distance: 2.0, disturbance: *pier8}}
+    - {name: pier_d1_lee_10, label: "pier wake, 1 m from the face, 10 m/s",
+       env: {hold_distance: 1.0,
+             disturbance: {mean_speed: 10.0, mean_heading_deg: 180.0,
+               wall_deflect: [0.3, 0.8], wall_recirc: [0.2, 0.5], wake_ti: [0.1, 0.3],
+               shed_amp: [0.2, 0.4], shed_width: 1.5, shed_strouhal: [0.13, 0.2]}}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [9111]
+  base_env:
+    airframe: gz_x500
+    episode_length_s: 2.0
+    fusion: {enabled: true, vision_rate_hz: 50.0, ev_delay_s: 0.1, pos_noise_m: 0.1,
+             vel_noise_mps: 0.1, gate_sd: 5.0, resets: true, height_source: baro}

@@ -28,7 +28,12 @@ from pathlib import Path
 import yaml
 
 from sim2real.gazebo.params_io import write_params
-from sim2real.gazebo.scenario import load_scenario, payload_environment, sample_scenario
+from sim2real.gazebo.scenario import (
+    DEFAULT_WORLD,
+    load_scenario,
+    payload_environment,
+    sample_scenario,
+)
 from sim2real.gazebo.verify_trace import verify
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +41,7 @@ DEFAULT_IMAGE = "structure-hold/px4-sitl:v1.17.0"
 # sim2real/docker/Dockerfile.watch: the same image plus a browser view of Gazebo on WATCH_PORT.
 WATCH_IMAGE = DEFAULT_IMAGE + "-watch"
 WATCH_PORT = 6080
-WORLD = "wall_slab"
+WORLD = DEFAULT_WORLD  # a scenario names its own world (Scenario.world)
 
 
 def git_commit() -> str:
@@ -86,11 +91,12 @@ def make_run_dir(runs_dir: Path, name: str) -> Path:
 
 
 def docker_command(image: str, out: Path, pose: str, altitude: float, hover_s: float,
-                   name: str, env: dict[str, str] | None = None) -> list[str]:
+                   name: str, world: str = WORLD,
+                   env: dict[str, str] | None = None) -> list[str]:
     cmd = [
         "docker", "run", "--rm", "--name", name,
         "-v", f"{out}:/out",
-        "-e", f"PX4_GZ_WORLD={WORLD}",
+        "-e", f"PX4_GZ_WORLD={world}",
         "-e", f"PX4_GZ_MODEL_POSE={pose}",
         "-e", "STRUCTURE_HOLD_WIND_PARAMS=/out/wind_params.txt",
         "-e", "STRUCTURE_HOLD_WIND_TRACE=/out/wind_trace.csv",
@@ -119,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     write_params(out / "wind_params.txt", params)
     config = {
         "scenario": args.scenario, "name": sc.name, "seed": sc.seed, "commit": commit,
-        "image": args.image, "world": WORLD, "spawn": sc.spawn.__dict__,
+        "image": args.image, "world": sc.world, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hover_s": hover_s, "disturbance": params_summary(params),
         "payload": sc.payload.__dict__,
@@ -127,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
-                         args.container_name, payload_environment(sc))
+                         args.container_name, world=sc.world, env=payload_environment(sc))
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     hover_status = subprocess.run(cmd).returncode

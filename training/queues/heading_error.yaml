@@ -1,0 +1,98 @@
+# Heading error near steel (GPU plan item 6; docs/heading-error.md): train two candidates on a
+# wrong heading, judge them against v22 in the Gazebo-like check, and fly the heading-error
+# profiles in Gazebo with v22 and tuned PX4. Runs after server_week1's setup job (the env, the
+# SITL image with v22); the bridge code comes from the mounted repo, so no image rebuild.
+#
+#   python -m training.queue training/queues/heading_error.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/heading_error.yaml --smoke
+#   python -m training.queue training/queues/heading_error.yaml
+#
+# Every job is under 1 h and at most 2 GPUs are busy at once (heading_s0 and heading_s1), so
+# nothing here needs a separate yes. GPU about 2.6 h, Gazebo CPU about 1.3 h in all.
+name: heading_error
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- GPU: two seeds, then the check
+  - id: heading_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_heading.yaml
+    hours: 0.9
+    why: "v22 continued with a wrong heading on 70 % of episodes (offset to 45 deg, drift, steps), seed 0"
+
+  - id: heading_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_heading.yaml
+    set: {seed: 1}
+    hours: 0.9
+    why: "the same recipe, seed 1 (PPO moved more between seeds than between recipes on v23 to v25)"
+
+  - id: heading_check
+    gpu: true
+    launch: eval/configs/gazebo_check_heading_candidates.yaml
+    set:
+      params.candidates.heading_s0: "{run:heading_s0}/policy.onnx"
+      params.candidates.heading_s1: "{run:heading_s1}/policy.onnx"
+    after: [heading_s0, heading_s1]
+    hours: 0.8
+    why: "both candidates against v22 on the heading cells; go/no-go: one beats v22 pooled AND keeps the true-heading cells (calm_clean, head_none) within slack"
+
+  # ---------------------------------------------------------------- CPU lane: Gazebo + PX4 SITL
+  # Hold runner = v22 in the module (as gz_v22_baseline); stock runner = tuned PX4 in Position
+  # mode (as gz_tuned_baseline). field_heading_none is the control: EKF2 on the vision yaw
+  # with no error, so a change from the vio_at_* batches that the heading source itself
+  # causes shows there. The heading error each flight really had is in its summary
+  # (estimate_error.heading_error, from the ulog).
+  - id: gz_heading_tuned
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_heading_offset30 --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms wall1m_wind_8ms -- --profile field_heading_offset_at_hover
+      && python -m eval.baselines.run_baseline --label tuned_heading_drift --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_heading_drift_at_hover
+      && python -m eval.baselines.run_baseline --label tuned_heading_none --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_heading_none_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    hours: 0.55
+    why: "tuned PX4, 32 flights: 30 deg off at 4 and 8 m/s, the 1 deg/s drift, the no-error control (crashes allowed: that is the result)"
+
+  - id: gz_heading_v22
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_heading_offset30 --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms wall1m_wind_8ms -- --profile field_heading_offset_at_engage
+      && python -m eval.baselines.run_baseline --runner hold --label v22_heading_drift --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_heading_drift_at_engage
+      && python -m eval.baselines.run_baseline --runner hold --label v22_heading_none --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms -- --profile field_heading_none_at_engage
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_heading_tuned]
+    hours: 0.55
+    why: "v22, the same 32 flights; compare each batch with its tuned twin (--compare) and with the mock's head_off30 / head_drift cells"
+
+  - id: gz_heading_v22_range
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_heading_offset30_range
+      --jobs auto --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_wind_4ms wall1m_wind_8ms
+      -- --profile field_heading_offset_at_engage --rangefinder
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_heading_v22]
+    hours: 0.3
+    why: "v22 with the forward rangefinder (wall guard on), 16 flights: does the guard keep a spiralling hold off the wall"
+
+  - id: gz_heading_candidate
+    cmd: >
+      echo "fly the better heading candidate: export its header and build an image as
+      server_week1's gz_v24_image, then gz_heading_v22's three batches with --image and that
+      label (docs/heading-error.md, Server runs)"
+    smoke_cmd: "true"
+    after: [heading_check, gz_heading_v22]
+    hours: 1.0
+    enabled: false
+    why: "only if heading_check passes a candidate against v22; release needs Gazebo to confirm it (CLAUDE.md, Releasing a policy)"

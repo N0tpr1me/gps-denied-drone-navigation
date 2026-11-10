@@ -1,0 +1,15 @@
+# Heading-error profile (docs/heading-error.md): vio_default's delay, noise and bias walk, its
+# random jumps and dropouts off, and EKF2's heading walked off the truth through the vision yaw
+# (sim2real/estimate_bridge/vision_yaw.py): none at engage, then from 20 s into the scored
+# window 1 deg/s clockwise up to 30 deg, held: the drone edging toward steel, or EKF2 giving in
+# to a disturbed compass. Slow enough that EKF2 fuses it (no heading reset), so the module's
+# frame stays where it was latched and the error builds under it.
+# This copy is for the stock PX4 runner (keyed to the hover height); the _at_engage twin differs only in its anchor.
+name: field_heading_drift_at_hover
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null   # the stock runner fills it from the scenario
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}
+vision_yaw: {offset_deg: 0.0, drift_at_s: 20.0, drift_rate_deg_s: 1.0, drift_max_deg: 30.0}

@@ -94,6 +94,21 @@ def test_contacts_count_episodes():
     assert m["min_clearance_m"] == pytest.approx(0.1)
 
 
+def test_second_surface_scores_its_own_clearance_and_contacts():
+    # A deck 0.8 m above the hold; the drone rises 0.6 m (0.2 m under it) once, the wall
+    # 1 m east is never approached.
+    deck = Surface(point=[0.0, 0.0, 0.8], normal=[0.0, 0.0, 1.0])
+    t = np.linspace(0, 3, 301)
+    z = np.interp(t, [0, 1, 1.5, 2, 3], [0.0, 0.0, 0.6, 0.0, 0.0])
+    pos = np.stack([np.zeros_like(t), np.zeros_like(t), z], axis=1)
+    m = compute_metrics(Trace(t, pos, HOLD), WALL, surface2=deck)
+    assert m["worst_toward_surface2_m"] == pytest.approx(0.6)
+    assert m["min_clearance_surface2_m"] == pytest.approx(0.2)
+    assert m["min_clearance_m"] == pytest.approx(1.0)  # still the wall's
+    assert m["contacts"] == 1
+    assert "min_clearance_surface2_m" not in compute_metrics(Trace(t, pos, HOLD), WALL)
+
+
 def test_contacts_from_simulator_flag():
     t = np.linspace(0, 1, 101)
     flag = np.zeros_like(t, dtype=bool)
@@ -194,3 +209,35 @@ def test_bad_traces_are_rejected(kwargs):
 def test_cli_needs_both_wall_arguments(capsys):
     with pytest.raises(SystemExit):
         main(["x.ulg", "--wall-point", "1,0,0"])
+
+
+def test_a_gap_in_the_truth_is_left_out_not_drawn_through():
+    # 10 s at the hold point, then nothing for 10 s, then 10 s sitting 0.5 m off. Drawn
+    # through, the gap would add a 10 s ramp that nobody measured.
+    t = np.concatenate([np.arange(0.0, 10.0, 0.1), np.arange(20.0, 30.0 + 1e-9, 0.1)])
+    x = np.where(t < 15.0, 0.0, 0.5)
+    drawn = compute_metrics(Trace(t, line_x(t, x), HOLD), WALL, contact_radius_m=0.6)
+    m = compute_metrics(Trace(t, line_x(t, x), HOLD), WALL, contact_radius_m=0.6,
+                        max_gap_s=0.5)
+    assert drawn["scored_s"] == pytest.approx(30.0, abs=0.02)
+    assert m["duration_s"] == pytest.approx(30.0, abs=0.02)
+    assert m["scored_s"] == pytest.approx(20.0, abs=0.2)
+    # Half the scored time at 0, half at 0.5 m: the ramp's values in between are gone.
+    assert m["rms_m"] == pytest.approx(0.5 / math.sqrt(2), abs=0.01)
+    assert drawn["rms_m"] < m["rms_m"] - 0.02
+    assert m["min_clearance_m"] == pytest.approx(0.5)
+    assert m["contacts"] == 1
+
+
+def test_a_gap_never_counts_as_recovered():
+    # Back within 10 cm only inside the gap: with the gap left out, recovery starts after it.
+    t = np.concatenate([np.arange(0.0, 5.0, 0.1), np.arange(9.0, 20.0 + 1e-9, 0.1)])
+    x = np.where(t < 5.0, 0.5, 0.0)
+    m = compute_metrics(Trace(t, line_x(t, x), HOLD), gusts=[(1.0, 2.0)], max_gap_s=0.5)
+    assert m["recovery_max_s"] == pytest.approx(7.0, abs=0.02)
+
+
+def test_a_window_with_no_truth_at_all_is_refused():
+    t = np.concatenate([np.arange(0.0, 2.0, 0.1), np.arange(28.0, 30.0, 0.1)])
+    with pytest.raises(ValueError, match="no truth"):
+        compute_metrics(Trace(t, line_x(t, 0 * t), HOLD), window=(5.0, 25.0), max_gap_s=0.5)

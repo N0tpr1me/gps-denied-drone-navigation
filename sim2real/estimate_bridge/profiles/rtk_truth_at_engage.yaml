@@ -1,0 +1,11 @@
+# vio_at_engage with an RTK receiver that is logged but not fused (gps.fused false: the
+# runner lays gps_logged.params over the PX4 set). The flight is the benchmark's, GPS-free;
+# the receiver's samples in the log are what an outdoor partner flight is scored on
+# (eval/rtk_truth.py), and Gazebo's truth in the same log says how good that score is
+# (docs/partner-pack.md, "RTK truth checked in Gazebo").
+name: rtk_truth_at_engage
+seed: 1
+fault_anchor: engage
+fault_anchor_s: 25.0
+bias_from_anchor: true
+gps: {rate_hz: 10.0, fix: rtk_fixed, fused: false}

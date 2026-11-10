@@ -1,0 +1,109 @@
+# Failure rates in heavy dust at the levels a real VIO measured, not the made-up `degrade`
+# fault: docs/vio-render.md's "Next" step 2 in the mock. Real Basalt on rendered hold flights
+# (runs 20261109-162529 / -164347 / -170144, pooled 20261109-171941) found fog, darkness and
+# light dust harmless at a 1.5 m hold, and heavy dust a slow silent walk, not noise or a loss:
+#   heavy dust from the start   walk 0.012 m/sqrt(s), 60 s cap 0.51 m, velocity noise 0.043 m/s
+#   heavy dust arriving mid-hold  +0.36 to 0.5 m in the 20 s after it arrives, 0.034 m/s
+#   dark (2 % light) with dust  walk 0.029 m/sqrt(s), up to 2.5 m in 60 s (cap 7.1 m), 0.012 m/s
+# and never a tracking loss, a reset or a gap. Each row below is one of these as an
+# `envs/estimate` setting (or, for the cloud arriving, the drift primitive of the F7 row in
+# fault_rates_v22.yaml), and the rangefinder in the same dust as the field_degrade profiles
+# spoil it (5 cm noise, 10 % stray returns). v22 (released), v24 (the wall-range candidate)
+# and the PD fly the same 20,480 episodes per row: whether a measured dust walk is a crash
+# risk, and whether v24's range input holds the wall where v22 follows the estimate.
+# The mock has no watchdog, wall guard or handback (eval.fault_rates says what that means);
+# the Gazebo re-fly of these errors through the estimate bridge is a cloud job.
+#   python -m training.launch --config eval/configs/fault_rates_dust_measured.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/fault_rates_dust_measured.yaml --device cuda --set "params.only=[dust_heavy]"
+#   python -m eval.fault_rates collect runs/<dust_heavy> runs/<dust_cloud> runs/<dark_dust> --out runs/dust.md
+# The GPU queue (training/queues/server_week3.yaml) runs one row per job with params.only.
+name: fault_rates_dust_measured
+entrypoint: eval.fault_rates
+seed: 7311  # unused: the protocol seeds are params.seeds
+expected_hours: 0.5  # ONE row (params.only): 3 controllers x 20,480 episodes of 40 s on a 24 GB card
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released; does not read the range
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # candidate with the wall-range input
+  seeds: [7311, 7312, 7313, 7314, 7315]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 4096
+  window_s: 20.0
+  base_env:
+    airframe: gz_x500_sitl  # the benchmark drone as Gazebo flies it: EKF2-like fusion on the barometer
+    episode_length_s: 40.0  # the cloud arrives at 10 s; 30 s to see what follows
+    hold_distance: 1.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    # A forward rangefinder on every episode, as `run_gazebo --rangefinder` flies, as noisy as
+    # v24 trained on; the dust rows below spoil it further.
+    range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+            scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+            dropout_s: [0.2, 2.0]}
+    # vio_default's delay and noise; its random jumps and dropouts off, as Basalt never lost
+    # tracking or jumped in the dust renders: the measured dust is the only fault.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.0
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.0
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:  # wall1m_wind_4ms, the evaluation kit's scenario: 4 m/s into the wall
+      mean_speed: 4.0
+      mean_heading_deg: 0.0
+      num_gusts: 2
+      gust_start: [12.0, 28.0]
+      gust_duration: [1.0, 2.0]
+      gust_speed: [1.0, 3.0]
+      turb_sigma: 0.5
+      turb_tau: 1.0
+  faults:
+    - name: dust_heavy
+      fmea: F36
+      label: "heavy dust for the whole hold, as Basalt measured: 0.012 m/sqrt(s) walk to 0.5 m, 0.043 m/s velocity noise; rangefinder spoilt"
+      env:
+        estimate: {bias_walk_std_m_per_sqrt_s: 0.012, bias_max_m: 0.51, vel_noise_std_mps: 0.043}
+        range: {noise_std_m: 0.05, outlier_prob: 0.1}
+    - name: dust_cloud
+      fmea: F36
+      label: "heavy dust arriving 10 s in: the reported position walks 2 cm/s away from the wall for 20 s (0.4 m, measured 0.36 to 0.5); rangefinder spoilt"
+      env:
+        estimate: {vel_noise_std_mps: 0.034}
+        range: {noise_std_m: 0.05, outlier_prob: 0.1}
+      drift: {start_s: 10.0, duration_s: 20.0, rate_mps: 0.02, direction: [-1.0, 0.0, 0.0]}
+    - name: dark_dust
+      fmea: F36
+      label: "2 % light with dust, as Basalt measured: 0.029 m/sqrt(s) walk, uncapped to 7 m; rangefinder spoilt"
+      env:
+        estimate: {bias_walk_std_m_per_sqrt_s: 0.029, bias_max_m: 7.1, vel_noise_std_mps: 0.012}
+        range: {noise_std_m: 0.05, outlier_prob: 0.1}
+smoke:
+  # Every row, tiny: 4 drones, one seed, 14 s episodes so the cloud has arrived and the
+  # queue's `params.only` finds its row.
+  num_envs: 4
+  seeds: [7311]
+  window_s: 2.0
+  base_env:  # replaces base_env whole (launch merges the smoke block one level deep)
+    airframe: gz_x500_sitl
+    episode_length_s: 14.0
+    hold_distance: 1.0
+    hold_height: 2.4
+    contact_radius_m: 0.40
+    start_offset_std_m: 0.0
+    start_yaw_std_rad: 0.0
+    range: {present_prob: 1.0}
+    estimate: {jump_rate_hz: 0.0, dropout_rate_hz: 0.0}

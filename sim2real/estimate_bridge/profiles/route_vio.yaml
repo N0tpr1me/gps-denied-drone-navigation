@@ -1,0 +1,13 @@
+# Route Follow in Gazebo (sim2real/route_follow), nominal: the mock's tunnel estimate
+# (envs/route_follow/config.py tunnel_estimate: vio_default with the drift walk and cap raised
+# to 0.02 m/sqrt(s) and 0.5 m, since dark repetitive walls are where VIO drifts most), with
+# vio_default's random jumps and dropouts. Keyed to the take-off height like vio_at_hover
+# (the runner fills fault_anchor_alt_m from the route's first waypoint), the bias walk
+# starting there too, so every flight meets its drift from the start of the route.
+name: route_vio
+seed: 1
+fault_anchor: altitude
+fault_anchor_alt_m: null
+fault_anchor_s: 25.0
+bias_from_anchor: true
+estimate: {bias_walk_std_m_per_sqrt_s: 0.02, bias_max_m: 0.5}

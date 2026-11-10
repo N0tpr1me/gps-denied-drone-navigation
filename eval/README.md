@@ -61,3 +61,7 @@ python -m training.launch --config eval/configs/gazebo_check.yaml --device cpu  
   (`docs/eval-kit.md`).
 - `partner_session.py` + `partner_report.py`: score a partner's real flight session and turn
   it into a one-page benchmark report (`docs/partner-pack.md`, `docs/eval-kit.md`).
+- `rtk_truth.py`: RTK GPS as the truth for outdoor partner flights (`truth: rtk` in the run
+  sheet): RTK-fixed samples of `sensor_gps` only, the wall from surveyed points, the frame
+  fit, and a warning when EKF2 fused GPS. `rtk_check.py` checks it on Gazebo flights with the
+  scripted receiver logged but not fused, where the truth is known (`docs/rtk-truth.md`).

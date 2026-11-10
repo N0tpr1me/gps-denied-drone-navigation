@@ -460,6 +460,50 @@ int main()
 		CHECK(!k.capped());
 	}
 
+	// The look-ahead for a surface pass (PassPath::brakeDistance): how close the nearest
+	// obstacle is to a place ahead of the hold point, which tells an obstacle the point is
+	// moving onto from one beside or behind it. A pass east, 0.35 m of reach, keep-out 1 m.
+	{
+		KeepOut k = keepOut(1.f);
+		const float east[2] = {0.f, 0.35f};
+		float hold[3] = {0.f, 0.f, -2.5f};
+		// A pole 1.2 m east: outside the keep-out, nothing moves, but the point would come
+		// to rest 0.85 m from it.
+		k.begin();
+		k.addPoint(90.f * DEG, 1.2f);
+		KeepOutOutput o = k.apply(pos, n_north, -1.f, hold, east);
+		CHECK(near(o.shift_m, 0.f) && near(o.nearest_m, 1.2f) && near(o.ahead_m, 0.85f));
+		// The same pole behind the pass (west): the place ahead is further from it.
+		k.begin();
+		k.addPoint(-90.f * DEG, 1.2f);
+		o = k.apply(pos, n_north, -1.f, hold, east);
+		CHECK(near(o.nearest_m, 1.2f) && near(o.ahead_m, 1.55f));
+		// Beside it (south), right at the keep-out: still no nearer ahead.
+		k.begin();
+		k.addPoint(180.f * DEG, 1.f);
+		o = k.apply(pos, n_north, -1.f, hold, east);
+		CHECK(near(o.shift_m, 0.f) && o.ahead_m > 1.f);
+		// Without a look-ahead, or without a point, it stays -1; the structure ahead (the
+		// wall the pass runs along) is not an obstacle here either.
+		k.begin();
+		k.addPoint(90.f * DEG, 1.2f);
+		CHECK(k.apply(pos, n_north, -1.f, hold).ahead_m < 0.f);
+		k.begin();
+		CHECK(k.apply(pos, n_north, -1.f, hold, east).ahead_m < 0.f);
+		ObstacleScan wall = emptyScan(ObstacleScan::FRAME_LOCAL_NED);
+		addWallToScan(wall, 0.f, 1.f);
+		k.begin();
+		CHECK(k.addScan(wall, NOW, 0.f));
+		o = k.apply(pos, n_north, 1.f, hold, east);
+		CHECK(o.ahead_m < 0.f && near(o.shift_m, 0.f));
+		// The look-ahead is taken from the hold point after any push.
+		float pushed[3] = {0.f, 0.f, -2.5f};
+		k.begin();
+		k.addPoint(90.f * DEG, 0.8f);
+		o = k.apply(pos, n_north, -1.f, pushed, east);
+		CHECK(near(o.shift_m, 0.2f) && near(pushed[1], -0.2f) && near(o.ahead_m, 0.65f));
+	}
+
 	if (failures == 0) {
 		std::printf("keep-out tests passed\n");
 		return 0;

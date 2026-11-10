@@ -144,6 +144,7 @@ class RouteFollowEnv:
         self.range_present = torch.zeros(n, NUM_RANGES, dtype=torch.bool, device=dev)
         self.range_meas = torch.full((n, NUM_RANGES), math.inf, dtype=dt, device=dev)
         self.range_sampled = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.range_dusty = torch.zeros(n, dtype=torch.bool, device=dev)
         self.global_step = 0
         self.term_reason = torch.zeros(n, dtype=torch.long, device=dev)
         self.counts = {k: 0 for k in TERM_REASONS[1:]}
@@ -221,6 +222,9 @@ class RouteFollowEnv:
             self.range_present[env_ids] = torch.as_tensor(
                 self.range_rng.random((k, NUM_RANGES)) < cfg.ranges.present_prob,
                 device=self.device)
+            if cfg.ranges.dust_prob > 0:  # drawn only when on, so other configs draw as before
+                self.range_dusty[env_ids] = torch.as_tensor(
+                    self.range_rng.random(k) < cfg.ranges.dust_prob, device=self.device)
         self.range_meas[env_ids] = math.inf
         self.range_sampled[env_ids] = False
         self._update_target()
@@ -254,7 +258,7 @@ class RouteFollowEnv:
 
     def _sample_ranges(self) -> None:
         """New readings for every env with a rangefinder: the beams traced through the walls,
-        with noise and outliers."""
+        with noise and outliers, and in a dusty episode lost and short returns."""
         rc = self.cfg.ranges
         dirs = quat_rotate(self.sim.state.quat[:, None, :].expand(-1, NUM_RANGES, 4).reshape(
             -1, 4), self.range_dirs.repeat(self.num_envs, 1)).reshape(self.num_envs,
@@ -269,6 +273,16 @@ class RouteFollowEnv:
                            dtype=self.dtype)
             r = torch.where(u[..., 0] < rc.outlier_prob,
                             rc.min_m + u[..., 1] * (rc.max_m - rc.min_m), r)
+        if rc.dust_prob > 0:
+            # Dusty episodes: no return (inf reads as not usable) or a short one off the dust.
+            u = torch.rand(*shape, 3, generator=self.range_gen, device=self.device,
+                           dtype=self.dtype)
+            lo, hi = rc.dust_short_frac
+            dusty = self.range_dusty[:, None]
+            r = torch.where(dusty & (u[..., 1] < rc.dust_short_prob),
+                            true.clamp(max=rc.max_m) * (lo + (hi - lo) * u[..., 2]), r)
+            r = torch.where(dusty & (u[..., 0] < rc.dust_loss_prob),
+                            torch.full_like(r, math.inf), r)
         self.range_meas = r
         self.range_sampled[:] = True
 

@@ -34,7 +34,8 @@ How jobs are placed:
   tune that is only worth training if a check fails).
 
 ``--smoke`` runs each launch job once with ``--smoke`` (no chain, never logged; ``set`` values
-that name another job's run are left out, since the config's smoke block stands on its own)
+that name another job's run, or replace a param the config's smoke block sets such as
+``params.num_envs``, are left out, since the smoke block stands on its own)
 and each cmd job's ``smoke_cmd`` if it has one; ``--device cpu`` does the same without GPUs
 (the cloud container's check; GPU-only cmd jobs are skipped). State lives in
 ``runs/queue_<name>[-smoke]/state.json``; re-running the same queue skips what finished ok
@@ -285,7 +286,9 @@ def expand_runs(text: str, run_dirs: dict[str, str]) -> str:
 def set_args(values: dict[str, Any]) -> list[str]:
     out = []
     for k, v in values.items():
-        out += ["--set", f"{k}={yaml.safe_dump(v, default_flow_style=True).strip()}"]
+        # One line whatever its length: the override goes into argv and the LOG.md row as is.
+        dumped = yaml.safe_dump(v, default_flow_style=True, width=float("inf")).strip()
+        out += ["--set", f"{k}={dumped}"]
         if out[-1].endswith("\n..."):
             out[-1] = out[-1][:-4]
     return out
@@ -310,6 +313,10 @@ def launch_command(job: Job, *, part: int, smoke: bool, device: str, gpu: int | 
     if smoke:  # the smoke block replaces what points at files; a 3-iteration policy is no test
         values = {k: v for k, v in values.items()
                   if not (isinstance(v, str) and RUN_REF.search(v))}
+        # and its sizes stand: a job that asks for 2048 drones still smokes on the block's 8
+        raw = yaml.safe_load((REPO_ROOT / job.launch).read_text()) or {}
+        sized = {f"params.{k}" for k in raw.get("smoke") or {}}
+        values = {k: v for k, v in values.items() if k not in sized}
     values = {k: expand_runs(v, run_dirs or {}) if isinstance(v, str) else v
               for k, v in values.items()}
     return cmd + set_args(values)

@@ -22,16 +22,19 @@ from a wall, pier or deck in gusts, without GPS, on the drone's own position est
 stock rate controller. A classical watchdog hands control back to stock PX4 on any fault,
 and a forward rangefinder keeps the hold point off the wall (the wall guard). The pilot
 can always take over by switching to Position mode. In our PX4 SITL benchmark (Gazebo,
-8 seeds, gusts up to 8 m/s) it held with a 54 to 55 % lower p95 error than properly tuned
-stock PX4, with no crashes (`docs/baseline.md`). This pack is how we find out whether that
-holds on a real drone.
+8 seeds, gusts up to 8 m/s, on barometer height as step 2 of this pack sets it) it held to
+about 0.3 m at the 95th percentile, 34 to 46 % tighter than properly tuned stock PX4 (0.49
+to 0.53 m), with no crashes (`docs/baseline.md`, re-flown 2026-11-09). On vision height, which
+this pack and the safety manual do not allow in flight, it holds to about 0.2 m; the 54 to
+55 % in earlier copies of this pack was that set-up. This pack is how we find out whether
+the barometer-height result holds on a real drone.
 
 ## The steps, and who does what
 
 | Step | Who | Props | Time | Output you send us |
 | --- | --- | --- | --- | --- |
 | 0. Airframe sheet and one logging flight | Partner flies, we check | On, by hand | Half a day | Airframe sheet, parameter dump, `.ulg` |
-| 1. Build and install | Partner (we can build for you) | – | 1 hour | Build log, firmware commit |
+| 1. Build and install | We send a firmware file, or the partner builds from source (per agreement) | – | 1 hour | Build log, firmware commit |
 | 2. Sensors and parameters | Partner | – | 1 to 2 hours | Parameter dump |
 | 3. Bench test | Partner | **Off** | 15 minutes | `summary.json`, `.ulg` |
 | 4. Tethered checks | Partner | On, tethered or netted | Half a day | `.ulg` files, notes |
@@ -68,6 +71,17 @@ We answer with go, no-go, or "go after a retrain on your airframe" (we add your 
 
 ## Step 1: build Structure Hold into your firmware
 
+Two ways to get the module onto your flight controller. Which one a partner gets is
+decided per partner, in the signed agreement (open item 2 at the end):
+
+- **Firmware file from us (no source).** Send us the board name and your PX4 tree; we build
+  the `structurehold` variant below and send back a firmware file to flash. This is how the
+  evaluation kit already ships, binary only (`docs/decisions.md`, 2026-11-02).
+- **Source under the agreement.** You build it yourself with the commands below. Only for a
+  partner whose agreement names the module source.
+
+Either way the board has to fit it:
+
 The module is plain C++ inside PX4: no companion computer, no ONNX runtime, no heap. It
 takes about 125 KB of flash, most of it the policy's weights.
 
@@ -97,8 +111,8 @@ starts it at boot (behind `SH_EN`), and logs its status topic. PX4's build wants
 it and drop something else you do not use; Structure Hold needs only the multicopter stack.
 
 If your firmware is a fork, or you build with a vendor flow (for example ModalAI's), run
-`install.sh` on your tree and tell us anything it could not patch. If you would rather not
-build, send us the board name and your PX4 tree, and we send back a firmware file.
+`install.sh` on your tree and tell us anything it could not patch (with a firmware file
+from us, we do this on the tree you send).
 
 **Check:** on the PX4 shell (QGC, Analyze Tools, MAVLink Console), `structure_hold status`
 says `state: standby` and names the policy (`structure_hold_v22`). QGC lists three new
@@ -161,7 +175,32 @@ estimate (`docs/metrics.md`). Indoors that is a motion-capture system. Stream it
 flight would measure nothing. Check in the bench test's log that `vehicle_mocap_odometry`
 is present and `vehicle_visual_odometry` comes only from the VIO.
 
-Outdoor flights without mocap (RTK) cannot be scored yet (open items, below).
+Outdoors, where there is no mocap, the truth is an RTK receiver (next section).
+
+### Truth for scoring outdoors (RTK)
+
+At a real bridge or pier there is no mocap. An RTK GPS receiver with a **fixed** solution is
+good to a centimetre or two, so we score outdoor sessions on it (`docs/rtk-truth.md`). The
+rule is the same as for mocap: the truth is **logged, never fused**. The drone still flies on
+its VIO, GPS-denied; the receiver only writes to the log.
+
+| Set-up | Why |
+| --- | --- |
+| An RTK receiver on the drone with corrections reaching it (a base station or NTRIP, through QGC or your companion), set up as your drone already does it (`GPS_1_CONFIG`) | Only a fixed solution (`fix_type` 6) is truth; float and plain 3D samples are dropped |
+| Load `sim2real/partner/rtk_truth.params` after `structure_hold_flight.params`, then reboot: `EKF2_GPS_CTRL` 0, `SYS_HAS_GPS` 0, `SDLOG_PROFILE` 2195 | EKF2 fuses nothing from the receiver, and PX4 logs it at its full rate. Without the logging bit PX4 writes one GPS sample a second, which we cannot score |
+| Antenna within about 10 cm of the drone's centre, with open sky where you can | The receiver reports its antenna, not the drone: an offset moves the wall distance we report by that much. Tell us the offset if it is larger |
+| Survey the wall with the same RTK system: two points along its foot for a vertical wall, or three or more spread over the face for a leaning pier or the underside of a deck. Latitude, longitude and altitude, into `wall.survey` in the run sheet | This is what the mocap wand does indoors. Say in `rtk.altitude` whether your rover's altitude is above mean sea level (`msl`) or above the ellipsoid |
+
+**Check:** on the ground with corrections running, `listener sensor_gps` shows `fix_type: 6`.
+In the bench test's log `sensor_gps` is there at your receiver's rate (5 Hz or more) and
+`estimator_status_flags` shows no GPS aiding (`eval/log_health.py` reports it).
+
+What to expect in the report: under a deck the fix drops to float. Those moments are left out
+of the score, and the report says how much of each hold had a fixed solution; a hold with
+less than half is not scored. So plan the hold points where the antenna keeps some sky, or
+accept that part of the hold goes unscored. If you fly with GPS **fused** as well (the GPS-on
+set-up in the table above), we can still score the session, but the report says on its first
+line that the truth is then not independent of the drone's estimate.
 
 ### Structure Hold parameters
 
@@ -254,7 +293,8 @@ It mirrors our Gazebo benchmark, so the real numbers sit next to the simulated o
   PX4) or **Structure Hold**; hands off for 60 s; switch to Position; back off to 2 m; land.
   One run per log: disarm between runs so each `.ulg` holds one hold.
 - **The take-off and the move to the hold point matter for scoring:** we line up the
-  drone's estimate with mocap over them, so fly at least 1 m sideways or up on the way.
+  drone's estimate with mocap (or RTK) over them, so fly at least 1 m sideways or up on the
+  way.
 
 ### Safety limits
 
@@ -298,6 +338,8 @@ Fill in `session.yaml` during the day: the drone, the firmware commit, the VIO, 
 measured with the mocap wand (one point on its face and the normal from the drone toward
 it, in the mocap frame), your prop reach as `contact_radius_m`, and one line per run in
 the order flown, aborts included. Give the logs the file names you wrote in the sheet.
+For an outdoor session set `truth: rtk` and give the wall as surveyed points instead
+(`wall.survey`); the template has both, the RTK lines marked `# rtk>`.
 
 Zip the folder and upload it to the link we give you. Logs are large; please do not email
 them.
@@ -318,6 +360,10 @@ python -m eval.partner_session <folder>/session.yaml    # writes <folder>/scored
   in the drone's estimate frame, so the estimate is fitted to mocap (a yaw and an offset)
   over the take-off and the move to the hold point, and the hold point carried into the
   mocap frame. The fit's residual is reported with every run.
+- **On RTK truth** (`truth: rtk`) the same is done against the receiver's fixed solutions
+  (`eval/rtk_truth.py`, `docs/rtk-truth.md`): float and unfixed samples are left out with
+  the time they cover, each run says what share of its hold had a fixed solution, and a
+  run where EKF2 fused GPS is marked as scored on a truth that is not independent.
 - **The numbers:** p95 of the 3D distance from the hold point (the headline), RMS, the
   worst move toward the wall, the closest the drone came to the wall, wall contacts
   (centre closer than your prop reach), and, with gust times, the recovery time.
@@ -340,17 +386,26 @@ failures included, and send you the report.
 | `policy_expected` fails in the bench test | The firmware was built from another checkout; pass `--policy <name>` with the name the shell shows, and tell us |
 | Hands back soon after engage with trip `estimate_stale` | The VIO stopped reaching PX4 for `SH_WD_EST_TO`; check its link and rate |
 | Hands back with trip `position_error` | More than `SH_WD_POS_ERR` from the hold point: send us the log |
-| Scorer says the align window "moves 0.0x m" | The take-off was straight up with no sideways move; fly 1 m sideways on the way to the hold point, or give the run an `align` window (log seconds) that covers a sideways move |
+| Scorer says the align window "moves 0.0x m" | The take-off was straight up with no sideways move; fly 1 m sideways on the way to the hold point, or give the run an `align` window (log seconds) that covers a sideways move. (On RTK truth a straight-up take-off is accepted: both frames are north-up) |
+| Scorer says the receiver "is logged at 1.0 Hz" | `rtk_truth.params` was not loaded (or not before the reboot): PX4 logs GPS once a second without `SDLOG_PROFILE` bit 11 |
+| Scorer says "no RTK-fixed samples" | The receiver never reached a fixed solution: check that corrections reach it (`listener sensor_gps`, `fix_type` 6) before take-off |
+| Report says "RTK fixed for N % of the hold" | The fix dropped to float for part of the hold (under the deck, behind the pier); that part is not scored. Under 50 % the hold is not scored at all |
+| Report opens with "Truth not independent" | EKF2 fused GPS on those flights (`EKF2_GPS_CTRL` not 0). Fine if you meant to fly GPS-on; for the GPS-denied numbers load `rtk_truth.params` and re-fly |
 
 ## Open items before this goes to a partner (for Zain)
 
 1. **Evaluation agreement.** A written agreement (NDA plus evaluation licence) must be
    signed before the partner sees this pack or the code. Not drafted here.
-2. **Source or binary.** Whether the partner gets the module's source (step 1 as written)
-   or only a firmware file we build for their board.
+2. **Source or binary.** Whether the partner gets the module's source or only a firmware
+   file we build for their board; step 1 describes both. Evaluation kits are binary only
+   (Decided 2026-11-02, `docs/decisions.md`); that row leaves the module source for a
+   partner flying real hardware to be decided per partner, under a signed agreement.
 3. **Gate 3 pass bar.** What result on a partner drone counts as Gate 3 passed (for
    example: lower mean p95 than tuned PX4 in every flown case, and no contacts). Agree it
    in writing before the first scored session.
-4. **Outdoor truth.** `eval/ulog.py` reads mocap only; flights near a real structure
-   outdoors need RTK truth read from `sensor_gps` (a small addition when a partner needs it).
+4. **Outdoor truth.** Built 2026-11-09: outdoor sessions are scored on the RTK receiver's
+   fixed solutions (`eval/rtk_truth.py`, "Truth for scoring outdoors" above), checked on
+   Gazebo flights where the simulator's truth is known (`docs/rtk-truth.md`). Still open: no
+   real receiver's log has been through it, so the first outdoor session should start with
+   one calm flight in the open that we score before the day is planned around it.
 5. **Upload channel** for session folders.

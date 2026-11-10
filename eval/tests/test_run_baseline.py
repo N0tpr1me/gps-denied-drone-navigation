@@ -223,3 +223,60 @@ def test_parallel_batch_keeps_flight_order_and_pins_each_flight(tmp_path, monkey
     out = next(tmp_path.glob("runs/*_px4_baseline_t_*"))
     lines = (out / "log_lines.md").read_text().splitlines()
     assert len(lines) == 6 and "seed 1" in lines[0] and " b seed 3" in lines[-1].replace(":", "")
+
+
+# Surface passes (docs/surface-passes.md "In Gazebo"): the stock runner flies the pass in
+# Offboard for the scenario's time and says so in its summary.
+PASS_SEQ = [(0.0, "Hold"), (16.0, "Takeoff"), (23.0, "Hold"), (60.1, "Offboard"),
+            (90.1, "Land"), (97.0, "Offboard")]
+
+
+def pass_summary(window=(62.1, 90.1), **kw):
+    s = summary(scenario="wall1m_pass_wind_8ms", **kw)
+    s.update(scored_mode="Offboard", hold_s=30.0)
+    s["metrics"]["window_s"] = list(window)
+    s["metrics"]["pass"] = {"travel_m": 5.0, "standoff_p95_m": 0.2, "along_p95_m": 0.3,
+                            "p95_while_moving_m": 0.35, "p95_while_still_m": 0.25,
+                            "end_error_m": 0.1, "moving_s": 11.0}
+    return s
+
+
+def test_stock_pass_row_expects_offboard_and_the_scenarios_hold_time():
+    r = row_from_summary(pass_summary(), ekf(PASS_SEQ))  # the stock runner's default: Hold
+    assert not r["crash"] and not r["failsafe_in_hover"] and not r["post_hold_fail"]
+    assert r["pass"]["standoff_p95_m"] == 0.2 and "moving_s" not in r["pass"]
+    # Offboard lost half way (a failsafe to Hold) is a failsafe in the window and, with the
+    # window cut short, a crash: the pass was not flown.
+    lost = PASS_SEQ[:4] + [(75.0, "Hold"), (90.1, "Land")]
+    cut = row_from_summary(pass_summary(window=(62.1, 75.0)), ekf(lost, 0.1))
+    assert cut["crash"] and cut["failsafe_in_hover"]
+    # A contact in a pass flown to the end is a crash too.
+    assert row_from_summary(pass_summary(contacts=1), ekf(PASS_SEQ))["crash"]
+
+
+def test_module_pass_row_reads_the_pass_numbers_from_the_hold():
+    s = summary(scenario="wall1m_pass_wind_8ms")
+    s["flight"] = s.pop("hover")
+    s["hold_s"] = 30.0
+    window = s["metrics"].pop("window_s")
+    s["hold"] = {"window_s": [62.0, 90.0], "pass": {"travel_m": 5.0, "standoff_p95_m": 0.1,
+                                                    "along_p95_m": 0.2}}
+    assert window  # the stock summary keeps it in the metrics; the hold runner under "hold"
+    seq = [(0.0, "Hold"), (16.0, "Takeoff"), (23.0, "Position"), (60.0, "External 1"),
+           (90.0, "Position")]
+    # 30 s of hold is the whole hold here, not half of run_gazebo's usual 60 s.
+    r = row_from_summary(s, ekf(seq), "External 1", 60.0)
+    assert not r["crash"] and r["pass"]["along_p95_m"] == 0.2
+    assert r["pass"]["p95_while_moving_m"] is None
+
+
+def test_table_lists_the_pass_numbers_when_a_batch_flew_passes():
+    from eval.baselines.run_baseline import table
+
+    rows = [row_from_summary(pass_summary(seed=s), ekf(PASS_SEQ)) for s in (1, 2)]
+    batch = {"label": "tuned", "params": "p.params", "commit": "abc", "rows": rows,
+             "aggregate": aggregate(rows)}
+    text = table(batch)
+    assert "standoff p95 m" in text and "| wall1m_pass_wind_8ms | mean of 2 |" in text
+    plain = [row_from_summary(summary(seed=1), ekf(CLEAN))]
+    assert "standoff" not in table({**batch, "rows": plain, "aggregate": aggregate(plain)})

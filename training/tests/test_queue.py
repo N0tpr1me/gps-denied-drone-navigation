@@ -64,6 +64,19 @@ def test_every_committed_queue_loads_and_plans():
         assert "GPUs busy" in table
 
 
+def test_every_committed_queue_set_applies_to_its_config():
+    # A `set` that points into a list (params.controllers.1) or names a config key that is not
+    # there would only fail on the server; launch's own override code catches it here.
+    for path in QUEUES.glob("*.yaml"):
+        for j in queue.load_queue(path).jobs:
+            if not (j.launch and j.set):
+                continue
+            cfg = yaml.safe_load((launch.REPO_ROOT / j.launch).read_text())
+            args = queue.set_args(j.set)
+            assert not any("\n" in a for a in args), j.id  # each ends up in a LOG.md row
+            launch.apply_overrides(cfg, args[1::2])
+
+
 def test_bad_queue_files_are_refused(tmp_path):
     with pytest.raises(ValueError, match="exactly one"):
         queue.load_queue(write_queue(tmp_path, [{"id": "a"}]))
@@ -185,6 +198,21 @@ def test_smoke_runs_every_job_once_without_chains_or_logging(tmp_path):
     assert s["chain"]["parts"][0]["run_dir"].endswith("-smoke")
     assert s["big"]["status"] == "ok"
     assert s["nosmoke"]["status"] == "skipped" and s["off"]["status"] == "skipped"
+
+
+def test_smoke_keeps_the_smoke_blocks_own_sizes(tmp_path):
+    cfg_path = tmp_path / "sized.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "name": "sized", "entrypoint": "training.tests.fake_entry", "seed": 3,
+        "expected_hours": 0.01, "gpus": 1, "params": {"mode": "ok", "num_envs": 128},
+        "smoke": {"num_envs": 8},
+    }))
+    job = queue.Job(id="big", launch=str(cfg_path),
+                    set={"params.num_envs": 2048, "params.only": ["a"]})
+    kw = dict(part=1, device="cpu", gpu=None, approved=False, resume=None)
+    assert "params.num_envs=2048" in queue.launch_command(job, smoke=False, **kw)
+    smoke = queue.launch_command(job, smoke=True, **kw)
+    assert "params.num_envs=2048" not in smoke and "params.only=[a]" in smoke
 
 
 def test_approval_gates_long_jobs(tmp_path):

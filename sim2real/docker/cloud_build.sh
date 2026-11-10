@@ -15,7 +15,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="${SITL_IMAGE:-structure-hold/px4-sitl:v1.17.0}"
+# PX4_TAG as in run.sh: v1.17.0 unless another release is being checked (docs/px4-versions.md).
+PX4_TAG="${PX4_TAG:-v1.17.0}"
+IMAGE="${SITL_IMAGE:-structure-hold/px4-sitl:${PX4_TAG}}"
 BASE="${CLOUD_BASE_IMAGE:-px4io/px4-dev-ros2-gazebo:main-jazzy}"
 CA="${CLOUD_CA_BUNDLE:-/root/.ccr/ca-bundle.crt}"
 [[ -f "${CA}" ]] || { echo "proxy CA not found: ${CA}" >&2; exit 1; }
@@ -39,7 +41,7 @@ cp "${CA}" "${tmp}/ca-bundle.crt"
 
 docker build --network host -t "${IMAGE}" -f "${tmp}/Dockerfile" \
     --build-context "cloudca=${tmp}" \
-    --build-arg "BASE_IMAGE=${BASE}" --build-arg PX4_SETUP=0 \
+    --build-arg "BASE_IMAGE=${BASE}" --build-arg PX4_SETUP=0 --build-arg "PX4_TAG=${PX4_TAG}" \
     --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}" \
     --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}" \
     --build-arg "http_proxy=${HTTP_PROXY:-${http_proxy:-}}" \

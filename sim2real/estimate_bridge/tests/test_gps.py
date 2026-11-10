@@ -185,3 +185,41 @@ def test_shipped_gps_profiles_pair_up(name, runner):
         assert p.gps_faults and p.estimate.jump_rate_hz == 0 and p.estimate.dropout_rate_hz == 0
     else:
         assert not p.gps_faults and p.estimate == load_profile(f"vio_at_{runner}").estimate
+
+
+# --- a receiver that is logged but not fused: RTK as truth (eval/rtk_truth.py) -------------
+
+def test_a_receiver_can_be_logged_without_being_fused():
+    from sim2real.estimate_bridge.run_estimate import (
+        DEFAULT_PARAMS,
+        gps_as_expected,
+        px4_params_for,
+    )
+
+    fused = EstimateProfile.from_dict({"name": "t", "gps": GPS})
+    logged = EstimateProfile.from_dict({"name": "t", "gps": {**GPS, "fused": False}})
+    assert fused.gps.fused and not logged.gps.fused
+    assert EstimateProfile.from_dict(logged.to_dict()).gps == logged.gps
+    on, off = px4_params_for(fused, DEFAULT_PARAMS), px4_params_for(logged, DEFAULT_PARAMS)
+    # Both have PX4 take the bridge's HIL_GPS as its receiver; only one lets EKF2 use it.
+    assert on["MAV_USEHILGPS"] == off["MAV_USEHILGPS"] == 1
+    assert on["SIM_GPS_USED"] == off["SIM_GPS_USED"] == 0
+    assert on["EKF2_GPS_CTRL"] == 7 and off["EKF2_GPS_CTRL"] == 0
+    # PX4's logger keeps sensor_gps at 1 Hz unless the high-rate sensors profile (bit 11) is
+    # on, and with SYS_HAS_GPS 0 there is no vehicle_gps_position: 1 Hz is no truth.
+    assert off["SDLOG_PROFILE"] & (1 << 11) and off["SDLOG_PROFILE"] & 1
+    # A logged-only receiver must leave the flight GPS-free, or the truth is not independent.
+    assert gps_as_expected(logged, {"gps_free": True})
+    assert not gps_as_expected(logged, {"gps_free": False})
+    assert gps_as_expected(fused, {"gps_free": False})
+
+
+@pytest.mark.parametrize("name", ["rtk_truth", "rtk_truth_float"])
+@pytest.mark.parametrize("runner", ["engage", "hover"])
+def test_shipped_rtk_truth_profiles_fly_the_benchmark_estimate_with_gps_logged(name, runner):
+    p = load_profile(f"{name}_at_{runner}")
+    assert p.gps is not None and p.gps.fix == "rtk_fixed" and not p.gps.fused
+    assert p.estimate == load_profile(f"vio_at_{runner}").estimate
+    assert p.fault_anchor == load_profile(f"vio_at_{runner}").fault_anchor
+    assert bool(p.gps_faults) == (name == "rtk_truth_float")
+    assert all(f.kind == "gps_float" for f in p.gps_faults)

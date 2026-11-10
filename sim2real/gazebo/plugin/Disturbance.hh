@@ -2,7 +2,8 @@
 //
 // The Python module is the source of truth. This header exists only so the Gazebo plugin
 // can evaluate the force inside every physics step without a Python round trip. It must
-// stay a line-for-line translation of ``_wind``, ``_shelter``, ``_air``, ``_drag`` and ``_force`` in
+// stay a line-for-line translation of ``_wind``, ``_shelter`` (with ``_wall_shelter`` and
+// ``_surface2_shelter``), ``_air``, ``_drag`` and ``_force`` in
 // core.py; sim2real/gazebo/parity.py (run by pytest wherever a C++ compiler exists, and
 // inside the SITL image) checks the two agree to 1e-9 N on random inputs.
 //
@@ -61,6 +62,16 @@ struct Params
   double shed_omega{0.0};
   double shed_phase{0.0};
   Vec3 shed_dir{0.0, 0.0, 0.0};
+  // A second surface, a deck overhead say (docs/bridge-holds.md); the defaults mean none.
+  bool has_surface2{false};
+  Vec3 surface2_point{0.0, 0.0, 0.0};
+  Vec3 surface2_normal{0.0, 0.0, 0.0};  // unit, from the surface into the free air
+  double surface2_decay{1.0};
+  double surface2_floor{1.0};
+  double surface2_shed_amp{0.0};
+  double surface2_shed_omega{0.0};
+  double surface2_shed_phase{0.0};
+  double surface2_wake_length{1.0};
 };
 
 namespace detail
@@ -171,6 +182,16 @@ inline Params LoadParams(const std::string &path)
   p.shed_omega = detail::Optional(fields, "shed_omega", 1, 0.0)[0];
   p.shed_phase = detail::Optional(fields, "shed_phase", 1, 0.0)[0];
   p.shed_dir = detail::ToVec3(detail::Optional(fields, "shed_dir", 3, 0.0));
+  // The second surface: files written before it read as none.
+  p.has_surface2 = detail::Optional(fields, "has_surface2", 1, 0.0)[0] != 0.0;
+  p.surface2_point = detail::ToVec3(detail::Optional(fields, "surface2_point", 3, 0.0));
+  p.surface2_normal = detail::ToVec3(detail::Optional(fields, "surface2_normal", 3, 0.0));
+  p.surface2_decay = detail::Optional(fields, "surface2_decay", 1, 1.0)[0];
+  p.surface2_floor = detail::Optional(fields, "surface2_floor", 1, 1.0)[0];
+  p.surface2_shed_amp = detail::Optional(fields, "surface2_shed_amp", 1, 0.0)[0];
+  p.surface2_shed_omega = detail::Optional(fields, "surface2_shed_omega", 1, 0.0)[0];
+  p.surface2_shed_phase = detail::Optional(fields, "surface2_shed_phase", 1, 0.0)[0];
+  p.surface2_wake_length = detail::Optional(fields, "surface2_wake_length", 1, 1.0)[0];
   return p;
 }
 
@@ -193,8 +214,8 @@ inline Vec3 Wind(const Params &p, double t)
   return w;
 }
 
-/// Fraction of the free-stream wind that reaches ``pos``: 1 in free air.
-inline double Shelter(const Params &p, const Vec3 &pos)
+/// The first surface's (the wall's) shelter factor: 1 in free air.
+inline double WallShelter(const Params &p, const Vec3 &pos)
 {
   if (!p.has_wall)
     return 1.0;
@@ -202,13 +223,30 @@ inline double Shelter(const Params &p, const Vec3 &pos)
   return 1.0 - (1.0 - p.wall_floor) * std::exp(-d / p.wall_decay);
 }
 
+/// The second surface's shelter factor: 1 without one.
+inline double Surface2Shelter(const Params &p, const Vec3 &pos)
+{
+  if (!p.has_surface2)
+    return 1.0;
+  const double d = std::max(dot(pos - p.surface2_point, p.surface2_normal), 0.0);
+  return 1.0 - (1.0 - p.surface2_floor) * std::exp(-d / p.surface2_decay);
+}
+
+/// Fraction of the free-stream wind that reaches ``pos``: 1 in free air, the product of
+/// both surfaces' factors where there are two.
+inline double Shelter(const Params &p, const Vec3 &pos)
+{
+  return WallShelter(p, pos) * Surface2Shelter(p, pos);
+}
+
 /// Air velocity (m/s) at ``pos``: the sheltered wind plus the near-wall flow (windward
-/// deflection, leeward recirculation, wake turbulence, vortex shedding).
+/// deflection, leeward recirculation, wake turbulence, vortex shedding) and the second
+/// surface's edge shedding.
 inline Vec3 Air(const Params &p, double t, const Vec3 &pos)
 {
   const Vec3 wind = Wind(p, t);
-  const double g = Shelter(p, pos);
-  const Vec3 air = g * wind;
+  const double g = WallShelter(p, pos);
+  const Vec3 air = (g * Surface2Shelter(p, pos)) * wind;
   const double d = std::max(dot(pos - p.wall_point, p.wall_normal), 0.0);
   const double w_n = dot(wind, p.wall_normal);  // > 0 blows away from the surface
   const double deflect = p.wall_deflect * (1.0 - g) * std::max(-w_n, 0.0);
@@ -224,7 +262,11 @@ inline Vec3 Air(const Params &p, double t, const Vec3 &pos)
   const double shed = p.shed_amp * std::sin(p.shed_omega * t + p.shed_phase);
   const Vec3 near = deflect * p.wall_tangent - recirc * p.wall_normal
                     + wake * (gusty + shed * p.shed_dir);
-  return air + near;
+  const double d2 = std::max(dot(pos - p.surface2_point, p.surface2_normal), 0.0);
+  const double shed2 = p.surface2_shed_amp
+                       * std::sin(p.surface2_shed_omega * t + p.surface2_shed_phase)
+                       * std::exp(-d2 / p.surface2_wake_length);
+  return air + near + shed2 * p.surface2_normal;
 }
 
 /// Drag (N) on air velocity ``v_rel`` relative to the drone.

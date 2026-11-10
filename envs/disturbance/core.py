@@ -28,6 +28,10 @@ sits in, again as closed-form functions of time and distance:
 - wake turbulence: extra turbulence near the surface that scales with the mean wind;
 - vortex shedding: a periodic crossflow at f = St * U / D in the lee of a finite structure.
 
+A second surface (off unless ``sample_params`` places one; docs/bridge-holds.md), such as a
+bridge deck overhead, adds its own shelter factor (the two multiply) and the vortices a deck
+sheds from its edges in a crosswind.
+
 The force is drag on the air velocity relative to the drone:
 
     v_rel = air(t, pos) - velocity,   air = g(d) * wind(t) + near-wall flow
@@ -41,8 +45,9 @@ Frames and units follow docs/conventions.md: world ENU, SI units, arrays ``(num_
 
 Not modelled yet: variation along the surface (every term depends on distance only), the
 yaw torque near the wall (the published case shows it changing sign, but one data point is
-not enough to fit it), ground effect, and a second surface (a wall and a deck at once). The
-fan rig in Phase 3 fits the parameters; until then the ranges are wide on purpose.
+not enough to fit it), ground and ceiling effect on the rotors, and the near-wall flow of the
+second surface beyond its shelter and edge shedding. The fan rig in Phase 3 fits the
+parameters; until then the ranges are wide on purpose.
 """
 
 from __future__ import annotations
@@ -125,6 +130,19 @@ class DisturbanceConfig:
     shed_width: tuple[float, float] = (0.5, 5.0)  # D, m
     shed_strouhal: tuple[float, float] = (0.1, 0.21)  # St: 0.2 a cylinder, 0.1 to 0.15 a deck
     shed_angle_deg: tuple[float, float] = (0.0, 0.0)
+    # A second surface, used only when sample_params places one (surface2_point and
+    # surface2_normal; docs/bridge-holds.md): a bridge deck over the drone, say. Its shelter
+    # is drawn as the first surface's and the two factors multiply. As a bluff deck in a
+    # crosswind it sheds vortices from its edges: a crossflow along its normal (vertical under
+    # a deck) of amplitude surface2_shed_amp times the mean wind across it, at
+    # 2 pi St |mean wind across| / D rad/s, decaying as exp(-d2 / surface2_wake_length).
+    # Shedding is off by default.
+    surface2_decay: tuple[float, float] = (0.5 * NOMINAL_WALL_DECAY, 2.0 * NOMINAL_WALL_DECAY)
+    surface2_floor: tuple[float, float] = (0.0, 0.3)
+    surface2_shed_amp: tuple[float, float] = (0.0, 0.0)
+    surface2_shed_width: tuple[float, float] = (1.0, 3.0)  # D, m: the deck's depth
+    surface2_shed_strouhal: tuple[float, float] = (0.1, 0.15)  # box-like bridge decks
+    surface2_wake_length: tuple[float, float] = (1.0, 4.0)  # m
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -136,6 +154,10 @@ class DisturbanceConfig:
             raise ValueError("turb_omega, turb_tau and wall_decay must be positive")
         if min(self.wall_recirc_length[0], self.wake_length[0], self.shed_width[0]) <= 0:
             raise ValueError("wall_recirc_length, wake_length and shed_width must be positive")
+        if min(self.surface2_decay[0], self.surface2_shed_width[0],
+               self.surface2_wake_length[0]) <= 0:
+            raise ValueError("surface2_decay, surface2_shed_width and surface2_wake_length "
+                             "must be positive")
 
     @property
     def near_wall_flow(self) -> bool:
@@ -194,6 +216,16 @@ class DisturbanceParams:
     shed_omega: Any  # (N,) rad/s
     shed_phase: Any  # (N,) rad
     shed_dir: Any  # (N, 3) unit, in the surface plane
+    # The second surface (has_surface2 False and the rest inert when there is none).
+    has_surface2: Any  # (N,) bool
+    surface2_point: Any  # (N, 3) m
+    surface2_normal: Any  # (N, 3) unit, from the surface into the free air
+    surface2_decay: Any  # (N,) m
+    surface2_floor: Any  # (N,)
+    surface2_shed_amp: Any  # (N,) m/s
+    surface2_shed_omega: Any  # (N,) rad/s
+    surface2_shed_phase: Any  # (N,) rad
+    surface2_wake_length: Any  # (N,) m
 
     @property
     def num_envs(self) -> int:
@@ -206,12 +238,22 @@ def sample_params(
     seed: int | np.random.Generator,
     wall_point: Any = None,
     wall_normal: Any = None,
+    surface2_point: Any = None,
+    surface2_normal: Any = None,
+    surface2_across: Any = None,
 ) -> DisturbanceParams:
     """Draw one episode's disturbance per env. Same config and seed give the same params.
 
     ``wall_point`` and ``wall_normal`` place one flat surface per env (shape ``(3,)`` or
     ``(N, 3)``); leave them out for free air. The normal points away from the surface,
     towards the drone, so it is minus the structure frame's x axis.
+
+    ``surface2_point`` and ``surface2_normal`` place a second surface the same way (a deck
+    overhead has normal ``(0, 0, -1)``). ``surface2_across`` is the horizontal direction
+    across it, the one a crosswind must blow along to shed vortices from its edges (across
+    a bridge: perpendicular to its axis); left out, the whole mean wind counts, the worst
+    case. The second surface draws after everything else, so leaving it out keeps the
+    random stream as it was.
     """
     rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
     n, k, m = num_envs, cfg.num_gusts, cfg.turb_components
@@ -258,6 +300,8 @@ def sample_params(
     # The near-wall flow draws last, so turning it on leaves every draw above unchanged.
     unit_normal = normal / norm
     flow = _near_wall_flow(cfg, rng if has_wall else None, mean_wind, shape, unit_normal)
+    second = _surface2(cfg, rng, n, mean_wind, surface2_point, surface2_normal,
+                       surface2_across)
 
     return DisturbanceParams(
         mean_wind=mean_wind,
@@ -275,6 +319,7 @@ def sample_params(
         wall_decay=wall_decay,
         wall_floor=wall_floor,
         **flow,
+        **second,
     )
 
 
@@ -336,6 +381,58 @@ def _near_wall_flow(
     )
 
 
+def _surface2(
+    cfg: DisturbanceConfig,
+    rng: np.random.Generator,
+    n: int,
+    mean_wind: np.ndarray,
+    point: Any,
+    normal: Any,
+    across: Any,
+) -> dict[str, np.ndarray]:
+    """The second surface's fields. Draws nothing without one, so configs and scenarios
+    that do not place it fly the same air from the same random stream as before."""
+    if normal is None:
+        zero, one = np.zeros(n), np.ones(n)
+        return dict(
+            has_surface2=np.zeros(n, dtype=bool), surface2_point=np.zeros((n, 3)),
+            surface2_normal=np.tile([0.0, 0.0, -1.0], (n, 1)), surface2_decay=one,
+            surface2_floor=one, surface2_shed_amp=zero, surface2_shed_omega=zero,
+            surface2_shed_phase=zero, surface2_wake_length=one,
+        )
+    unit = np.broadcast_to(np.asarray(normal, dtype=float), (n, 3))
+    norm = np.linalg.norm(unit, axis=-1, keepdims=True)
+    if np.any(norm < 1e-9):
+        raise ValueError("surface2_normal must be non-zero")
+    unit = unit / norm
+    point = np.broadcast_to(
+        np.asarray(point if point is not None else (0.0, 0.0, 0.0), dtype=float), (n, 3))
+    if across is None:
+        cross = np.linalg.norm(mean_wind, axis=-1)
+    else:
+        a = np.broadcast_to(np.asarray(across, dtype=float), (n, 3))
+        a_norm = np.linalg.norm(a, axis=-1, keepdims=True)
+        if np.any(a_norm < 1e-9):
+            raise ValueError("surface2_across must be non-zero")
+        cross = np.abs((mean_wind * (a / a_norm)).sum(-1))
+
+    def u(r: tuple[float, float]) -> np.ndarray:
+        return rng.uniform(r[0], r[1], size=n)
+
+    decay, floor = u(cfg.surface2_decay), u(cfg.surface2_floor)
+    shed_amp = u(cfg.surface2_shed_amp) * cross
+    shed_omega = 2.0 * math.pi * u(cfg.surface2_shed_strouhal) * cross / u(
+        cfg.surface2_shed_width)
+    shed_phase = rng.uniform(0.0, 2.0 * math.pi, size=n)
+    wake_length = u(cfg.surface2_wake_length)
+    return dict(
+        has_surface2=np.ones(n, dtype=bool), surface2_point=point.copy(),
+        surface2_normal=unit, surface2_decay=decay, surface2_floor=floor,
+        surface2_shed_amp=shed_amp, surface2_shed_omega=shed_omega,
+        surface2_shed_phase=shed_phase, surface2_wake_length=wake_length,
+    )
+
+
 # The functions below are written once for any array module ``xp`` (NumPy or torch): they
 # use only operators, broadcasting, ``.sum(dim)``, ``.clip(min=)`` and ``xp.cos``,
 # ``xp.sin``, ``xp.exp``, ``xp.sqrt``. The torch adapter calls the same code, so the two
@@ -362,9 +459,23 @@ def _wall_distance(p: DisturbanceParams, pos: Any) -> Any:
     return ((pos - p.wall_point) * p.wall_normal).sum(-1)
 
 
-def _shelter(xp: Any, p: DisturbanceParams, pos: Any) -> Any:
+def _wall_shelter(xp: Any, p: DisturbanceParams, pos: Any) -> Any:
     d = _wall_distance(p, pos).clip(min=0.0)
     return 1.0 - p.has_wall * (1.0 - p.wall_floor) * xp.exp(-d / p.wall_decay)
+
+
+def _surface2_distance(p: DisturbanceParams, pos: Any) -> Any:
+    return ((pos - p.surface2_point) * p.surface2_normal).sum(-1)
+
+
+def _surface2_shelter(xp: Any, p: DisturbanceParams, pos: Any) -> Any:
+    d = _surface2_distance(p, pos).clip(min=0.0)
+    return 1.0 - p.has_surface2 * (1.0 - p.surface2_floor) * xp.exp(-d / p.surface2_decay)
+
+
+def _shelter(xp: Any, p: DisturbanceParams, pos: Any) -> Any:
+    # Without a second surface its factor is exactly 1, so the product is the wall's own.
+    return _wall_shelter(xp, p, pos) * _surface2_shelter(xp, p, pos)
 
 
 def _drag(xp: Any, v_rel: Any, k_lin: Any, k_quad: Any) -> Any:
@@ -374,8 +485,8 @@ def _drag(xp: Any, v_rel: Any, k_lin: Any, k_quad: Any) -> Any:
 
 def _air(xp: Any, p: DisturbanceParams, t: Any, pos: Any) -> Any:
     wind = _wind(xp, p, t)
-    g = _shelter(xp, p, pos)
-    air = g[:, None] * wind
+    g = _wall_shelter(xp, p, pos)
+    air = (g * _surface2_shelter(xp, p, pos))[:, None] * wind
     # Near-wall flow. Every term is zero when the flow is off, and adding exact zeros leaves
     # the sheltered wind bit for bit as it was.
     d = _wall_distance(p, pos).clip(min=0.0)
@@ -389,7 +500,11 @@ def _air(xp: Any, p: DisturbanceParams, t: Any, pos: Any) -> Any:
     shed = p.shed_amp * xp.sin(p.shed_omega * t + p.shed_phase)
     near = (deflect[:, None] * p.wall_tangent - recirc[:, None] * p.wall_normal
             + wake[:, None] * (gusty + shed[:, None] * p.shed_dir))
-    return air + near
+    # The second surface's edge shedding, along its normal (zero amplitude without one).
+    d2 = _surface2_distance(p, pos).clip(min=0.0)
+    shed2 = (p.surface2_shed_amp * xp.sin(p.surface2_shed_omega * t + p.surface2_shed_phase)
+             * xp.exp(-d2 / p.surface2_wake_length))
+    return air + near + shed2[:, None] * p.surface2_normal
 
 
 def _force(xp: Any, p: DisturbanceParams, t: Any, pos: Any, vel: Any) -> Any:
@@ -405,6 +520,12 @@ def wind_velocity(p: DisturbanceParams, t: Any) -> np.ndarray:
     return _wind(np, p, _arr(t))
 
 
+def surface2_distance(p: DisturbanceParams, pos: Any) -> np.ndarray:
+    """Signed distance (N,) in m from each env's second surface; meaningless where
+    ``has_surface2`` is False."""
+    return _surface2_distance(p, _arr(pos))
+
+
 def wall_distance(p: DisturbanceParams, pos: Any) -> np.ndarray:
     """Signed distance (N,) in m from each env's surface; meaningless where ``has_wall`` is
     False."""
@@ -412,7 +533,8 @@ def wall_distance(p: DisturbanceParams, pos: Any) -> np.ndarray:
 
 
 def shelter_factor(p: DisturbanceParams, pos: Any) -> np.ndarray:
-    """Fraction (N,) of the free-stream wind that reaches ``pos``: 1 in free air."""
+    """Fraction (N,) of the free-stream wind that reaches ``pos``: 1 in free air, the product
+    of both surfaces' factors where there are two."""
     return _shelter(np, p, _arr(pos))
 
 

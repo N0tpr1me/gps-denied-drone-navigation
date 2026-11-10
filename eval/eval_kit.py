@@ -74,6 +74,7 @@ TRIP_TEXT = {
     "estimate_invalid": "tripped (estimate lost) and handed back",
     "estimate_stale": "tripped (estimate late) and handed back",
     "estimate_frozen": "tripped (estimate frozen) and handed back",
+    "estimate_runaway": "tripped (VIO ran away) and handed back",
     "range_lost": "tripped (rangefinder lost) and handed back",
     "tilt": "tripped (tilt limit) and handed back",
 }

@@ -75,8 +75,10 @@ step "3. repo into Isaac's Python (keeping Isaac's torch and numpy)" install.log
     ${PY} -m pip install -e '.[torch,dev]' -c /tmp/keep.txt
 step "3b. isaac_available" available.log \
     ${PY} -c "import isaaclab, envs.sims.isaac_quad as q; assert q.isaac_available(); print('isaac ok')"
+# The stock tutorial steps the sim until the app is closed, so it never exits by itself:
+# give it 2 minutes, then Ctrl-C (SIGINT, a clean shutdown). Reaching the timeout is a pass.
 step "4. Isaac starts headless" headless.log \
-    ${PY} "${ISAAC_DIR}/scripts/tutorials/00_sim/log_time.py" --headless
+    bash -c "timeout -s INT -k 30 120 ${PY} ${ISAAC_DIR}/scripts/tutorials/00_sim/log_time.py --headless; rc=\$?; [ \$rc -eq 0 ] || [ \$rc -eq 124 ]"
 step "5. repo tests in Isaac's Python (no Isaac SKIPs allowed)" tests.log \
     ${PY} -m pytest -rs envs/sims eval/tests/test_sim_parity.py training/tests/test_isaac_ready.py
 if grep -qi "skipped.*isaac" "${OUT}/tests.log"; then

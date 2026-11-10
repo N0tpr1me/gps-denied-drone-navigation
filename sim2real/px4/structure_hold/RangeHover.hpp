@@ -46,6 +46,7 @@ public:
 	static constexpr float GRAVITY = 9.80665f;
 	static constexpr float TAU_S = 2.f;  // long against a gust, short against a wind shift
 	static constexpr float MAX_ACCEL = 5.f;  // about 27 deg of lean; more is not wind
+	static constexpr int LAG_S = 8;  // a runaway is caught 2 to 6 s in; 8 s is before it
 
 	/**
 	 * One tick. ``body_z_ned`` is the third column of the body-to-NED rotation, ``good``
@@ -53,6 +54,21 @@ public:
 	 */
 	void update(const float body_z_ned[3], float dt, bool good)
 	{
+		// Once a second, what the lean was: the range hover after a VIO runaway starts from
+		// the lean of LAG_S ago, before the vehicle chased the runaway (and EKF2 tilted to
+		// follow it), not the lean it learned while doing so.
+		if (dt > 0.f && _have) {
+			_since_push += dt;
+
+			if (_since_push >= 1.f) {
+				_since_push = 0.f;
+				_hist[_hist_head][0] = _a[0];
+				_hist[_hist_head][1] = _a[1];
+				_hist_head = (_hist_head + 1) % (LAG_S + 1);
+				_hist_n = _hist_n < LAG_S + 1 ? _hist_n + 1 : _hist_n;
+			}
+		}
+
 		if (!good || !(dt > 0.f) || !(body_z_ned[2] > 0.5f)) {  // frozen, or tilted past 60 deg
 			return;
 		}
@@ -76,7 +92,27 @@ public:
 		_a[1] += (ay - _a[1]) * k;
 	}
 
-	void reset() { _a[0] = _a[1] = 0.f; _have = false; }
+	void reset() { _a[0] = _a[1] = 0.f; _have = false; _hist_n = 0; _hist_head = 0; _since_push = 0.f; }
+
+	/** The lean of about LAG_S seconds ago (the oldest one kept while fewer have been):
+	 * ``a[0]`` north, ``a[1]`` east. False while there is none. */
+	bool lagged(float a[2]) const
+	{
+		if (!_have) {
+			return false;
+		}
+
+		if (_hist_n == 0) {
+			a[0] = _a[0];
+			a[1] = _a[1];
+			return true;
+		}
+
+		const int oldest = _hist_n < LAG_S + 1 ? 0 : _hist_head;
+		a[0] = _hist[oldest][0];
+		a[1] = _hist[oldest][1];
+		return true;
+	}
 	bool valid() const { return _have; }
 	float x() const { return _a[0]; }
 	float y() const { return _a[1]; }
@@ -86,6 +122,10 @@ private:
 
 	float _a[2] {0.f, 0.f};
 	bool _have{false};
+	float _hist[LAG_S + 1][2] {};
+	int _hist_head{0};
+	int _hist_n{0};
+	float _since_push{0.f};
 };
 
 struct RangeHoverGains {

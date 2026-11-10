@@ -75,6 +75,64 @@ PARAM_DEFINE_FLOAT(SH_WD_TILT, 45.0f);
 PARAM_DEFINE_FLOAT(SH_WD_FRZ_T, 1.0f);
 
 /**
+ * Watchdog: VIO runaway, velocity disagreement with the IMU
+ *
+ * Trips the watchdog when the VIO's velocity (the odometry fix, SH_FIX_SRC) has changed by
+ * more than this much more than the IMU says the vehicle's velocity changed, over 3 s, for
+ * 0.5 s in a row; and refuses an engage while it is so. A VIO that locks onto moving dust
+ * runs away with its position and velocity agreeing with each other, on time, with no
+ * tracking loss reported (docs/field-faults.md, "Heavy dust"): only the IMU disagrees. The
+ * VIO is then not trusted until it reports a restart (ODOMETRY reset_counter) or the
+ * vehicle disarms: the handback takes the horizontal estimate as gone (Altitude mode, never
+ * Position mode), and with SH_HB_RANGE 1 Structure Hover holds the wall distance on the
+ * rangefinder. Needs the odometry fix with a velocity in NED or the body frame. 0 = off.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WD_VIO_DV, 0.8f);
+
+/**
+ * Stop EKF2 fusing a VIO that ran away
+ *
+ * EKF2 keeps fusing a runaway VIO (SH_WD_VIO_DV) and turns its own attitude estimate to
+ * agree with it, so the drone physically accelerates with the runaway even in a mode that
+ * flies no position: in Gazebo, Structure Hover on the rangefinder slid 84 to 88 m along
+ * the wall (docs/field-faults.md, "Heavy dust"). With 1, once the runaway is caught while
+ * one of the module's modes flies or hands back, the module clears EKF2_EV_CTRL's position
+ * and velocity bits (yaw kept) so EKF2 stops fusing the VIO, and puts the old value back
+ * when the VIO reports a restart (ODOMETRY reset_counter) or the vehicle disarms. Not while
+ * another mode flies with the module on standby, nor in Structure Land. 0: EKF2 untouched.
+ *
+ * @boolean
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_WD_EV_CUT, 1);
+
+/**
+ * Pre-arm: VIO speed with the vehicle at rest that blocks arming
+ *
+ * A VIO started in drifting dust can take the grains for motion and run away while the
+ * vehicle sits on the ground (docs/vio-render.md: up to 2.8 m/s before take-off). EKF2 fuses
+ * it, and a take-off in any position mode then follows it. While the vehicle is disarmed
+ * and the land detector has it at rest (IMU only), the module averages the VIO's velocity
+ * over 1 s; over this limit for 2 s in a row it tells commander to refuse arming, in every
+ * mode, and tells the pilot. Arming is allowed again once the VIO has reported under the
+ * limit for 10 s at rest, or has gone silent for 5 s. A runaway caught by SH_WD_VIO_DV
+ * while disarmed blocks and clears the same way. Never acts once armed. 0 = off.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 5.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_WD_GND_V, 0.3f);
+
+/**
  * Watchdog: entry hold-off after an estimator reset
  *
  * Structure Hold refuses to engage (commander keeps the current mode, or the module hands
@@ -466,6 +524,68 @@ PARAM_DEFINE_INT32(SH_HB_GUARD, 1);
  * @group Structure Hold
  */
 PARAM_DEFINE_INT32(SH_HB_RANGE, 1);
+
+/**
+ * Surface pass: length (0 = no pass)
+ *
+ * With a length set, every engage of Structure Hold flies one pass: the hold point waits
+ * SH_PASS_T0 after the engage, then slides this far along the wall at the same standoff,
+ * at SH_PASS_SPD, and holds where it stopped (PassPath.hpp, docs/surface-passes.md).
+ * Positive is to the right as the drone faces the structure, negative to the left; with
+ * SH_PASS_DIR 1 positive is up and negative down. The wall guard and the keep-out keep
+ * acting on the moving point, a keep-out move ends the pass where it is, and the pass waits
+ * once the position estimate has been stale for 2 s (from SH_FB_T with the fallback on).
+ * A change takes effect at the next engage. Off by default: 0 is the plain hold.
+ *
+ * @unit m
+ * @min -10.0
+ * @max 10.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_LEN, 0.0f);
+
+/**
+ * Surface pass: direction
+ *
+ * 0: along the wall, level. 1: up or down the wall (a pier, a column); a pass down stops
+ * 1 m above the ground when PX4 has a valid distance to it, and otherwise the pilot has to
+ * leave it the room.
+ *
+ * @value 0 Along the wall
+ * @value 1 Up or down the wall
+ * @group Structure Hold
+ */
+PARAM_DEFINE_INT32(SH_PASS_DIR, 0);
+
+/**
+ * Surface pass: cruise speed
+ *
+ * The hold point speeds up at 0.5 m/s^2 to this, and slows down at the same rate to stop
+ * at the end. Released policies are scored on passes from 0.2 to 1 m/s
+ * (docs/surface-passes.md).
+ *
+ * @unit m/s
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_SPD, 0.5f);
+
+/**
+ * Surface pass: settle time before it starts
+ *
+ * Seconds of plain hold after the engage before the hold point starts to move, counted
+ * only while the position estimate is fresh.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 1
+ * @group Structure Hold
+ */
+PARAM_DEFINE_FLOAT(SH_PASS_T0, 3.0f);
 
 /**
  * Ground station: period of the one-line status while a mode flies

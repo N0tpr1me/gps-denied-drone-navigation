@@ -12,6 +12,7 @@ from typing import Any
 import torch
 
 from envs.estimate.core import EstimateCorruptionConfig, EstimateCorruptor, StepNoise
+from envs.estimate.heading import HeadingError, HeadingErrorConfig
 
 
 class TorchEstimateCorruptor(EstimateCorruptor):
@@ -79,3 +80,31 @@ class TorchEstimateCorruptor(EstimateCorruptor):
         if noise is not None:
             noise = StepNoise(*(self._as_array(x) for x in noise))
         return super().step(pos, vel, noise)
+
+
+class TorchHeadingError(HeadingError):
+    """``heading.HeadingError`` on tensors; draws from a seeded ``torch.Generator``."""
+
+    xp = torch
+
+    def __init__(self, cfg: HeadingErrorConfig, num_envs: int, dt: float, seed: int,
+                 device: str | torch.device = "cpu", dtype: torch.dtype = torch.float32):
+        self.device = torch.device(device)
+        self.dtype = dtype
+        super().__init__(cfg, num_envs, dt, seed)
+
+    def _init_rng(self, seed: int) -> None:
+        self._rng = torch.Generator(device=self.device)
+        self._rng.manual_seed(int(seed) * 7919 + 0x4EAD)
+
+    def _zeros(self, shape: tuple[int, ...]) -> torch.Tensor:
+        return torch.zeros(shape, dtype=self.dtype, device=self.device)
+
+    def _rand(self, shape: tuple[int, ...]) -> torch.Tensor:
+        return torch.rand(shape, generator=self._rng, device=self.device, dtype=self.dtype)
+
+    def _as_mask(self, env_ids: Any) -> torch.Tensor:
+        mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        ids = env_ids if isinstance(env_ids, torch.Tensor) else list(env_ids)
+        mask[torch.as_tensor(ids, device=self.device, dtype=torch.int64)] = True
+        return mask

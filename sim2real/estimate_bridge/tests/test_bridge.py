@@ -508,6 +508,19 @@ def test_heartbeat_decoding_matches_sitl_test():
     assert structure_hold_engaged(custom(4, 12))  # a later external mode
     assert not structure_hold_engaged(custom(4, 3))  # Hold
     assert not structure_hold_engaged(custom(3, 0))  # Position
+    assert not structure_hold_engaged(custom(6, 0))  # Offboard is not the module
+
+
+def test_offboard_counts_as_the_pass_baselines_engage():
+    from sim2real.estimate_bridge.heartbeat import offboard_engaged
+
+    def custom(main, sub):
+        return (main << 16) | (sub << 24)
+
+    assert offboard_engaged(custom(6, 0))
+    assert not offboard_engaged(custom(4, 11))  # Structure Hold
+    assert not offboard_engaged(custom(4, 3))  # Hold
+    assert not offboard_engaged(custom(3, 0))  # Position
 
 
 def test_an_engage_on_the_ground_does_not_count_for_the_anchor():

@@ -122,6 +122,9 @@ struct StructureFrame {
 struct VehicleSample {
 	float pos_ned[3] {0.f, 0.f, 0.f};
 	float vel_ned[3] {0.f, 0.f, 0.f};
+	// The hold point's own velocity (a surface pass, PassPath.hpp); zero on a plain hold.
+	// The velocity input is the vehicle's velocity relative to it, as in the env.
+	float hold_vel_ned[3] {0.f, 0.f, 0.f};
 	float R[3][3] {{1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}};  // body FRD -> NED
 	float rates_frd[3] {0.f, 0.f, 0.f};
 	bool stale{false};  // no fresh position fix within the expected interval
@@ -148,12 +151,18 @@ inline void buildObservation(const StructureFrame &f, const VehicleSample &s, co
 			     float obs[policy::NUM_OBS])
 {
 	using namespace policy;
-	float d_ned[3], d_s[3], v_s[3];
+	float d_ned[3], v_ned[3], d_s[3], v_s[3];
 
-	for (int i = 0; i < 3; i++) { d_ned[i] = s.pos_ned[i] - f.hold_ned[i]; }
+	for (int i = 0; i < 3; i++) {
+		d_ned[i] = s.pos_ned[i] - f.hold_ned[i];
+		// Relative to the hold point (env.py: estimate_vel - hold_vel): on a pass, keeping
+		// up with the point reads as standing still, which is what the policy was trained
+		// to do, and the fallback below brakes to the point's speed, not to zero.
+		v_ned[i] = s.vel_ned[i] - s.hold_vel_ned[i];
+	}
 
 	f.toStructure(d_ned, d_s);
-	f.toStructure(s.vel_ned, v_s);
+	f.toStructure(v_ned, v_s);
 
 	for (int i = 0; i < 3; i++) {
 		obs[OBS_POS_ERR + i] = clampf(d_s[i], -OBS_POS_CLIP_M, OBS_POS_CLIP_M);

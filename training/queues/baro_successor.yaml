@@ -1,0 +1,205 @@
+# PARKED (docs/baro-successor.md "Is it still needed?"): ready to run, but do not start it
+# unless Zain asks. The looser barometer holds it was written for were a scoring offset, and
+# v22's recipe has already been retrained on the barometer three times (docs/gazebo_check.md
+# "Seed repeatability": 6 to 10 % tighter than v22 in the check, one seed of three passing).
+#
+# v22's successor on barometer height (docs/baro-successor.md): v22 continued in the mock on
+# the height source the benchmark flies (EKF2_HGT_REF 0), three seeds, then each judged
+# against v22 in the Gazebo-like check. Three seeds because a margin inside about 10 % is
+# within one seed's luck (CLAUDE.md "Releasing a policy"). Runs on its own or beside the
+# other queues; it needs nothing from them (no SITL image, no Gazebo: the re-fly of a passing
+# candidate is the cloud's, against tuned PX4).
+#
+#   python -m training.queue training/queues/baro_successor.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/baro_successor.yaml --smoke
+#   python -m training.queue training/queues/baro_successor.yaml --max-gpus 2
+#
+# Every job is under 1 h on 1 GPU and at most 2 GPUs are busy at once, so nothing here needs a
+# separate yes. About 5.1 GPU-hours, done about 2.6 h after the start on 2 free GPUs. Check
+# the first training's env_steps_per_s in its stdout.log: if a part would pass 1 h on this
+# machine, cut `iterations` in training/configs/structure_hold_ppo_v28_baro.yaml.
+name: baro_successor
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- GPU: three seeds, one card each
+  - id: baro_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro.yaml
+    hours: 0.9
+    why: "v22's recipe from v22's ONNX with the fusion on barometer height, nothing else moved, 4096 drones, 800 iterations, seed 0"
+
+  - id: baro_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro.yaml
+    set: {seed: 1}
+    hours: 0.9
+    why: "baro_s0, seed 1"
+
+  - id: baro_s2
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro.yaml
+    set: {seed: 2}
+    hours: 0.9
+    why: "baro_s0, seed 2"
+
+  # ---------------------------------------------------------------- GPU: the check, one seed per card
+  # One candidate against v22 per job keeps each under the hour (v22's rows are the same in
+  # all three: same seeds, same episodes).
+  - id: baro_check_s0
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set: {params.candidates.baro_s0: "{run:baro_s0}/policy.onnx"}
+    after: [baro_s0]
+    hours: 0.8
+    why: "baro_s0 against v22 on barometer height, 10 cells; go/no-go: beats v22 with every rule passed (p95 lower, lift, ring, fast ring, crashes, the three seed replays, re-engage, calm_clean within 0.02 m)"
+
+  - id: baro_check_s1
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set: {params.candidates.baro_s1: "{run:baro_s1}/policy.onnx"}
+    after: [baro_s1]
+    hours: 0.8
+    why: "baro_s1 against v22, the same check"
+
+  - id: baro_check_s2
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set: {params.candidates.baro_s2: "{run:baro_s2}/policy.onnx"}
+    after: [baro_s2]
+    hours: 0.8
+    why: "baro_s2 against v22, the same check"
+
+  # ---------------------------------------------------------------- not the server's: the re-fly
+  - id: gz_baro_candidate
+    cmd: >
+      echo "fly the candidate in the cloud (Gazebo flies there, docs/gpu-server.md): export its
+      header and build an image as server_week1's gz_v24_image, then 3 scenarios x seeds 1 to 8
+      with the hold runner on px4_tuned_v2.params, --jobs 1, against the cloud's tuned PX4 and
+      v22 batches (docs/baro-successor.md, After the check)"
+    smoke_cmd: "true"
+    after: [baro_check_s0, baro_check_s1, baro_check_s2]
+    hours: 1.0
+    enabled: false
+    why: "only if the recipe beats v22 on at least two of the three seeds; nothing is released on the mock score, and release is Zain's decision"
+
+  # ---------------------------------------------------------------- off: the rangefinder line
+  # The barometer step for v24 (23 inputs, the wall-range candidate). Off until the cloud
+  # Gazebo re-fly decides v24: if v24 is released, the successor continues v24, not v22, and
+  # these checks judge it against v24 without a rangefinder and with one on every flight.
+  - id: baro_range_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro_range.yaml
+    hours: 0.9
+    enabled: false
+    why: "v24's recipe from v24's ONNX on barometer height, seed 0; only if v24 is released"
+
+  - id: baro_range_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro_range.yaml
+    set: {seed: 1}
+    hours: 0.9
+    enabled: false
+    why: "baro_range_s0, seed 1"
+
+  - id: baro_range_s2
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v28_baro_range.yaml
+    set: {seed: 2}
+    hours: 0.9
+    enabled: false
+    why: "baro_range_s0, seed 2"
+
+  - id: baro_range_check_s0
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      params.candidates.baro_range_s0: "{run:baro_range_s0}/policy.onnx"
+    after: [baro_range_s0]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s0 against v24 without a rangefinder, as the benchmark's x500 flies"
+
+  - id: baro_range_check_s1
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      params.candidates.baro_range_s1: "{run:baro_range_s1}/policy.onnx"
+    after: [baro_range_s1]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s1 against v24 without a rangefinder, as the benchmark's x500 flies"
+
+  - id: baro_range_check_s2
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      params.candidates.baro_range_s2: "{run:baro_range_s2}/policy.onnx"
+    after: [baro_range_s2]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s2 against v24 without a rangefinder, as the benchmark's x500 flies"
+
+  - id: baro_range_check_rf_s0
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      # A forward rangefinder on every flight, as noisy as v24 trained on
+      # (eval/configs/gazebo_check_v24_range.yaml).
+      params.base_env.range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01,
+                              noise_frac: 0.005, scale_error: [-0.02, 0.02],
+                              outlier_prob: 0.01, dropout_rate_hz: 0.05, dropout_s: [0.2, 2.0]}
+      params.candidates.baro_range_s0: "{run:baro_range_s0}/policy.onnx"
+    after: [baro_range_s0]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s0 against v24 with the rangefinder, as run_gazebo --rangefinder flies"
+
+  - id: baro_range_check_rf_s1
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      # A forward rangefinder on every flight, as noisy as v24 trained on
+      # (eval/configs/gazebo_check_v24_range.yaml).
+      params.base_env.range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01,
+                              noise_frac: 0.005, scale_error: [-0.02, 0.02],
+                              outlier_prob: 0.01, dropout_rate_hz: 0.05, dropout_s: [0.2, 2.0]}
+      params.candidates.baro_range_s1: "{run:baro_range_s1}/policy.onnx"
+    after: [baro_range_s1]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s1 against v24 with the rangefinder, as run_gazebo --rangefinder flies"
+
+  - id: baro_range_check_rf_s2
+    gpu: true
+    launch: eval/configs/gazebo_check_v28.yaml
+    set:
+      params.controllers.0.name: v24
+      params.controllers.0.policy: training/policies/structure_hold_v24.onnx
+      params.reference: v24
+      # A forward rangefinder on every flight, as noisy as v24 trained on
+      # (eval/configs/gazebo_check_v24_range.yaml).
+      params.base_env.range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01,
+                              noise_frac: 0.005, scale_error: [-0.02, 0.02],
+                              outlier_prob: 0.01, dropout_rate_hz: 0.05, dropout_s: [0.2, 2.0]}
+      params.candidates.baro_range_s2: "{run:baro_range_s2}/policy.onnx"
+    after: [baro_range_s2]
+    hours: 0.8
+    enabled: false
+    why: "baro_range_s2 against v24 with the rangefinder, as run_gazebo --rangefinder flies"

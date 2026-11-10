@@ -32,13 +32,20 @@ whether Structure Hold (external mode 1 under the auto main mode, as sitl_test.p
 it) is flying. A profile with ``fault_anchor: engage`` keys its fault schedule to the first
 such sample (``bridge.py``). The mode only counts once the vehicle is airborne
 (``heartbeat.airborne_engage``): the flight sequence first tries an engage on the ground,
-which the module refuses, and the mode shows for a moment then.
+which the module refuses, and the mode shows for a moment then. PX4's Offboard mode counts
+as an engage too: the stock-PX4 pass flight (``sim2real/px4/pass_flight.py``) starts its
+scored pass at that switch.
 
 GPS: a profile with a ``gps`` block (``gps.py``) also gets a HIL_GPS message per receiver
 tick on the same link: the truth in the world's latitude and longitude with the profile's
 noise and scripted faults, which PX4 takes as a ``sensor_gps`` instance (``MAV_USEHILGPS``
 1, ``gps_on.params``) and EKF2 fuses beside the vision stream. Nothing is sent while the
 receiver is scripted quiet.
+
+Heading error: a profile with a ``vision_yaw`` block (``vision_yaw.py``) also fills
+ODOMETRY's attitude with the vehicle's true attitude turned about the vertical by the scripted
+error, which EKF2 then fuses as its heading (``vision_yaw.params``). Without it the attitude
+stays NaN and EKF2's heading comes from the compass.
 
 Rangefinder: a profile with a ``rangefinder`` entry (``run_gazebo --rangefinder``) also
 gets a forward DISTANCE_SENSOR (MAV_SENSOR_ROTATION_NONE, i.e. forward facing) on the same
@@ -66,8 +73,12 @@ from pymavlink.dialects.v20 import common as mavlink
 from envs.frames import enu_to_ned
 from sim2real.estimate_bridge.bridge import TraceWriter, odometry_ned
 from sim2real.estimate_bridge.config import load_profile
-from sim2real.estimate_bridge.gps import SATELLITES, enu_to_lat_lon_alt
-from sim2real.estimate_bridge.heartbeat import airborne_engage, structure_hold_engaged
+from sim2real.estimate_bridge.gps import SATELLITES, WORLD_ORIGIN, enu_to_lat_lon_alt
+from sim2real.estimate_bridge.heartbeat import (
+    airborne_engage,
+    offboard_engaged,
+    structure_hold_engaged,
+)
 
 NAN = float("nan")
 NAN21 = [NAN] * 21
@@ -86,6 +97,8 @@ class Bridge:
         self.lock = threading.Lock()
         self.sent = self.dropped = self.received = 0
         self.rangefinder = self.profile.rangefinder
+        self.vision_yaw = self.profile.vision_yaw
+        self.quat_enu_flu = (1.0, 0.0, 0.0, 0.0)  # Gazebo's latest true attitude
         self.ranges_sent = 0
         self.gps_sent = 0
         self.origin = (args.origin_lat, args.origin_lon, args.origin_alt)
@@ -100,6 +113,11 @@ class Bridge:
             print(f"bridge: forward rangefinder at {self.rangefinder.rate_hz:.0f} Hz against "
                   f"the wall at {self.rangefinder.wall_point}, normal "
                   f"{self.rangefinder.normal_toward}", flush=True)
+        if self.vision_yaw is not None:
+            v = self.vision_yaw
+            print(f"bridge: vision yaw sent, heading off by {v.offset_deg:+.1f} deg, drifting "
+                  f"{v.drift_rate_deg_s:+.2f} deg/s up to {v.drift_max_deg:.1f} deg from "
+                  f"{v.drift_at_s:.1f} s after the anchor", flush=True)
         if self.profile.gps is not None:
             print(f"bridge: GPS at {self.profile.gps.rate_hz:.0f} Hz, {self.profile.gps.fix}, "
                   f"{len(self.profile.gps_faults)} scripted faults", flush=True)
@@ -135,6 +153,8 @@ class Bridge:
         t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         with self.lock:
             self.received += 1
+            q = pose.orientation
+            self.quat_enu_flu = (q.w, q.x, q.y, q.z)
             if self.rangefinder is not None:
                 self.send_range(t, pose)
             was_anchored = self.bridge.anchored
@@ -177,7 +197,8 @@ class Bridge:
             return
         if msg.get_srcComponent() != mavlink.MAV_COMP_ID_AUTOPILOT1:
             return
-        engaged = structure_hold_engaged(msg.custom_mode)
+        # Offboard is the stock-PX4 pass flight's engage (heartbeat.offboard_engaged).
+        engaged = structure_hold_engaged(msg.custom_mode) or offboard_engaged(msg.custom_mode)
         with self.lock:
             if engaged != self.engaged:
                 print(f"bridge: Structure Hold {'engaged' if engaged else 'not flying'}",
@@ -186,10 +207,14 @@ class Bridge:
 
     def send(self, sample) -> None:
         p, v = odometry_ned(sample, self.profile.frame_mistake)
+        q = [NAN, NAN, NAN, NAN]
+        if self.vision_yaw is not None:
+            q = [float(c) for c in self.vision_yaw.attitude_ned(
+                self.quat_enu_flu, self.bridge.t_rel(sample.t))]
         self.mav.mav.odometry_send(
             int(round(sample.t * 1e6)),
             mavlink.MAV_FRAME_LOCAL_NED, mavlink.MAV_FRAME_LOCAL_NED,
-            float(p[0]), float(p[1]), float(p[2]), [NAN, NAN, NAN, NAN],
+            float(p[0]), float(p[1]), float(p[2]), q,
             float(v[0]), float(v[1]), float(v[2]), NAN, NAN, NAN,
             NAN21, NAN21, sample.resets % 256, mavlink.MAV_ESTIMATOR_TYPE_VIO, 100,
         )
@@ -244,11 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14030")
     ap.add_argument("--sysid", type=int, default=1)
     ap.add_argument("--heartbeat-timeout-s", type=float, default=120.0)
-    # The world's spherical coordinates (wall_slab.sdf copies PX4's default world), so
-    # PX4's ground-truth topic, which it derives from them, shares the vision origin.
-    ap.add_argument("--origin-lat", type=float, default=47.397971057728974)
-    ap.add_argument("--origin-lon", type=float, default=8.546163739800146)
-    ap.add_argument("--origin-alt", type=float, default=0.0)
+    # The world's spherical coordinates (gps.WORLD_ORIGIN), so PX4's ground-truth topic,
+    # which it derives from them, shares the vision origin.
+    ap.add_argument("--origin-lat", type=float, default=WORLD_ORIGIN[0])
+    ap.add_argument("--origin-lon", type=float, default=WORLD_ORIGIN[1])
+    ap.add_argument("--origin-alt", type=float, default=WORLD_ORIGIN[2])
     ap.add_argument("--no-origin", action="store_true", help="send no global origin")
     args = ap.parse_args(argv)
 

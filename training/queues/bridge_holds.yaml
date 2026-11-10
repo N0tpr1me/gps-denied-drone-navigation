@@ -1,0 +1,84 @@
+# Holds under a bridge deck and beside a pier (GPU plan item 5; docs/bridge-holds.md):
+# v22 against tuned PX4 in the two bridge worlds in Gazebo, the mock check on the server's
+# own numbers, and a fine-tune that runs only if v22 loses. Every job is under 1 h and uses
+# at most one GPU, so none needs Zain's yes; at most two GPU jobs run at once (the two
+# fine-tune seeds), within Zain's 2-GPU limit.
+#
+#   python -m training.queue training/queues/bridge_holds.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/bridge_holds.yaml --smoke
+#   python -m training.queue training/queues/bridge_holds.yaml
+#
+# The Gazebo lane needs an image with the bridge worlds and the wind plugin's second
+# surface: gz_bridge_image rebuilds it from the checkout (only the plugin and world layer
+# changes, so it takes minutes). Go/no-go: v22's mean p95 below tuned PX4's in each of
+# the three scenarios with 0 crashes, as on the flat wall (docs/baseline.md); a scenario
+# where it is not turns on bridge_ft_s0/s1 (set enabled: true) and then bridge_ft_check.
+name: bridge_holds
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- GPU: the mock, v22 vs the PD
+  - id: bridge_check_v22
+    gpu: true
+    launch: eval/configs/bridge_holds_v22.yaml
+    hours: 0.3
+    why: "v22 vs the PD in 7 bridge cells (deck corner, open deck, pier wake); the cloud CPU run is in experiments/LOG.md, this one must match it"
+
+  # ---------------------------------------------------------------- CPU lane: Gazebo, tuned PX4 then v22
+  - id: gz_bridge_image
+    cmd: sim2real/docker/run.sh build
+    smoke_cmd: test -f sim2real/gazebo/worlds/bridge_deck.sdf && test -f sim2real/gazebo/worlds/bridge_pier.sdf
+    hours: 0.2
+    why: "the SITL image with bridge_deck.sdf, bridge_pier.sdf and the plugin's second surface"
+
+  - id: gz_bridge_tuned
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_v2_bridge --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios deck_corner_8ms_flow deck_open_8ms_flow pier_lee_8ms_flow
+      -- --profile vio_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_bridge_image]
+    hours: 0.4
+    why: "tuned PX4 under the deck (corner and open) and in the pier's wake, 24 flights (crashes allowed: that is the result)"
+
+  - id: gz_bridge_v22
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_bridge --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios deck_corner_8ms_flow deck_open_8ms_flow pier_lee_8ms_flow
+      -- --profile vio_at_engage --rangefinder
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_bridge_tuned]
+    hours: 0.4
+    why: "v22 with the wall guard on, the same 24 flights; compare with gz_bridge_tuned (run_baseline --compare)"
+
+  # ---------------------------------------------------------------- GPU: the fine-tune, only if v22 loses
+  - id: bridge_ft_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_bridge.yaml
+    after: [bridge_check_v22]
+    hours: 0.9
+    enabled: false
+    why: "only if v22 loses a bridge scenario to tuned PX4 in Gazebo (gz_bridge_*) or a cell to the PD in bridge_check_v22: v22 continued under a deck and in pier wakes"
+
+  - id: bridge_ft_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_bridge.yaml
+    set: {seed: 1}
+    after: [bridge_check_v22]
+    hours: 0.9
+    enabled: false
+    why: "bridge_ft_s0, seed 1"
+
+  - id: bridge_ft_check
+    gpu: true
+    launch: eval/configs/bridge_holds_v22.yaml
+    set:
+      params.controllers: "[{name: v22, policy: training/policies/structure_hold_v22.onnx}, {name: bridge_s0, policy: '{run:bridge_ft_s0}/policy.onnx'}, {name: bridge_s1, policy: '{run:bridge_ft_s1}/policy.onnx'}]"
+      params.gate_controller: bridge_s0
+    after: [bridge_ft_s0, bridge_ft_s1]
+    hours: 0.4
+    enabled: false
+    why: "the two fine-tunes beside v22 in the bridge cells; the better one then takes gazebo_check against v22 before any Gazebo re-fly (CLAUDE.md, releasing a policy)"

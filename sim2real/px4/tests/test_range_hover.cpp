@@ -185,6 +185,38 @@ int main()
 		CHECK(!w.valid() && near(w.x(), 0.f));
 	}
 
+	// The lagged lean: what it was LAG_S seconds ago, not what it learned since.
+	{
+		WindFeedForward w;
+		float a[2] {9.f, 9.f};
+		CHECK(!w.lagged(a));
+		const float level[3] = {0.f, 0.f, 1.f};
+		w.update(level, 0.01f, true);
+		CHECK(w.lagged(a) && near(a[0], 0.f) && near(a[1], 0.f));
+
+		for (int i = 0; i < 2000; i++) {  // 20 s level
+			w.update(level, 0.01f, true);
+		}
+
+		const float tilt = 0.1f;
+		const float bz[3] = {-std::sin(tilt), 0.f, std::cos(tilt)};
+
+		for (int i = 0; i < 300; i++) {  // 3 s leaning north: chasing a runaway
+			w.update(bz, 0.01f, true);
+		}
+
+		CHECK(w.x() > 0.5f);  // the current lean has learned it
+		CHECK(w.lagged(a) && near(a[0], 0.f, 1e-3f) && near(a[1], 0.f, 1e-3f));  // 8 s ago: level
+
+		for (int i = 0; i < 1200; i++) {  // 12 s more of it: the lagged lean catches up
+			w.update(bz, 0.01f, true);
+		}
+
+		CHECK(w.lagged(a) && a[0] > 0.5f);
+		w.reset();
+		CHECK(!w.lagged(a));
+	}
+
 	if (failures == 0) {
 		std::printf("test_range_hover: all checks passed\n");
 		return 0;

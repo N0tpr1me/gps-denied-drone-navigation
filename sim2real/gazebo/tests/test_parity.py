@@ -25,8 +25,10 @@ def parity_binary(tmp_path_factory):
         pytest.skip(f"C++ compiler unusable: {str(e).splitlines()[-1][:120]}")
 
 
+@pytest.mark.parametrize("surface2", [False, True], ids=["wall", "wall_and_deck"])
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_cpp_model_matches_numpy(parity_binary, tmp_path, seed):
-    report = run_parity(parity_binary, seed=seed, samples=512, work_dir=tmp_path)
+def test_cpp_model_matches_numpy(parity_binary, tmp_path, seed, surface2):
+    report = run_parity(parity_binary, seed=seed, samples=512, work_dir=tmp_path,
+                        surface2=surface2)
     assert report["ok"], report
     assert max(report["max_error"].values()) <= PARITY_TOLERANCE

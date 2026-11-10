@@ -1,15 +1,16 @@
 """Read a PX4 .ulg log into an ENU :class:`eval.metrics.Trace`.
 
 PX4 logs in NED (world) and FRD (body); this module is the PX4 boundary for logs, so the
-conversion to ENU / FLU happens here and nowhere else in ``eval/``.
+conversion to ENU / FLU happens here (through ``envs.frames``) and nowhere else in ``eval/``.
 
 Topics used:
 
 - position: ``vehicle_local_position_groundtruth`` (logged by SITL), else, for real flights,
   ``vehicle_mocap_odometry`` (motion capture over MAVLink ``ODOMETRY`` with frame MOCAP, or
-  ``ATT_POS_MOCAP``; logged, never fused). The EKF's ``vehicle_local_position`` is used only
-  with ``allow_estimate=True``, because scoring a corrupted-estimate run against the
-  estimate hides the error being measured.
+  ``ATT_POS_MOCAP``; logged, never fused). Outdoors the caller hands in RTK truth instead
+  (``truth``, from ``eval.rtk_truth``), which like mocap is in a frame of its own. The
+  EKF's ``vehicle_local_position`` is used only with ``allow_estimate=True``, because
+  scoring a corrupted-estimate run against the estimate hides the error being measured.
 - setpoint: ``vehicle_local_position_setpoint`` (x, y, z), held between samples, unless the
   caller gives a fixed ``hold_point``. Samples before the first finite setpoint, or where it
   is NaN (rate-only modes), are dropped.
@@ -38,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
+from envs import frames
 from eval.metrics import Trace
 
 GROUNDTRUTH = "vehicle_local_position_groundtruth"
@@ -57,12 +59,12 @@ Topics = dict[str, dict[str, np.ndarray]]
 
 def ned_to_enu(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
     """NED (north, east, down) to ENU (east, north, up), stacked as (N, 3)."""
-    return np.stack([y, x, -z], axis=1).astype(float)
+    return frames.ned_to_enu(np.stack([x, y, z], axis=1))
 
 
 def frd_to_flu(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
     """FRD (forward, right, down) to FLU (forward, left, up), stacked as (N, 3)."""
-    return np.stack([x, -y, -z], axis=1).astype(float)
+    return frames.frd_to_flu(np.stack([x, y, z], axis=1))
 
 
 def fit_yaw_offset(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray]:
@@ -86,9 +88,16 @@ def trace_from_topics(
     hold_point: np.ndarray | None = None,
     allow_estimate: bool = False,
     align_window: tuple[float, float] | None = None,
+    truth: tuple[str, np.ndarray, np.ndarray] | None = None,
 ) -> Trace:
-    """Build a Trace from PX4 topic arrays (field name -> array, as pyulog gives them)."""
-    if GROUNDTRUTH in topics:
+    """Build a Trace from PX4 topic arrays (field name -> array, as pyulog gives them).
+
+    ``truth`` is a truth track from outside this module: its name, log seconds (N,) and ENU
+    positions (N, 3) in a frame of its own, as mocap's is (RTK, ``eval.rtk_truth``). It is
+    used whatever else the log holds."""
+    if truth is not None:
+        source, pos_msg = truth[0], {}
+    elif GROUNDTRUTH in topics:
         source, pos_msg = GROUNDTRUTH, topics[GROUNDTRUTH]
     elif MOCAP in topics:
         source, pos_msg = MOCAP, topics[MOCAP]
@@ -104,7 +113,16 @@ def trace_from_topics(
         return (np.asarray(msg[key], dtype=np.int64) - int(start_us)) * 1e-6
 
     meta: dict = {"position_source": source}
-    if source == MOCAP:
+    own_frame = truth is not None or source == MOCAP  # not the frame the setpoint is in
+    if own_frame and hold_point is None and align_window is None:
+        name = "mocap" if source == MOCAP else source
+        raise ValueError(
+            f"{name} truth is in the {name} frame, not the setpoint's: pass hold_point (in the "
+            f"{name} frame) or align_window (seconds, to fit the estimate to {name})"
+        )
+    if truth is not None:
+        t, pos = np.asarray(truth[1], dtype=float), np.asarray(truth[2], dtype=float)
+    elif source == MOCAP:
         frames = np.unique(np.asarray(pos_msg.get("pose_frame", [1]), dtype=int))
         if not set(frames.tolist()) <= set(POSE_FRAMES_Z_DOWN):
             raise ValueError(f"{MOCAP} pose_frame {frames.tolist()} is not NED (1) or FRD (2)")
@@ -114,11 +132,6 @@ def trace_from_topics(
             pos_msg.get("timestamp_sample", [0])) > 0) else "timestamp"
         t = seconds(pos_msg, stamp)
         pos = ned_to_enu(pos_msg["position[0]"], pos_msg["position[1]"], pos_msg["position[2]"])
-        if hold_point is None and align_window is None:
-            raise ValueError(
-                "mocap truth is in the mocap frame, not the setpoint's: pass hold_point (in the "
-                "mocap frame) or align_window (seconds, to fit the estimate to mocap)"
-            )
     else:
         t = seconds(pos_msg)
         pos = ned_to_enu(pos_msg["x"], pos_msg["y"], pos_msg["z"])
@@ -135,7 +148,7 @@ def trace_from_topics(
         idx = np.searchsorted(sp_t, t, side="right") - 1
         sp = np.full(pos.shape, np.nan)
         sp[idx >= 0] = sp_all[idx[idx >= 0]]
-        if source == MOCAP:
+        if own_frame:
             psi, offset, rms = align_estimate(topics, t, pos, seconds, align_window)
             sp = rotate_z(sp, psi) + offset
             meta.update(align_window_s=[float(v) for v in align_window],
@@ -161,9 +174,10 @@ def trace_from_topics(
                  meta=meta)
 
 
-def align_estimate(topics: Topics, t: np.ndarray, pos: np.ndarray, seconds,
-                   window: tuple[float, float]) -> tuple[float, np.ndarray, float]:
-    """Fit the EKF estimate to mocap over ``window``: yaw, offset and the residual RMS."""
+def align_samples(topics: Topics, t: np.ndarray, pos: np.ndarray, seconds,
+                  window: tuple[float, float]) -> tuple[np.ndarray, np.ndarray, float]:
+    """The EKF estimate at the truth's sample times inside ``window`` (N, 3), the truth
+    there (N, 3), and how far the estimate moves horizontally (RMS about its mean, m)."""
     if ESTIMATE not in topics:
         raise ValueError(f"align_window needs {ESTIMATE} in the log")
     est = topics[ESTIMATE]
@@ -171,16 +185,27 @@ def align_estimate(topics: Topics, t: np.ndarray, pos: np.ndarray, seconds,
     ep = ned_to_enu(est["x"], est["y"], est["z"])[first]
     inside = (t >= window[0]) & (t <= window[1]) & (t >= et[0]) & (t <= et[-1])
     if inside.sum() < 10:
-        raise ValueError(f"align window {window} holds {inside.sum()} mocap samples; need 10")
+        raise ValueError(f"align window {window} holds {inside.sum()} truth samples; need 10")
     src = np.stack([np.interp(t[inside], et, ep[:, k]) for k in range(3)], axis=1)
-    dst = pos[inside]
     spread = float(np.sqrt(np.mean(np.sum((src[:, :2] - src[:, :2].mean(axis=0)) ** 2, axis=1))))
+    return src, pos[inside], spread
+
+
+def fit_residual(src: np.ndarray, dst: np.ndarray, psi: float, offset: np.ndarray) -> float:
+    resid = dst - (rotate_z(src, psi) + offset)
+    return float(np.sqrt(np.mean(np.sum(resid ** 2, axis=1))))
+
+
+def align_estimate(topics: Topics, t: np.ndarray, pos: np.ndarray, seconds,
+                   window: tuple[float, float]) -> tuple[float, np.ndarray, float]:
+    """Fit the EKF estimate to the truth (``t``, ``pos``) over ``window``: yaw, offset and
+    the residual RMS."""
+    src, dst, spread = align_samples(topics, t, pos, seconds, window)
     if spread < MIN_ALIGN_SPREAD_M:
         raise ValueError(f"align window moves {spread:.2f} m horizontally (RMS); the yaw fit "
                          f"needs {MIN_ALIGN_SPREAD_M} m, so widen it or pass hold_point")
     psi, offset = fit_yaw_offset(src, dst)
-    resid = dst - (rotate_z(src, psi) + offset)
-    return psi, offset, float(np.sqrt(np.mean(np.sum(resid ** 2, axis=1))))
+    return psi, offset, fit_residual(src, dst, psi, offset)
 
 
 def load_topics(path: str | Path) -> tuple[Topics, int]:

@@ -19,10 +19,15 @@ NEAR_WALL_FLOW = dict(wall_deflect=(0.3, 0.8), wall_recirc=(0.2, 0.5), wake_ti=(
                       shed_amp=(0.1, 0.4))
 
 
-@pytest.mark.parametrize("wall, flow", [(False, False), (True, False), (True, True)])
-def test_numpy_and_torch_agree_to_1e6(wall, flow):
+@pytest.mark.parametrize("wall, flow, deck", [(False, False, False), (True, False, False),
+                                              (True, True, False), (True, True, True)])
+def test_numpy_and_torch_agree_to_1e6(wall, flow, deck):
     kwargs = dict(wall_point=(0, 0, 0), wall_normal=(1, 0.3, 0)) if wall else {}
-    cfg = DisturbanceConfig(**(NEAR_WALL_FLOW if flow else {}))
+    if deck:
+        kwargs.update(surface2_point=(0, 0, 4.0), surface2_normal=(0, 0, -1),
+                      surface2_across=(0, 1, 0))
+    cfg = DisturbanceConfig(**(NEAR_WALL_FLOW if flow else {}),
+                            surface2_shed_amp=(0.1, 0.4) if deck else (0.0, 0.0))
     p = sample_params(cfg, 512, seed=11, **kwargs)
     pt = ta.to_torch(p, dtype=torch.float64)
     for step in range(20):

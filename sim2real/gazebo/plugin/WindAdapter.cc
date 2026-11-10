@@ -83,6 +83,7 @@ public:
           << this->params.mean_wind[1] << ", " << this->params.mean_wind[2] << " m/s, "
           << this->params.gust_start.size() << " gusts, " << this->params.turb_omega.size()
           << " turbulence components, wall " << (this->params.has_wall ? "on" : "off")
+          << ", second surface " << (this->params.has_surface2 ? "on" : "off")
           << ", still-air drag " << (this->subtractDrag ? "subtracted" : "kept") << ")"
           << std::endl;
 

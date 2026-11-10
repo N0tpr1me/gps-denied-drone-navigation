@@ -1,0 +1,101 @@
+# Heading-error candidate, cloud-sized (docs/heading-error.md): structure_hold_ppo_heading.yaml
+# with 1024 drones instead of 4096, for the 4-core cloud container while the GPU server is
+# full (2026-11-09). Same recipe otherwise: v22's ONNX continued with a wrong heading on 70 % of
+# episodes, 200 critic warm-up iterations then 800. v22 trained 1000 iterations with 1024
+# drones in about 25 min on these 4 cores, so one seed is one part under the hour.
+#   python -m training.launch --config training/configs/structure_hold_ppo_heading_cloud.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_heading_cloud.yaml --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_heading_cloud.yaml --device cpu --set seed=1
+name: structure_hold_ppo_heading_cloud
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.7
+gpus: 1
+params:
+  num_envs: 1024
+  init_actor_onnx: training/policies/structure_hold_v22.onnx  # released (PR #93)
+  critic_warmup: 200
+  resume_std: 0.05
+  iterations: 800
+  num_obs: 21
+  num_steps_per_env: 48
+  history: 15
+  sim: torch
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.05  # each re-engage latches the wrong heading again, as the module does
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]
+    reward:
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+    heading_error:  # the new part (envs/estimate/heading.py)
+      prob: 0.7
+      offset_deg: [0.0, 45.0]
+      drift_rate_deg_s: [0.0, 1.5]
+      drift_start_s: [5.0, 40.0]
+      drift_max_deg: 30.0
+      step_rate_hz: 0.02
+      step_deg: [10.0, 30.0]
+      step_tau_s: 3.0
+      max_deg: 60.0
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+      # selection on a 30 deg compass error at engage alone (merged over the training block)
+      heading_error: {prob: 1.0, offset_deg: 30.0, drift_rate_deg_s: 0.0, step_rate_hz: 0.0}
+    select_every: 200
+    select_envs: 256
+smoke:
+  critic_warmup: 2
+  num_obs: 21
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0
+    reengage_rate_hz: 2.0
+    reengage_min_s: 0.5
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    heading_error: {prob: 0.7, offset_deg: [0.0, 45.0], drift_rate_deg_s: [0.0, 1.5],
+                    drift_start_s: [0.0, 1.0], drift_max_deg: 30.0, step_rate_hz: 1.0,
+                    step_deg: [10.0, 30.0], step_tau_s: 0.5, max_deg: 60.0}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {heading_error: {prob: 1.0, offset_deg: 30.0}}
+    select_every: 2
+    select_envs: 8

@@ -32,7 +32,8 @@ and the force is drag on `air - velocity`, as before.
 
 Not modelled: variation along the surface (every term depends on distance only, so the
 whole wall behaves like the stagnation region or the bubble), more than one surface at once
-(a wall and a deck), and the near-wall yaw torque. The ranges are literature-shaped, not
+(a wall and a deck; added since for the deck's shelter and edge shedding, docs/bridge-holds.md),
+and the near-wall yaw torque. The ranges are literature-shaped, not
 fitted; the Phase 3 fan rig fits them, as it does the shelter.
 
 ### Why not CFD now

@@ -22,8 +22,13 @@
                             #   fills it from the scenario); not part of the corruption
     gps: null               # or gps.GpsSource keys ({rate_hz: 10, fix: rtk_fixed}): the
                             #   bridge also sends a GPS (HIL_GPS) and the runners lay
-                            #   gps_on.params over the PX4 set, so EKF2 fuses it too
+                            #   gps_on.params over the PX4 set, so EKF2 fuses it too;
+                            #   with ``fused: false`` they lay gps_logged.params instead:
+                            #   the receiver is in the log only (RTK as scoring truth)
     gps_faults: []          # scripted GPS failures (gps.py), timed from the anchor
+    vision_yaw: null        # or vision_yaw.VisionYaw keys ({offset_deg: 30}): EKF2's heading
+                            #   made wrong on purpose, through the vision yaw; the runners lay
+                            #   vision_yaw.params over the PX4 set (docs/heading-error.md)
 
 Shipped profiles live in ``profiles/``: ``clean`` (the T7 reference), ``vio_default``
 (the ``envs.estimate`` defaults, i.e. what training uses), ``vio_after_takeoff``
@@ -51,6 +56,7 @@ from sim2real.estimate_bridge.bridge import (
 )
 from sim2real.estimate_bridge.field_faults import FieldFault, parse_field_faults
 from sim2real.estimate_bridge.gps import GpsFault, GpsSource, parse_gps_faults
+from sim2real.estimate_bridge.vision_yaw import VisionYaw
 
 PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SOURCE_RATE_HZ = 50.0  # Gazebo's /world/<w>/pose/info rate in the PX4 worlds
@@ -72,6 +78,7 @@ class EstimateProfile:
     frame_mistake: FrameMistake | None = None  # wiring mistake on purpose (log health tests)
     gps: GpsSource | None = None  # a scripted GPS beside the vision stream (gps.py)
     gps_faults: tuple[GpsFault, ...] = ()
+    vision_yaw: VisionYaw | None = None  # a scripted heading error (vision_yaw.py)
 
     def __post_init__(self) -> None:
         if self.fault_anchor not in FAULT_ANCHORS:
@@ -98,7 +105,7 @@ class EstimateProfile:
         unknown = set(d) - {"name", "seed", "divisor", "estimate", "fault_anchor",
                             "fault_anchor_s", "fault_anchor_alt_m", "bias_from_anchor",
                             "rangefinder", "field_faults", "frame_mistake", "gps",
-                            "gps_faults"}
+                            "gps_faults", "vision_yaw"}
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         if "name" not in d:
@@ -117,6 +124,7 @@ class EstimateProfile:
         rng = d.get("rangefinder")
         mistake = d.get("frame_mistake")
         gps = d.get("gps")
+        vyaw = d.get("vision_yaw")
         return cls(name=str(d["name"]), seed=int(d.get("seed", 0)), divisor=divisor,
                    estimate=cfg, fault_anchor=str(d.get("fault_anchor", "start")),
                    fault_anchor_s=float(d.get("fault_anchor_s", 25.0)),
@@ -126,7 +134,8 @@ class EstimateProfile:
                    field_faults=parse_field_faults(d.get("field_faults")),
                    frame_mistake=None if mistake is None else FrameMistake.from_dict(mistake),
                    gps=None if gps is None else GpsSource.from_dict(gps),
-                   gps_faults=parse_gps_faults(d.get("gps_faults")))
+                   gps_faults=parse_gps_faults(d.get("gps_faults")),
+                   vision_yaw=None if vyaw is None else VisionYaw.from_dict(vyaw))
 
     def with_seed(self, seed: int) -> EstimateProfile:
         """The same profile with another seed (fault anchor and everything else kept)."""
@@ -143,7 +152,8 @@ class EstimateProfile:
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "seed": self.seed, "divisor": self.divisor,
-                "estimate": {k: v for k, v in self.estimate.__dict__.items()},
+                "estimate": {k: list(v) if isinstance(v, tuple) else v
+                             for k, v in self.estimate.__dict__.items()},
                 "fault_anchor": self.fault_anchor, "fault_anchor_s": self.fault_anchor_s,
                 "fault_anchor_alt_m": self.fault_anchor_alt_m,
                 "bias_from_anchor": self.bias_from_anchor,
@@ -152,7 +162,8 @@ class EstimateProfile:
                 "frame_mistake": (None if self.frame_mistake is None
                                   else self.frame_mistake.to_dict()),
                 "gps": None if self.gps is None else self.gps.to_dict(),
-                "gps_faults": [f.to_dict() for f in self.gps_faults]}
+                "gps_faults": [f.to_dict() for f in self.gps_faults],
+                "vision_yaw": None if self.vision_yaw is None else self.vision_yaw.to_dict()}
 
     def bridge(self, dt: float | None = None, divisor: int | None = None) -> EstimateBridge:
         """The bridge this profile describes (``dt`` / ``divisor`` overrides for replays)."""

@@ -230,5 +230,7 @@ limit; its config now says 1.25 h, so a re-run needs a go-ahead or a split into 
   `rpg.ifi.uzh.ch` and `cdn3.vision.in.tum.de`), and a third VIO (OpenVINS).
 - **Hover is under-sampled.** Dataset flights move most of the time; only 10 to 45 % of each
   flight is near hover, and 60 s near-hover windows exist in one flight only.
+- **Dust, fog and low light.** No dataset has them; `docs/vio-render.md` renders hold flights
+  in each and runs Basalt on them.
 - **A wall at 1 to 3 m.** No dataset flies a VIO this close to one surface. The first
   partner flight (`docs/decisions.md`, software only) is the check.

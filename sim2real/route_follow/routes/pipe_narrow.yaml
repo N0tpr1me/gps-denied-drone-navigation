@@ -1,0 +1,18 @@
+# A narrow pipe (sewer, culvert) 1.8 m across: the props 0.5 m from the wall on the
+# centreline. Two gentle 30 degree bends at 0.5 m/s. The mock's hardest world (narrow pipe,
+# docs/route-follow.md), made fixed.
+name: pipe_narrow
+seed: 1
+kind: tunnel
+radius_m: 0.9
+waypoints:
+  - [0.0, 0.0, 0.9]
+  - [7.0, 0.0, 0.9]
+  - [12.2, -3.0, 0.9]
+  - [18.2, -3.0, 0.9]
+speed_mps: 0.5
+accel_mps2: 0.5
+end_hold_s: 5.0
+draft: along
+disturbance:
+  gust_start: [32.0, 70.0]

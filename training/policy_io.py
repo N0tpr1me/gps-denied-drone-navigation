@@ -91,8 +91,25 @@ def export_onnx(actor: Any, path: Path) -> None:
     except TypeError as e:  # older torch without the torch.export-based exporter
         if "unexpected keyword" not in str(e):
             raise
-        torch.onnx.export(module, dummy, str(path), opset_version=17,
-                          dynamic_axes={"obs": {0: "batch"}, "actions": {0: "batch"}}, **names)
+    # Some torch versions (2.7, in Isaac Lab 2.3.2's Python) take the exporter call above but
+    # pin the batch to the dummy's 1; then the legacy exporter, which honours dynamic_axes.
+    if not path.exists() or not _batch_is_free(path):
+        legacy = {"opset_version": 17,
+                  "dynamic_axes": {"obs": {0: "batch"}, "actions": {0: "batch"}}, **names}
+        try:
+            torch.onnx.export(module, dummy, str(path), dynamo=False, **legacy)
+        except TypeError as e:  # torch before the dynamo flag
+            if "unexpected keyword" not in str(e):
+                raise
+            torch.onnx.export(module, dummy, str(path), **legacy)
+
+
+def _batch_is_free(path: Path) -> bool:
+    """True when the exported model's first input has a symbolic (free) batch dimension."""
+    import onnx
+
+    dim = onnx.load(str(path)).graph.input[0].type.tensor_type.shape.dim[0]
+    return not dim.HasField("dim_value")
 
 
 def export_policy(runner: Any, run_dir: Path, metadata: dict[str, Any]) -> Path:

@@ -43,7 +43,7 @@ jobs:
   - id: sizes_check_s0
     gpu: true
     launch: eval/configs/gazebo_check_v27.yaml
-    set: {params.policies.v27_s0: "{run:v27_s0}/policy.onnx"}
+    set: {params.candidates.v27_s0: "{run:v27_s0}/policy.onnx"}
     after: [sizes_score]
     hours: 0.75
     why: "gazebo_check on the x500, v27_s0 against v22: a v27 goes to Gazebo only if it passes here and in sizes_score"
@@ -51,7 +51,7 @@ jobs:
   - id: sizes_check_s1
     gpu: true
     launch: eval/configs/gazebo_check_v27.yaml
-    set: {params.policies.v27_s1: "{run:v27_s1}/policy.onnx"}
+    set: {params.candidates.v27_s1: "{run:v27_s1}/policy.onnx"}
     after: [sizes_score]
     hours: 0.75
     why: "gazebo_check on the x500, v27_s1 against v22"

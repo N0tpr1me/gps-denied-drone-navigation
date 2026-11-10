@@ -7,9 +7,9 @@ buyer's first question is what the drone does in each one. This page scripts tho
 failures, flies them in Gazebo SITL with Structure Hold and with tuned stock PX4, and says
 plainly what happened, good and bad.
 
-## The six faults
+## The faults
 
-All six live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
+All of them live in `sim2real/estimate_bridge/field_faults.py` and are applied by the estimate
 bridge on top of the normal corruption, at a set time after the fault anchor, so every
 runner meets the same failure at the same moment of its scored window.
 
@@ -21,6 +21,7 @@ runner meets the same failure at the same moment of its scored window.
 | `freeze` | The same position and zero velocity keep arriving on time, never marked stale | A stuck camera pipeline; no staleness check can see it |
 | `drift` | A slow ramp of `rate_mps` along `direction`, then held | Scale drift, or a spoofed source walking off |
 | `degrade` | The VIO keeps running but sees less: extra noise (`noise_m`, `vel_noise_mps`), a faster random walk (`walk_mps`, kept afterwards), tracking losses of `loss_s` about `loss_hz` times a second; the forward rangefinder gets noise (`range_noise_m`), missing returns (`range_loss_frac`) and short returns off the particles (`range_short_frac`). All of it ramps up over `ramp_s` | Dust thrown up by the rotors, fog or steam, a dark underside: the cases buyers ask about (added 2026-11-02) |
+| `runaway` | The VIO's position and velocity run away together along `direction` at `accel_mps2` for `duration_s`, then the velocity error stops and the position offset stays: on time, never stale, its own two outputs agreeing | A VIO locked onto moving dust; Basalt did this in the heavy-dust renders (PR #152) (added 2026-11-09). `max_speed_mps` caps the velocity error; `field_runaway_prearm` runs it on the ground before any arming |
 
 Each ships as a pair of profiles that differ only in their anchor:
 `field_<fault>_at_engage` for the hold runner and `field_<fault>_at_hover` for the stock
@@ -268,6 +269,165 @@ this one `degrade` setting does; a real dust cloud or fog bank may be milder or 
 which is why the safety manual's envelope now names visibility (F36, F37), and tells the
 pilot to stop the hold when the VIO degrades rather than fly it out.
 
+### Heavy dust: a VIO that runs away (2026-11-09)
+
+In the heavy-dust renders Basalt did more than get noisier: it ran away (PR #152). A VIO
+that locks onto dust moving past the camera reports the vehicle moving when it is not, its
+position and velocity agreeing with each other, on time, with small noise and no tracking
+loss. EKF2 fuses it, nothing goes stale or invalid, and every controller follows it.
+`runaway` scripts the worst kind for a hold, along the wall where the rangefinder cannot see
+it: `field_runaway_at_engage` / `_at_hover` are the `degrade` dust above plus, 25 s into the
+scored window, a runaway of 0.5 m/s^2 along the wall (ENU +y) for 15 s (7.5 m/s and 56 m of
+error by its end). v22 with the rangefinder against tuned PX4, `px4_tuned_v2.params`,
+wall1m_wind_4ms, cloud image (`eval/field_faults.py` over the 25 s after the fault; batch
+folders in `experiments/LOG.md`, 2026-11-09):
+
+| | Largest move, m (seed 1 / 2) | Closest to the wall, m | Trip |
+| --- | --- | --- | --- |
+| Tuned PX4 | 78.4 / 77.7 | 0.45 / 0.60 | none |
+| v22, no check | 77.1 / - | 0.95 / - | `position_error`, too late |
+| v22, the check (`SH_WD_VIO_DV`) | 84.2 / 87.8 | 0.84 / 0.43 | `estimate_runaway`, about 2 s in |
+| v22, the check and the VIO taken out of EKF2 (`SH_WD_EV_CUT`) | 61.3 / 71.1 | 0.83 / 0.59 | the same |
+| v22, all that and the hover starting from the lean of 8 s before (the module now) | **22.0 / 31.7** | **0.69 / 0.53** | the same |
+
+**The check** (`RunawayFix` in `Watchdog.hpp`, `SH_WD_VIO_DV` 0.8 m/s, on by default): how
+much the VIO odometry's velocity changed over 3 s against how much EKF2's bias-corrected
+acceleration (`vehicle_local_position` ax, ay, az) says the vehicle's did. The vehicle's own
+motion is in both and cancels; a relocalisation jump moves the position, not the velocity,
+and is not seen; short tracking losses are spanned. Past the limit for two 0.25 s slots in a
+row it latches until the VIO reports a restart (`reset_counter`) or disarm: Structure Hold
+trips, an engage is refused, the hover holds on the rangefinder, and the handback counts the
+position as lost (never Position mode). The pilot gets a critical message in any mode,
+Position mode included, and while still on the ground.
+
+**What the flights taught, in order.**
+
+- *Tripping is not enough.* The first check caught the runaway about 2 s in on both seeds
+  and Structure Hover held the wall distance on the rangefinder, yet the drone slid 84 to
+  88 m, further than with no check. EKF2 was still fusing the runaway and, to make its
+  acceleration agree with the VIO's velocity, it turned its attitude estimate: the "level"
+  the hover flew was tilted, and the drone accelerated along the wall at the runaway's own
+  0.5 m/s^2. This happens in any mode that trusts EKF2's attitude, stock Altitude mode too.
+- *So the module takes the VIO out of EKF2* (`SH_WD_EV_CUT` 1, on by default): when the
+  runaway is caught while one of its modes flies or hands back, it clears `EKF2_EV_CTRL`'s
+  position and velocity bits (yaw kept), and puts the old value back when the VIO restarts
+  or on disarm. EKF2 then dead-reckons on the IMU and the position goes invalid. Not while
+  another mode flies with the module on standby, nor in Structure Land.
+- *And starts the hover from the lean of before.* With the cut it still slid 61 to 71 m: the
+  hover's wind lean, learned over the last 2 s, had learned the policy chasing the runaway,
+  0.4 to 0.9 m/s^2 along the wall. It now starts from the lean of 8 s before (the runaway is
+  caught 2 to 6 s in): 0.01 m/s^2 along the wall, and the move fell to 22 to 32 m.
+- *What is left is a coast.* In the 2 s before the trip the policy chased the runaway up to
+  1.6 to 2.6 m/s along the wall, and nothing on board measures that motion once the VIO is
+  out: the rangefinder sees only the wall. The hover keeps the drone off the wall (closest
+  0.53 m; props touch at 0.40 m) while it coasts; the pilot has to stop it, which is what
+  the message tells them to do. Damping the coast on the IMU's own velocity since the last
+  good VIO reading was tried and made it worse (19.5 / 38.6 m, the second flight reaching
+  15 m/s): with the VIO out, EKF2's acceleration was off by up to 1 m/s^2. Reverted.
+- *No false trips seen.* The same image flew the `degrade` dust (seeds 1, 2) and nominal
+  holds (`vio_at_engage`, seeds 1 and 6) without a trip; replayed over the whole flight
+  (`python -m eval.vio_runaway replay <ulog>`), the largest disagreement was 0.50 m/s in the
+  dust and 0.36 m/s nominal, against 0.8.
+
+**In the mock, over many flights** (`eval/vio_runaway.py`, `eval/configs/vio_runaway.yaml`,
+256 hold flights of 60 s per set on `gz_x500_sitl` with the EKF2-like fusion, v22 and the PD
+yardstick; the check runs on the raw fix and an IMU with a per-flight bias, and EKF2's pull
+toward the VIO is modelled as an observer fitted to the Gazebo runaway; it does not hand
+back):
+
+| Set | v22 | PD yardstick |
+| --- | --- | --- |
+| Healthy VIO: 8 m/s, calm, Gate 1 stress jumps and dropouts, dust | 0 false trips in 16.7 flight hours | 0 in 14.6 h |
+| Runaway 0.25 m/s^2 | 3 of 256 caught | 1 of 256 |
+| Runaway 0.5 m/s^2 | 249 of 256, median 2.2 s in (p95 2.8 s), 0.7 m truly moved | 233 of 256, 2.2 s |
+| Runaway 1 m/s^2 | 248 of 256, 1.4 s (p95 1.7 s) | 234 of 256, 1.4 s |
+| Runaway 3 m/s^2 | 244 of 256, 0.9 s | 233 of 256, 0.9 s |
+
+Across both controllers, 0 false trips in 31.3 flight hours puts the rate under 0.1 per
+hour (95 %). The runaways of 0.5 m/s^2 and faster that were not caught were flights that
+had already ended (a tilt, or a PD wall contact in the dust-like noise) before the runaway.
+
+**Its limits, plainly.**
+
+- A slow runaway hides. EKF2 takes a runaway into its attitude with about a 2.5 s
+  period, so the disagreement over 3 s plateaus near 2.6 times the runaway's acceleration:
+  below about 0.3 m/s^2 it stays under 0.8 m/s (0.25 m/s^2 caught on 1 % of flights).
+- A silent slow drift is not a runaway. Basalt in heavy dust drifted 0.2 to 0.3 m a
+  minute without flagging it (PR #152): that is 5 mm/s, far under what any IMU comparison
+  over seconds can see. The rangefinder guard covers it on the wall axis (F7, F36); along
+  the wall it is a slow walk the pilot sees.
+- On the ground the check runs too (disarmed, the IMU says still): a VIO that runs away
+  before take-off gets the same critical message and Structure Hold refuses to engage. That
+  alone did not stop the pilot arming and taking off in Position mode on it; the pre-arm
+  check of the next section does.
+- Only a velocity in NED or `BODY_FRD` is checked (`LOCAL_FRD` is not).
+- The coast above. And `SH_WD_EV_CUT` writes an EKF2 parameter in flight; PX4 saves it like
+  any other, and the module puts it back on the VIO restart, on disarm and when it stops.
+  A power loss in between would leave EKF2 without vision on the next boot (its preflight
+  check then fails, loudly).
+- One scenario, two seeds, one runaway setting in Gazebo.
+
+### Before take-off: a VIO that runs on the ground (2026-11-09)
+
+Started in drifting dust, Basalt took the grains for motion while the drone still sat on
+the floor and ran off at up to 2.8 m/s before take-off; once airborne it was steady again,
+with the offset it had gathered (`docs/vio-render.md`). `field_runaway_prearm` scripts that:
+from 3 s after the bridge starts the VIO's velocity error grows at 0.5 m/s^2 along the wall
+to 2.8 m/s and runs on at it until 45 s (110 m of position error), then it is steady. The
+drone sits on the ground through all of it. Stock runner (PX4's own take-off, 60 s hover at
+2.5 m and landing; the module never flies), `px4_tuned_v2.params`, wall1m_wind_4ms, cloud
+image; true position from the bridge's trace, over the whole time airborne (batch folders in
+`experiments/LOG.md`, 2026-11-09):
+
+| | Armed | Moved along the wall, m (seed 1 / 2) | Fastest, m/s | Closest to the wall, m | Hover |
+| --- | --- | --- | --- | --- | --- |
+| Tuned PX4, the check off (`SH_WD_GND_V` 0) | about 15 s in, the estimate moving at 2.8 m/s | 80.3 / 83.1 | 5.1 / 8.5 | 0.10 / 0.07 | failed: 80 m from where it took off, 4.4 / 5.5 m high |
+| Tuned PX4, the check on (`SH_WD_GND_V` 0.3, the default) | refused until 10 s after the VIO was steady | **0.1 / 0.1** | 0.1 / 0.1 | **0.98 / 0.92** | held: 0.05 / 0.07 m drift at 2.5 m |
+
+**What stock PX4 did.** EKF2 fused the running VIO: on the ground, at rest, its estimate
+moved at 2.8 m/s. PX4's preflight checks said `heading estimate not stable` for a moment and
+then allowed arming. The take-off did not lift while the estimate kept moving. Four to five
+seconds after the VIO steadied it did, and PX4 flew the drone back to where its estimate had
+been at arming: 80 m along the wall at 5 m/s and more, within 0.1 m of the wall on the way
+(the props touch at 0.40 m), ending 4.4 and 5.5 m up. Nothing in stock PX4 refused the
+flight.
+
+**The check** (`StillFix` in `Watchdog.hpp`, `SH_WD_GND_V` 0.3 m/s, on by default). On the
+ground there is a plainer witness than the IMU comparison above: the land detector's
+`at_rest` flag (the IMU alone saw no movement for a second). While the vehicle is disarmed
+and at rest the module averages the VIO's velocity over 1 s slots, in whatever frame it is
+sent; two slots in a row over the limit and it refuses commander's arming check, so PX4
+will not arm in any mode, stock modes included, and the pilot gets a critical message every
+15 s. The block lifts after ten slots under the limit at rest, or 5 s after the VIO goes
+silent (EKF2 no longer fuses it then). Slots in which the vehicle was not at rest (carried,
+bumped) are dropped. A runaway the IMU comparison catches while disarmed blocks and clears
+the same way. Once armed the check does nothing: it cannot stop a flight.
+
+With it the block was already in place when the runner first asked to arm, and stayed
+until 10 s after the VIO steadied (52 and 53 s of waiting); then both armed and flew the
+hover as if nothing had happened, 110 m of offset in the estimate and all.
+
+In PX4 SIH (`sitl_test.py --prearm`, a scripted VIO over MAVLink, stock commander): arming
+accepted on a still VIO, refused 1.8 s after it started to run (twice), still refused 6 s
+after it stopped, accepted 11.0 s after it was still and 5.1 s after it went silent; the
+acceptance flight that follows passed.
+
+**Its limits, plainly.**
+
+- A VIO that drifts under 0.3 m/s on the ground is not blocked (Basalt's slow walk in
+  dust, 5 mm/s, is far under it), and one that starts to run in the last 2 s before arming
+  is caught only once airborne, by the check above.
+- The vehicle has to be at rest for the check to judge: on a moving deck or a vibrating
+  truck bed `at_rest` stays false and nothing is checked.
+- A VIO that sends no velocity is not checked. If one that ran stops sending a velocity
+  but keeps sending positions, the block stays until it restarts or `SH_WD_GND_V` is set
+  to 0.
+- It blocks arming in every mode, which is the point, and also the cost: a VIO that
+  reports motion at rest for any other reason (not yet initialised, people walking through
+  the picture) keeps the drone on the ground until it has been still for 10 s.
+- One scenario, two seeds, one runaway setting in Gazebo; no real VIO, and the at-rest flag
+  is Gazebo's IMU.
+
 What this says, in plain words:
 
 - **A VIO reset or restart is where the module earns its keep.** Stock PX4 climbed 2.2 m
@@ -293,6 +453,15 @@ What this says, in plain words:
   the height fixed, the decided handback to Altitude mode lets the wind push the vehicle
   into the wall; the range hover (`SH_HB_RANGE`, above) kept it 0.94 m off instead, and 0 of
   12 touched over three winds. It is on by default since 2026-11-02 (Zain).
+- **A VIO that runs away in heavy dust takes everything with it, EKF2's attitude included.**
+  Stock PX4 and v22 alike followed a 0.5 m/s^2 runaway 77 to 78 m along the wall. The module
+  now catches it about 2 s in, takes the VIO out of EKF2 and holds the wall distance on the
+  rangefinder: 22 to 32 m of coast instead, off the wall, and a critical message telling the
+  pilot to take over.
+- **Stock PX4 arms and takes off on a VIO that is running away on the ground.** It then flew
+  80 m along the wall at 5 m/s and more, within 0.1 m of it. The module now refuses arming,
+  in every mode, while the VIO reports motion with the drone at rest: both flights waited
+  for the VIO to steady and then flew a normal hover.
 
 ## GPS on: RTK float, a jump, a glitch, a loss and the hand-over (2026-11-02, cloud)
 
@@ -365,6 +534,12 @@ What this says, in plain words:
 
 ## Next
 
+- The runaway over more seeds, winds and settings (0.3 to 3 m/s^2, toward and away from the
+  wall, vertical), and a way to stop the coast after it that does not lean on EKF2's
+  dead-reckoned acceleration.
+- The pre-arm check on a real VIO's ground behaviour: Basalt's own start-up output from the
+  renders replayed through it (how fast a healthy one settles under 0.3 m/s, how the dust
+  start looks), and the same check in the Auterion app.
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
