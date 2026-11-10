@@ -91,6 +91,11 @@ class RewardWeights:
         return cls(**d)
 
 
+# The Gazebo x500's rotor lag (mean of 12.5 ms up and 25 ms down), on which the benchmark's
+# rate loop was autotuned.
+RATE_LOOP_LAG_FLOOR_S = 0.01875
+
+
 def _range(v: Any, name: str) -> tuple[float, float]:
     lo, hi = (float(v), float(v)) if isinstance(v, (int, float)) else (float(v[0]), float(v[1]))
     if lo > hi:
@@ -121,11 +126,18 @@ class AirframeRandomization:
     thrust_to_weight_scale: tuple[float, float] = (1.0, 1.0)
     motor_tau_s: tuple[float, float] | None = None  # None: quad.motor_tau
     hover_thrust_error: tuple[float, float] = (0.0, 0.0)  # fraction, + means too much thrust
+    # A drone with slow rotors is tuned to a slower rate loop (the loop cannot outrun its
+    # motors; PX4's autotune fits the lag it identifies). On: an episode's rate P, I and D
+    # are scaled by ``quad.motor_tau / motor_tau`` for its drawn ``motor_tau_s``, neither
+    # counted below ``RATE_LOOP_LAG_FLOOR_S`` (rotors faster than the x500's do not make the
+    # tune faster: there autotune's rise time governs), as the big airframe presets are
+    # built (``airframes.py``, ``mid_3kg`` and ``heavy_16kg``).
+    rate_loop_follows_lag: bool = False
 
     def __post_init__(self) -> None:
         for f in fields(self):
             v = getattr(self, f.name)
-            if v is not None:
+            if v is not None and f.name != "rate_loop_follows_lag":
                 object.__setattr__(self, f.name, _range(v, f.name))
         for name in ("mass_scale", "inertia_scale", "thrust_to_weight_scale"):
             if getattr(self, name)[0] <= 0:

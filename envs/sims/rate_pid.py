@@ -99,6 +99,17 @@ class RatePid:
         self.rate_prev = torch.zeros(num_envs, 3, dtype=dtype, device=dev)
         self.out_prev = torch.zeros(num_envs, 3, dtype=dtype, device=dev)
 
+    def set_gain_scale(self, env_ids: Any, scale: Any) -> None:
+        """Scale P, I and D together for some envs (one factor per env): a slower or faster
+        tune of the same loop. Until the first call the gains are the shared ones."""
+        if self.kp.dim() == 1:
+            self.kp, self.ki, self.kd = (g.repeat(self.num_envs, 1)
+                                         for g in (self.kp, self.ki, self.kd))
+        s = torch.as_tensor(scale, dtype=self.kp.dtype, device=self.kp.device).reshape(-1, 1)
+        t = lambda v: torch.tensor(v, dtype=self.kp.dtype, device=self.kp.device)  # noqa: E731
+        g = self.gains
+        self.kp[env_ids], self.ki[env_ids], self.kd[env_ids] = s * t(g.p), s * t(g.i), s * t(g.d)
+
     def reset(self, env_ids: Any = None, rate: Any = None) -> None:
         ids = slice(None) if env_ids is None else env_ids
         self.integral[ids] = 0.0

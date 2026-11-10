@@ -17,6 +17,8 @@ from envs.structure_hold.airframes import (  # noqa: E402
     airframe_config,
     gz_x500,
     gz_x500_sitl,
+    heavy_16kg,
+    mid_3kg,
     px4_allocation,
     small_300g,
 )
@@ -258,3 +260,83 @@ def test_small_300g_rate_loop_answers_like_the_x500s():
 
     t_x500, t_small = rise("gz_x500_sitl"), rise("small_300g")
     assert t_small <= t_x500 + 0.013 and t_small > 0.5 * t_x500
+
+
+def test_mid_and_heavy_have_their_published_numbers():
+    m, h = mid_3kg()["quad"], heavy_16kg()["quad"]
+    # Holybro X650: 3.0 kg with a battery, 6.3 kg take-off limit at 70 % of full thrust.
+    assert m["mass"] == pytest.approx(3.0)
+    assert m["max_thrust"] / GRAVITY == pytest.approx(9.0)
+    # Freefly Alta X: thrust/weight 3.5 at 19.63 kg, here at 16 kg.
+    assert h["mass"] == pytest.approx(16.0)
+    assert h["max_thrust"] / (19.63 * GRAVITY) == pytest.approx(3.5)
+    assert m["motor_tau"] == pytest.approx(0.0375) and h["motor_tau"] == pytest.approx(0.12)
+    assert 1.0 < h["inertia"][0] < 3.0 and 0.03 < m["inertia"][0] < 0.15
+    # Wind push per kilogram within a fifth of the x500's on both (area over mass).
+    for name, mass in (("mid_3kg", 3.0), ("heavy_16kg", 16.0)):
+        k = StructureHoldConfig.from_dict({"airframe": name}).disturbance.k_quad
+        per_kg = 0.5 * (k[0] + k[1]) / mass / (NOMINAL_K_QUAD / 2.0643)
+        assert 1.0 < per_kg < 1.25
+
+
+def test_slow_rotors_slow_the_rate_loop_in_proportion():
+    """Loop gain: the x500's times its rotor lag over the airframe's, never above it."""
+    def loop(c):
+        return (np.asarray(c["rate_pid"]["p"]) * np.asarray(c["actuation"]["torque_per_unit"])
+                / np.asarray(c["quad"]["inertia"]))
+
+    x = gz_x500()
+    for c in (mid_3kg(), heavy_16kg()):
+        np.testing.assert_allclose(
+            loop(c), loop(x) * x["quad"]["motor_tau"] / c["quad"]["motor_tau"], rtol=1e-9)
+
+    def rise(name):
+        env = StructureHoldEnv(calm(name), num_envs=1, seed=0)
+        env.reset()
+        a = hover_action(env)
+        a[:, 0] = 0.25
+        peak = 0.0
+        t63 = float("inf")
+        for k in range(1, 84):
+            env.step(a)
+            w = float(env.sim.state.ang_vel[0, 0]) / (0.25 * env.cfg.max_rate_rad_s)
+            peak = max(peak, w)
+            if w >= 0.63:
+                t63 = min(t63, k * env.cfg.dt)
+        return t63, peak
+
+    (t_mid, peak_mid), (t_heavy, peak_heavy) = rise("mid_3kg"), rise("heavy_16kg")
+    assert 0.08 < t_mid < 0.14 and 0.25 < t_heavy < 0.40
+    assert peak_mid < 1.2 and peak_heavy < 1.35  # slower, not ringing
+
+
+@pytest.mark.parametrize("name", ["mid_3kg", "heavy_16kg"])
+def test_mid_and_heavy_hover_through_the_module_mapping(name):
+    cfg = calm(name, hold_distance=(2.0, 3.0), contact_radius_m=1.13)
+    assert StructureHoldConfig.from_dict(asdict(cfg)) == cfg
+    env = StructureHoldEnv(cfg, num_envs=3, seed=0)
+    env.reset()
+    z0 = env.sim.state.pos[:, 2].clone()
+    for _ in range(int(2.0 / env.cfg.dt)):
+        env.step(hover_action(env))
+    assert (env.sim.state.pos[:, 2] - z0).abs().max() < 0.02
+
+
+def test_rate_loop_follows_a_drawn_rotor_lag():
+    """airframe_rand.rate_loop_follows_lag: the gains of an episode scale with the config's
+    rotor lag over the drawn one, neither counted below the x500's."""
+    def gains(name, tau, follows=True):
+        cfg = calm(name, hold_distance=(2.0, 3.0), contact_radius_m=1.13, airframe_rand={
+            "motor_tau_s": tau, "rate_loop_follows_lag": follows})
+        env = StructureHoldEnv(cfg, num_envs=2, seed=0)
+        env.reset()
+        return env.rate_pid.kp.reshape(-1, 3)[0].numpy(), np.asarray(cfg.rate_pid.p)
+
+    kp, p = gains("gz_x500_sitl", 0.075)
+    np.testing.assert_allclose(kp, p * 0.01875 / 0.075, rtol=1e-6)
+    kp, p = gains("gz_x500_sitl", 0.008)  # faster rotors: the tune stays
+    np.testing.assert_allclose(kp, p, rtol=1e-6)
+    kp, p = gains("heavy_16kg", 0.04)  # the 16 kg airframe with rotors three times as fast
+    np.testing.assert_allclose(kp, p * 3.0, rtol=1e-6)
+    kp, p = gains("gz_x500_sitl", 0.075, follows=False)
+    np.testing.assert_allclose(kp, p, rtol=1e-6)

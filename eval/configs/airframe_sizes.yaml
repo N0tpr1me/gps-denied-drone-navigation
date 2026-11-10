@@ -1,31 +1,41 @@
-# Bring your own drone (docs/airframe-sizes.md): the released policy, and any candidate added
-# by name, against the cascaded PD on three drone sizes in the mock, all flown through the
+# Bring your own drone (docs/airframe-sizes.md): the released policy, v24 and any candidate
+# added by name, against the cascaded PD on five drone sizes in the mock, all flown through the
 # same PX4 pieces as the Gazebo benchmark (rate loop and filters, 83 Hz tick, EKF2-like fusion
 # on the barometer), so only the vehicle differs:
 #   - the x500 (gz_x500_sitl, 2.06 kg, thrust/weight 1.69),
-#   - the x500 with a 25, 35 and 50 % payload (0.52, 0.72 and 1.03 kg, max thrust unchanged,
-#     so thrust/weight 1.35, 1.25 and 1.13; inertia up 7, 10 and 15 % for a box just under the
-#     frame, as the Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*),
-#   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6;
-#     its own rate gains as autotune would give them; envs/structure_hold/airframes.py).
+#   - the x500 with a 25, 35, 40 and 50 % payload (max thrust unchanged, so thrust/weight
+#     1.35, 1.25, 1.21 and 1.13; inertia up 7 to 15 % for a box just under the frame, as the
+#     Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*),
+#   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6),
+#   - a 3 kg quad (mid_3kg: Holybro X650, 650 mm, thrust/weight 3.0), and the same drone at
+#     its 6.3 kg take-off limit,
+#   - a 16 kg heavy lifter (heavy_16kg: the Freefly Alta X's airframe, 1415 mm, 33 inch props,
+#     thrust/weight 4.3), and the Alta X at its 35.5 kg maximum. Freefly publishes no rotor
+#     lag, and the hold turns on it, so the 16 kg drone is scored at 40, 60 and 120 ms (the
+#     preset's assumption), each with the rate loop a tune would give it
+#     (airframe_rand.rate_loop_follows_lag; envs/structure_hold/airframes.py).
 # A policy trained on the x500 flies the others through the module's own thrust mapping
-# (eval.gate1.ModuleThrustScale), as the module would. The 50 % payload hovers at a
-# normalised thrust of 0.93, above the module's 0.9 clamp: that cell measures the edge.
-# PX4 v1.17's hover thrust estimate stops at 0.8 (MPC_THR_HOVER's top; the 25 % Gazebo hover
-# commanded 0.835 with the estimate at 0.80), so the module's hover reference reads low on a
-# heavy x500: hover_thrust_error -4, -9 and -14 % in the payload cells.
+# (eval.gate1.ModuleThrustScale), as the module would. The 40 and 50 % payloads hover at a
+# normalised thrust of 0.89 and 0.93, at and above the module's 0.9 clamp: those cells
+# measure the edge. PX4 v1.17's hover thrust estimate stops at 0.8 (MPC_THR_HOVER's top; the
+# 25 % Gazebo hover commanded 0.835 with the estimate at 0.80), so the module's hover
+# reference reads low on a heavy x500: hover_thrust_error -4 to -14 % in the payload cells.
+# Every episode has a forward rangefinder (base_env.range, as gate1_x500_ekf_range_v24.yaml):
+# v24 reads it, v22 and the PD do not and fly exactly as without it.
 #   python -m training.launch --config eval/configs/airframe_sizes.yaml --smoke --device cpu
 #   python -m training.launch --config eval/configs/airframe_sizes.yaml --device cpu
 #   ... --set params.policies.v27=runs/<run>/policy.onnx   # add a candidate (the queue does)
 name: airframe_sizes
 entrypoint: eval.gate1
 seed: 7101  # unused: the seeds are params.seeds
-expected_hours: 0.6  # 7 cells x 1536 episodes x 4 controllers: 12 min for 6 cells x 2 on 4 CPU cores
+expected_hours: 0.9  # 14 cells x 1536 episodes x 3 controllers: about 1 min each on 4 CPU cores
 gpus: 1
 params:
   controllers:
     - name: v22
       policy: training/policies/structure_hold_v22.onnx  # released
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # wall-range input, release decided
   gate_controller: v22
   seeds: [7101, 7102, 7103]  # outside the Gate 1 held-out block (9000-9999)
   num_envs: 512
@@ -34,6 +44,9 @@ params:
     airframe: gz_x500_sitl
     contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
     hold_distance: [1.0, 2.0]
+    range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+            scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+            dropout_s: [0.2, 2.0]}
     # The standard estimate corruption (eval rates), stated in full as in Gate 1.
     estimate:
       delay_min_s: 0.05
@@ -73,6 +86,11 @@ params:
       label: "x500 + 35 % payload, 0-8 m/s (hover at 0.88, near the clamp)"
       env: {airframe_rand: {mass_scale: 1.35, thrust_to_weight_scale: 0.7407, inertia_scale: 1.10,
                             hover_thrust_error: -0.086}}
+    - name: x500_payload40
+      label: "x500 + 40 % payload, 0-8 m/s (hover at 0.89, at the clamp)"
+      envelope: false
+      env: {airframe_rand: {mass_scale: 1.40, thrust_to_weight_scale: 0.7143, inertia_scale: 1.12,
+                            hover_thrust_error: -0.105}}
     - name: x500_payload50
       label: "x500 + 50 % payload, 0-8 m/s (hover above the 0.9 clamp)"
       envelope: false
@@ -88,6 +106,34 @@ params:
       label: "300 g class, hover thrust error +/-15 %"
       env: {airframe: small_300g, contact_radius_m: 0.18,
             airframe_rand: {hover_thrust_error: [-0.15, 0.15]}}
+    # Contact radius: half the diagonal plus a prop radius. The 16 kg airframe is 2.3 m across
+    # its props, so it holds at 2 to 3 m.
+    - name: mid_3kg
+      label: "3 kg class, 0-8 m/s"
+      env: {airframe: mid_3kg, contact_radius_m: 0.52}
+    - name: mid_3kg_max
+      label: "3 kg class at its 6.3 kg take-off limit, 0-8 m/s (hover at 0.81)"
+      env: {airframe: mid_3kg, contact_radius_m: 0.52,
+            airframe_rand: {mass_scale: 2.1, thrust_to_weight_scale: 0.4762, inertia_scale: 1.3,
+                            hover_thrust_error: -0.01}}
+    - name: heavy_16kg_lag40
+      label: "16 kg, rotor lag 40 ms, 0-8 m/s"
+      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
+            airframe_rand: {motor_tau_s: 0.04, rate_loop_follows_lag: true}}
+    - name: heavy_35kg_lag40
+      label: "Alta X at its 35.5 kg maximum, rotor lag 40 ms, 0-8 m/s"
+      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
+            airframe_rand: {mass_scale: 2.219, thrust_to_weight_scale: 0.4507, inertia_scale: 1.3,
+                            motor_tau_s: 0.04, rate_loop_follows_lag: true}}
+    - name: heavy_16kg_lag60
+      label: "16 kg, rotor lag 60 ms, 0-8 m/s"
+      envelope: false
+      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
+            airframe_rand: {motor_tau_s: 0.06, rate_loop_follows_lag: true}}
+    - name: heavy_16kg
+      label: "16 kg, rotor lag 120 ms (the preset), 0-8 m/s"
+      envelope: false
+      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0]}
 smoke:
   num_envs: 6
   bootstrap: 50

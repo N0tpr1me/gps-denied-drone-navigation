@@ -87,6 +87,29 @@ vehicle differs, with the tracking camera 0.02 m below the IMU (on the flight bo
 0.24 m model offset) and the wind's drag scaled to its frontal area (motor-to-motor
 diagonal squared: 0.22 of the x500's). A partner's real drone replaces all of this with
 ``eval/fit_airframe.py``.
+
+``mid_3kg`` and ``heavy_16kg``: a 3 kg and a 16 kg quadrotor, built the same way
+(``scaled_quad``) from published numbers, the rest scaled from the x500 and assumed.
+
+- ``mid_3kg`` is Holybro's X650 development kit (docs.holybro.com, X650 overview, 2026):
+  650 mm wheelbase, 15 inch props on MN4014 KV330 motors, 2.0 kg without a battery and a
+  6S battery of 0.75 to 1.2 kg (1.0 kg taken: 3.0 kg), take-off limit 6.3 kg "at 70 %
+  throttle", read here as 70 % of full thrust: 9.0 kg of thrust, thrust/weight 3.0.
+  Assumed: rotor lag 25 ms up and 50 ms down, the camera 0.08 m below the IMU.
+- ``heavy_16kg`` is the Freefly Alta X's airframe at 16 kg (Freefly's Alta X specs and
+  performance pages, 2026): 1415 mm unfolded diameter without props, 840 mm props,
+  thrust/weight 3.5 at its 19.63 kg (43.28 lb) no-payload weight, which makes 68.7 kg of
+  thrust and thrust/weight 4.3 at 16 kg. The Alta X itself weighs 10.86 kg empty and 19.63
+  kg with its standard battery pair, and takes off at up to 35.5 kg; ``airframe_rand``
+  ``mass_scale`` reaches those. Assumed, and what the hold turns on
+  (``docs/airframe-sizes.md``): rotor lag 80 ms up and 160 ms down for the 33 inch props
+  (Freefly publishes none), the camera 0.15 m below the IMU.
+
+Slow rotors slow the rate loop: the loop cannot outrun its motors, and PX4's autotune fits
+the lag it identifies. So where the rotor lag is above the x500's 19 ms, each axis's loop
+gain is the x500's times 19 ms over that lag: a roll-rate step reaches 63 % in about 0.1 s
+on ``mid_3kg`` and 0.3 s on ``heavy_16kg`` (0.06 s on the x500).
+``airframe_rand.rate_loop_follows_lag`` applies the same rule to a drawn rotor lag.
 """
 
 from __future__ import annotations
@@ -234,7 +257,12 @@ def gz_x500_sitl() -> dict[str, Any]:
     return cfg
 
 
-# ---------------------------------------------------------------- 300 g class (small_300g)
+# ---------------------------------------------------------------- other sizes
+X500_DIAGONAL = 2 * math.hypot(0.174, 0.174)  # m, motor to motor
+X500_PROP_RADIUS = 0.14  # m, the length the rotor inertia and yaw moment constant scale by
+ESC_IDLE_FRAC = 0.15  # rotor speed at zero command over full speed, as the x500's ESCs
+
+# 300 g class (small_300g): ModalAI Starling 2.
 SMALL_MASS = 0.285  # kg, Starling 2 take-off weight
 SMALL_DIAGONAL = 0.230  # m, motor to motor
 SMALL_PROP_RADIUS = 0.060  # m, 120 mm props
@@ -243,33 +271,57 @@ SMALL_ROTOR_MASS = 0.003  # kg, motor bell and prop counted with the rotor (assu
 SMALL_TAU_UP, SMALL_TAU_DOWN = 0.008, 0.016  # s (assumed: faster than the x500's)
 SMALL_ESC_RAD_S = (285.0, 1900.0)  # 15 % idle as the x500; the top speed only scales k
 SMALL_VISION_OFFSET_DOWN_M = 0.02  # tracking camera on the flight board, near the IMU
-X500_DIAGONAL = 2 * math.hypot(0.174, 0.174)  # m, motor to motor
+
+# 3 kg class (mid_3kg): Holybro X650 development kit.
+MID_MASS = 3.0  # kg: the 2.0 kg kit and a 1.0 kg 6S battery (Holybro lists 0.75 to 1.2 kg)
+MID_DIAGONAL = 0.650  # m, wheelbase
+MID_PROP_RADIUS = 0.19  # m, 15 inch props
+MID_ROTOR_THRUST = 6.3 / 0.7 / 4 * GRAVITY  # N: 6.3 kg take-off limit at 70 % throttle
+MID_ROTOR_MASS = 0.06  # kg (assumed)
+MID_TAU_UP, MID_TAU_DOWN = 0.025, 0.050  # s (assumed: 15 inch props, twice the x500's)
+MID_ESC_RAD_S = (110.0, 733.0)  # 7000 rpm at full command (assumed; only scales k)
+MID_VISION_OFFSET_DOWN_M = 0.08  # assumed
+
+# 16 kg heavy lift (heavy_16kg): the Freefly Alta X's airframe at 16 kg.
+HEAVY_MASS = 16.0  # kg (the Alta X: 10.86 kg empty, 19.63 kg with its standard battery pair)
+HEAVY_DIAGONAL = 1.415  # m, unfolded diameter without props
+HEAVY_PROP_RADIUS = 0.42  # m, 840 mm props
+HEAVY_ROTOR_THRUST = 3.5 * 19.63 / 4 * GRAVITY  # N: thrust/weight 3.5 at 43.28 lb
+HEAVY_ROTOR_MASS = 0.35  # kg (assumed)
+HEAVY_TAU_UP, HEAVY_TAU_DOWN = 0.080, 0.160  # s (assumed: 33 inch props; not published)
+HEAVY_ESC_RAD_S = (56.0, 377.0)  # 3600 rpm at full command (assumed; only scales k)
+HEAVY_VISION_OFFSET_DOWN_M = 0.15  # assumed
 
 
-def small_300g() -> dict[str, Any]:
-    """The ``small_300g`` config mapping (module docstring): the vehicle, then the PX4
-    pieces of ``gz_x500_sitl``."""
-    arm = SMALL_DIAGONAL / (2 * math.sqrt(2))  # x and y of each rotor
-    base_mass = SMALL_MASS - 4 * SMALL_ROTOR_MASS
+def scaled_quad(*, mass: float, diagonal: float, prop_radius: float, rotor_thrust: float,
+                rotor_mass: float, tau_up: float, tau_down: float, esc_rad_s: Any,
+                vision_offset_down_m: float) -> dict[str, Any]:
+    """A quadrotor of another size, built from its published mass, motor-to-motor diagonal,
+    prop size and thrust per rotor, with the rest scaled from the x500 (module docstring):
+    the vehicle, the rate gains a tune would give it, then the PX4 pieces of
+    ``gz_x500_sitl`` and the wind's drag scaled to its frontal area."""
+    arm = diagonal / (2 * math.sqrt(2))  # x and y of each rotor
+    base_mass = mass - 4 * rotor_mass
     scale = (base_mass / X500_BASE_MASS) * (arm / 0.174) ** 2
-    rotor_scale = (SMALL_ROTOR_MASS / X500_ROTOR_MASS) * (SMALL_PROP_RADIUS / 0.14) ** 2
+    rotor_scale = (rotor_mass / X500_ROTOR_MASS) * (prop_radius / X500_PROP_RADIUS) ** 2
     rotors = tuple((math.copysign(arm, x), math.copysign(arm, y), d) for x, y, d in X500_ROTORS)
     ca_rotors = tuple((math.copysign(arm, x), math.copysign(arm, y), km)
                       for x, y, km in X500_CA_ROTORS)
-    common = dict(
+    cfg = quad_from_rotors(
         base_mass=base_mass, base_inertia=tuple(i * scale for i in X500_BASE_INERTIA),
-        rotor_mass=SMALL_ROTOR_MASS,
+        rotor_mass=rotor_mass,
         rotor_inertia=tuple(i * rotor_scale for i in X500_ROTOR_INERTIA),
-        motor_constant=SMALL_ROTOR_THRUST / SMALL_ESC_RAD_S[1] ** 2,
-        moment_constant=X500_MOMENT_CONSTANT * SMALL_PROP_RADIUS / 0.14,
-        tau_up=SMALL_TAU_UP, tau_down=SMALL_TAU_DOWN, esc_rad_s=SMALL_ESC_RAD_S,
-        rotors=rotors, ca_rotors=ca_rotors)
-    cfg = quad_from_rotors(**common, rate_gains=PX4_TUNED_V1_RATE_GAINS)
-    # Autotune's equal rise time: the x500's loop gain per axis, every PID term alike.
+        motor_constant=rotor_thrust / esc_rad_s[1] ** 2,
+        moment_constant=X500_MOMENT_CONSTANT * prop_radius / X500_PROP_RADIUS,
+        tau_up=tau_up, tau_down=tau_down, esc_rad_s=esc_rad_s,
+        rotors=rotors, ca_rotors=ca_rotors, rate_gains=PX4_TUNED_V1_RATE_GAINS)
+    # Autotune's equal rise time: the x500's loop gain per axis, every PID term alike; with
+    # rotors slower than the x500's the loop is slower in proportion (it cannot outrun them).
     x500 = gz_x500()
     authority = lambda c: np.asarray(c["actuation"]["torque_per_unit"]) / np.asarray(  # noqa: E731
         c["quad"]["inertia"])
     ratio = authority(x500) / authority(cfg)
+    ratio = ratio * min(1.0, x500["quad"]["motor_tau"] / cfg["quad"]["motor_tau"])
     cfg["rate_pid"] = {k: tuple(float(g * r) for g, r in zip(v, ratio, strict=True))
                        for k, v in PX4_TUNED_V1_RATE_GAINS.items()}
     sitl = gz_x500_sitl()
@@ -277,10 +329,37 @@ def small_300g() -> dict[str, Any]:
                             for k in ("gyro_cutoff_hz", "yaw_torque_cutoff_hz")})
     cfg["dt"] = sitl["dt"]
     cfg["fusion"] = dict(sitl["fusion"])
-    cfg["vision_offset_down_m"] = SMALL_VISION_OFFSET_DOWN_M
-    area = (SMALL_DIAGONAL / X500_DIAGONAL) ** 2
+    cfg["vision_offset_down_m"] = vision_offset_down_m
+    area = (diagonal / X500_DIAGONAL) ** 2
     cfg["disturbance"] = {"k_quad": (0.8 * NOMINAL_K_QUAD * area, 1.2 * NOMINAL_K_QUAD * area)}
     return cfg
+
+
+def small_300g() -> dict[str, Any]:
+    """The ``small_300g`` config mapping (module docstring)."""
+    return scaled_quad(
+        mass=SMALL_MASS, diagonal=SMALL_DIAGONAL, prop_radius=SMALL_PROP_RADIUS,
+        rotor_thrust=SMALL_ROTOR_THRUST, rotor_mass=SMALL_ROTOR_MASS, tau_up=SMALL_TAU_UP,
+        tau_down=SMALL_TAU_DOWN, esc_rad_s=SMALL_ESC_RAD_S,
+        vision_offset_down_m=SMALL_VISION_OFFSET_DOWN_M)
+
+
+def mid_3kg() -> dict[str, Any]:
+    """The ``mid_3kg`` config mapping (module docstring)."""
+    return scaled_quad(
+        mass=MID_MASS, diagonal=MID_DIAGONAL, prop_radius=MID_PROP_RADIUS,
+        rotor_thrust=MID_ROTOR_THRUST, rotor_mass=MID_ROTOR_MASS, tau_up=MID_TAU_UP,
+        tau_down=MID_TAU_DOWN, esc_rad_s=MID_ESC_RAD_S,
+        vision_offset_down_m=MID_VISION_OFFSET_DOWN_M)
+
+
+def heavy_16kg() -> dict[str, Any]:
+    """The ``heavy_16kg`` config mapping (module docstring)."""
+    return scaled_quad(
+        mass=HEAVY_MASS, diagonal=HEAVY_DIAGONAL, prop_radius=HEAVY_PROP_RADIUS,
+        rotor_thrust=HEAVY_ROTOR_THRUST, rotor_mass=HEAVY_ROTOR_MASS, tau_up=HEAVY_TAU_UP,
+        tau_down=HEAVY_TAU_DOWN, esc_rad_s=HEAVY_ESC_RAD_S,
+        vision_offset_down_m=HEAVY_VISION_OFFSET_DOWN_M)
 
 
 AIRFRAMES = {
@@ -288,6 +367,8 @@ AIRFRAMES = {
     "gz_x500": gz_x500,
     "gz_x500_sitl": gz_x500_sitl,
     "small_300g": small_300g,
+    "mid_3kg": mid_3kg,
+    "heavy_16kg": heavy_16kg,
 }
 
 

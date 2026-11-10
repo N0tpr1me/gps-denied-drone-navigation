@@ -9,13 +9,16 @@
 # weight, rotor lag, rate-loop authority (inertia against torque), the hover-thrust error and
 # wind push per kilogram. Each is spread around the x500 to cover the three scored airframes
 # (eval/configs/airframe_sizes.yaml) and a margin:
-#   - thrust/weight x0.75 to x1.6 of the x500's 1.69: 1.27 (x500 + ~35 % payload) to 2.7
-#     (the 300 g class at 2.6); below about 1.2 the module's 0.9 thrust clamp cannot hover;
+#   - thrust/weight x0.75 to x1.8 of the x500's 1.69: 1.27 (x500 + ~35 % payload) to 3.0
+#     (the 300 g class at 2.6, the 3 kg class at 3.0); below about 1.2 the module's 0.9
+#     thrust clamp cannot hover;
 #   - mass x0.7 to x1.6 (payload, battery), inertia x0.6 to x1.6, rotor lag 8 to 40 ms;
 #   - drag 0.8 to 2.0 times the fitted x500 drag (k_quad), so with the mass spread the wind
 #     pushes 0.5 to 2.9 times as hard per kilogram (the 300 g class: 1.6 times, its frontal
 #     area against its mass);
 #   - PX4's hover-thrust estimate off by up to 20 %, as v22.
+# Rotors up to 40 ms cover the 300 g and 3 kg classes. A heavy lifter's slow rotors (16 kg on
+# 33 inch props, 60 ms and more) are a different job: structure_hold_ppo_v27_heavy.yaml.
 # GPU-sized as v26_wind: 4096 drones, 800 iterations plus the warm-up, one part, under 1 h.
 #   python -m training.launch --config training/configs/structure_hold_ppo_v27_airframes.yaml --smoke --device cpu
 #   python -m training.launch --config training/configs/structure_hold_ppo_v27_airframes.yaml --device cuda
@@ -58,7 +61,7 @@ params:
     airframe_rand:
       mass_scale: [0.7, 1.6]  # v22: [0.85, 1.2]
       inertia_scale: [0.6, 1.6]  # v22: [0.75, 1.35]
-      thrust_to_weight_scale: [0.75, 1.6]  # v22: [0.9, 1.1]
+      thrust_to_weight_scale: [0.75, 1.8]  # v22: [0.9, 1.1]
       motor_tau_s: [0.008, 0.04]  # v22: [0.012, 0.035]
       hover_thrust_error: [-0.2, 0.2]
     wall_yaw_torque:
@@ -91,7 +94,7 @@ smoke:
     reengage_min_s: 0.5
     disturbance: {mean_heading_deg: [-90.0, 90.0], k_quad: [0.02264, 0.05661]}
     airframe_rand: {mass_scale: [0.7, 1.6], inertia_scale: [0.6, 1.6],
-                    thrust_to_weight_scale: [0.75, 1.6], motor_tau_s: [0.008, 0.04],
+                    thrust_to_weight_scale: [0.75, 1.8], motor_tau_s: [0.008, 0.04],
                     hover_thrust_error: [-0.2, 0.2]}
   eval:
     num_envs: 8
