@@ -45,9 +45,9 @@ Frames and units follow docs/conventions.md: world ENU, SI units, arrays ``(num_
 
 Not modelled yet: variation along the surface (every term depends on distance only), the
 yaw torque near the wall (the published case shows it changing sign, but one data point is
-not enough to fit it), ground and ceiling effect on the rotors, and the near-wall flow of the
-second surface beyond its shelter and edge shedding. The fan rig in Phase 3 fits the
-parameters; until then the ranges are wide on purpose.
+not enough to fit it), and the near-wall flow of the second surface beyond its shelter and
+edge shedding. Ground, ceiling and wall effect on the rotors are in ``envs/ambient``. The
+fan rig in Phase 3 fits the parameters; until then the ranges are wide on purpose.
 """
 
 from __future__ import annotations
@@ -143,6 +143,11 @@ class DisturbanceConfig:
     surface2_shed_width: tuple[float, float] = (1.0, 3.0)  # D, m: the deck's depth
     surface2_shed_strouhal: tuple[float, float] = (0.1, 0.15)  # box-like bridge decks
     surface2_wake_length: tuple[float, float] = (1.0, 4.0)  # m
+    # A steady vertical wind, m/s, + up: the draught up a sunlit facade or a shaft, the
+    # downdraught off a roof edge or under a ventilation outlet. Added to the mean wind's z
+    # (the mean wind is horizontal otherwise) and sheltered like the rest of it. Off by
+    # default and drawn last, so every config written before it flies the same air.
+    mean_vertical: tuple[float, float] = (0.0, 0.0)
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -302,6 +307,8 @@ def sample_params(
     flow = _near_wall_flow(cfg, rng if has_wall else None, mean_wind, shape, unit_normal)
     second = _surface2(cfg, rng, n, mean_wind, surface2_point, surface2_normal,
                        surface2_across)
+    if cfg.mean_vertical != (0.0, 0.0):
+        mean_wind[:, 2] = u(cfg.mean_vertical)
 
     return DisturbanceParams(
         mean_wind=mean_wind,

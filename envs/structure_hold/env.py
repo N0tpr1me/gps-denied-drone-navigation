@@ -62,6 +62,14 @@ termination are all taken against the moving point, so a plain hold is a pass of
 ``hold_vel`` is the hold point's velocity; ``step_hold`` the hold point that went with
 ``step_pos``.
 
+The surroundings (``cfg.ambient``, off by default, ``envs/ambient``): air density, battery
+level and rain change the thrust and torque a command gives (``amb_power``) and the wind's
+force (``amb_drag``); PX4's hover-thrust estimate hides the offset, so what is left is less
+headroom, a slower rate loop and the battery's sag at the top of the throttle. Rotors near the
+ground, a deck or the wall add ``ambient_force``. Slow IMU errors (``cfg.sensor_noise``:
+``gyro_bias_rad_s``, ``tilt_bias_deg``) and a rangefinder on glass (``cfg.range``:
+``glass_prob``) are drawn per episode from generators of their own, as is everything here.
+
 ``term_reason`` holds, per env, why its last episode ended (``TERM_REASONS``), so a scorer can
 tell crashes apart after the env has already reset.
 """
@@ -74,6 +82,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from envs.ambient import nearness, sag_gain, sample_ambient, surface_gain
 from envs.disturbance import sample_params
 from envs.disturbance import torch_adapter as wind
 from envs.estimate.ekf import TorchFusion
@@ -81,6 +90,8 @@ from envs.estimate.torch_adapter import TorchEstimateCorruptor, TorchHeadingErro
 from envs.sims import QuadState, RatePid, make_sim
 from envs.sims.torch_quad import (
     GRAVITY,
+    body_z_world,
+    quat_from_axis_angle,
     quat_from_yaw,
     quat_mul,
     quat_rotate,
@@ -246,6 +257,36 @@ class StructureHoldEnv:
         # pass's own clock (rsl_rl's random episode phase moves episode_time, and a pass must
         # still start from its beginning). step_hold is the hold point step_pos went with.
         self.passes = PassPaths(cfg.surface_pass, n, seed, dev, dt)
+        # The surroundings (cfg.ambient), per episode from generators of their own: thrust and
+        # torque per command against the standard day at nominal voltage, the wind force's scale
+        # (air density), the battery's sag, the rain's weight on the vehicle, and the rotors'
+        # radius and coefficients near a surface. All neutral while the block is off.
+        self.ambient_rng = np.random.default_rng([int(seed), 0xA3B])
+        self.ambient_gen = torch.Generator(device=device).manual_seed(int(seed) * 7919 + 0xA3B)
+        ones = lambda: torch.ones(n, dtype=dt, device=dev)  # noqa: E731
+        zeros = lambda *k: torch.zeros(n, *k, dtype=dt, device=dev)  # noqa: E731
+        self.amb_power, self.amb_drag = ones(), ones()
+        self.amb_sag, self.amb_down = zeros(), zeros()
+        self.amb_radius, self.amb_wall_pull, self.amb_unsteady = zeros(), zeros(), zeros()
+        self.amb_ground_coef, self.amb_ceiling_coef = zeros(), zeros()
+        self.amb_baro_wind = zeros()
+        self.ambient_force = zeros(3)  # what the rain and the surfaces add this step, N
+        self.unsteady_noise = zeros(3)
+        self.baro_wind_ref = zeros()  # the static port's error at the engage, m
+        self.baro_wind_err = zeros()  # and how far it has moved since
+        # Slow IMU errors (cfg.sensor_noise.gyro_bias_rad_s, tilt_bias_deg): a constant gyro
+        # bias and the estimator's attitude tipped about a horizontal axis, per episode.
+        self.bias_gen = torch.Generator(device=device).manual_seed(int(seed) * 7919 + 0xB1A)
+        self.gyro_bias = zeros(3)
+        self.tilt_quat = torch.zeros(n, 4, dtype=dt, device=dev)
+        self.tilt_quat[:, 0] = 1.0
+        # A rangefinder on glass or water (cfg.range.glass_prob): which episodes have it, how
+        # much further the beam reads through it, for what share of the time, and whether it
+        # is reading through now.
+        self.glass_rng = np.random.default_rng([int(seed), 0x61A])
+        self.glass = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.glass_through = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.glass_extra, self.glass_frac = zeros(), zeros()
         self.hold_vel = torch.zeros(n, 3, dtype=dt, device=dev)
         self.pass_time = torch.zeros(n, dtype=dt, device=dev)
         self.step_hold = torch.zeros(n, 3, dtype=dt, device=dev)
@@ -261,9 +302,12 @@ class StructureHoldEnv:
     @property
     def believed_quat(self) -> torch.Tensor:
         """The attitude the module believes it has, in the structure frame it latched at
-        engage: the true one turned by how far the heading error has moved since. The true
-        attitude when there is no heading error."""
+        engage: the true one turned by how far the heading error has moved since, and tipped
+        by the estimator's tilt error when ``cfg.sensor_noise.tilt_bias_deg`` is on. The true
+        attitude when there is neither."""
         q = self.sim.state.quat
+        if self.cfg.sensor_noise.biased:  # the estimator's attitude is tipped (tilt_bias_deg)
+            q = quat_mul(self.tilt_quat, q)
         if self.heading_err is None:
             return q
         return quat_mul(quat_from_yaw(self.heading_err.delta - self.heading_latch), q)
@@ -334,6 +378,8 @@ class StructureHoldEnv:
             u = torch.rand(n, 3, generator=self.noise_gen, device=self.device, dtype=self.dtype)
             self.noise_std[env_ids] = u * top
             self.vel_wander[env_ids] = 0.0
+        if cfg.sensor_noise.biased:
+            self._draw_imu_bias(env_ids)
 
         dist = rng.uniform(*cfg.hold_distance, size=n)
         height = rng.uniform(*cfg.hold_height, size=n)
@@ -399,6 +445,10 @@ class StructureHoldEnv:
         self.estimate_stale[env_ids] = False
         self.estimate_age[env_ids] = 0.0
         self.wind_force[env_ids] = 0.0
+        self.ambient_force[env_ids] = 0.0
+        self.unsteady_noise[env_ids] = 0.0
+        self.baro_wind_ref[env_ids] = 0.0
+        self.baro_wind_err[env_ids] = 0.0
         self.range_ref[env_ids] = self.clearance(self.hold_point[env_ids])
         self.hold_vel[env_ids] = 0.0
         self.pass_time[env_ids] = 0.0
@@ -422,6 +472,15 @@ class StructureHoldEnv:
         self.range_drop_left[env_ids] = 0.0
         self.range_accepted[env_ids] = math.nan  # a new flight: the first reading is accepted
         self.range_pending[env_ids] = math.nan
+        if rc.glass_prob > 0:
+            g = self.glass_rng
+            frac = g.uniform(*rc.glass_frac, size=n)
+            self.glass[env_ids] = torch.as_tensor(g.random(n) < rc.glass_prob,
+                                                  device=self.device)
+            self.glass_extra[env_ids] = t(g.uniform(*rc.glass_extra_m, size=n))
+            self.glass_frac[env_ids] = t(frac)
+            self.glass_through[env_ids] = torch.as_tensor(g.random(n) < frac,
+                                                          device=self.device)
         take = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         self._take_range(take, self._range_reading())
@@ -435,6 +494,8 @@ class StructureHoldEnv:
         true = torch.where(cos > 1e-3, self.clearance() / cos.clamp(min=1e-3),
                            torch.full_like(cos, math.inf))
         true = torch.where(true > 0, true, torch.full_like(true, math.inf))
+        if rc.glass_prob > 0:  # through the glass: the thing behind it answers
+            true = torch.where(self.glass & self.glass_through, true + self.glass_extra, true)
         n = self.num_envs
         noise = torch.randn(n, generator=self.range_gen, device=self.device, dtype=self.dtype)
         r = true * (1.0 + self.range_scale) + noise * (rc.noise_std_m + rc.noise_frac
@@ -459,6 +520,14 @@ class StructureHoldEnv:
                 self.range_drop_left[start] = torch.as_tensor(
                     self.range_rng.uniform(*rc.dropout_s, size=k), dtype=self.dtype,
                     device=self.device)
+        if rc.glass_prob > 0:
+            # A new stretch starts every glass_dwell_s on average, through the glass with
+            # the episode's share of the time.
+            g, k = self.glass_rng, self.num_envs
+            redraw = torch.as_tensor(g.random(k) < dt / rc.glass_dwell_s, device=self.device)
+            through = torch.as_tensor(g.random(k), dtype=self.dtype,
+                                      device=self.device) < self.glass_frac
+            self.glass_through = torch.where(redraw, through, self.glass_through)
         due = self.range_timer <= 0
         self.range_timer = torch.where(due, self.range_timer + 1.0 / rc.rate_hz, self.range_timer)
         take = due & (self.range_drop_left <= 0)
@@ -510,23 +579,36 @@ class StructureHoldEnv:
         return u_hover * (1.0 + np.asarray(hover_err, dtype=np.float64)) / (q.mass * GRAVITY)
 
     def _draw_airframe(self, env_ids: torch.Tensor) -> None:
-        """Per-episode airframe and near-wall yaw moment, from their own generator. Nothing
-        is drawn (and the sim keeps ``cfg.quad``) while both are off."""
+        """Per-episode airframe, surroundings and near-wall yaw moment, each from its own
+        generator. Nothing is drawn (and the sim keeps ``cfg.quad``) while all are off."""
         cfg, rng, n = self.cfg, self.airframe_rng, int(env_ids.numel())
         t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
         ar = cfg.airframe_rand
-        if ar.active:
+        amb = self._draw_ambient(env_ids) if cfg.ambient.active else None
+        if ar.active or amb is not None:
             q = cfg.quad
-            mass = rng.uniform(*ar.mass_scale, size=n)
-            inertia = rng.uniform(*ar.inertia_scale, size=n)
-            tw = rng.uniform(*ar.thrust_to_weight_scale, size=n)
-            tau = (np.full(n, q.motor_tau) if ar.motor_tau_s is None
-                   else rng.uniform(*ar.motor_tau_s, size=n))
-            hover_err = rng.uniform(*ar.hover_thrust_error, size=n)
+            if ar.active:
+                mass = rng.uniform(*ar.mass_scale, size=n)
+                inertia = rng.uniform(*ar.inertia_scale, size=n)
+                tw = rng.uniform(*ar.thrust_to_weight_scale, size=n)
+                tau = (np.full(n, q.motor_tau) if ar.motor_tau_s is None
+                       else rng.uniform(*ar.motor_tau_s, size=n))
+                hover_err = rng.uniform(*ar.hover_thrust_error, size=n)
+            else:
+                mass = inertia = tw = np.ones(n)
+                tau, hover_err = np.full(n, q.motor_tau), np.zeros(n)
+            extra = {}
+            if amb is not None:
+                # The rain's film is weight the rotors carry; density, battery level and rain
+                # scale what a command gives, thrust and torque alike. PX4's hover-thrust
+                # estimate follows both, so what changes is the headroom.
+                mass = mass * amb.mass_scale
+                tw = tw * amb.power / amb.mass_scale
+                extra["max_torque"] = np.asarray(q.max_torque)[None, :] * amb.power[:, None]
             self.sim.set_airframe(
                 env_ids, mass=q.mass * mass,
                 inertia=np.asarray(q.inertia)[None, :] * inertia[:, None],
-                max_thrust=q.max_thrust * mass * tw, motor_tau=tau,
+                max_thrust=q.max_thrust * mass * tw, motor_tau=tau, **extra,
             )
             self.thrust_gain[env_ids] = t(mass * (1.0 + hover_err))
             self.thrust_cmd_per_n[env_ids] = t(self._cmd_per_newton(mass, tw, hover_err))
@@ -538,6 +620,71 @@ class StructureHoldEnv:
             peak = rng.uniform(*wy.peak_nm, size=n)
             sign = np.where(rng.random(n) < 0.5, -1.0, 1.0)
             self.yaw_torque_peak[env_ids] = t(peak * sign)
+
+    def _draw_ambient(self, env_ids: torch.Tensor) -> Any:
+        """One episode's surroundings for ``env_ids`` (``cfg.ambient``), kept on tensors for
+        the step; returns the draw (NumPy) for the airframe."""
+        p = sample_ambient(self.cfg.ambient, int(env_ids.numel()), self.ambient_rng)
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        self.amb_power[env_ids] = t(p.power)
+        self.amb_drag[env_ids] = t(p.density_ratio)
+        self.amb_sag[env_ids] = t(p.battery_sag)
+        self.amb_down[env_ids] = t(p.down_force_n)
+        self.amb_radius[env_ids] = t(p.rotor_radius_m)
+        self.amb_ground_coef[env_ids] = t(p.ground_coef)
+        self.amb_ceiling_coef[env_ids] = t(p.ceiling_coef)
+        self.amb_wall_pull[env_ids] = t(p.wall_pull)
+        self.amb_unsteady[env_ids] = t(p.unsteady)
+        self.amb_baro_wind[env_ids] = t(p.baro_wind_m_per_mps2)
+        return p
+
+    def _draw_imu_bias(self, env_ids: torch.Tensor) -> None:
+        """One episode's slow IMU errors (``cfg.sensor_noise``): a gyro bias per axis and the
+        estimator's attitude tipped about a random horizontal axis."""
+        sn, n = self.cfg.sensor_noise, int(env_ids.numel())
+        kw = dict(generator=self.bias_gen, device=self.device, dtype=self.dtype)
+        std = torch.rand(n, 2, **kw)
+        self.gyro_bias[env_ids] = std[:, :1] * sn.gyro_bias_rad_s * torch.randn(n, 3, **kw)
+        angle = std[:, 1] * math.radians(sn.tilt_bias_deg) * torch.randn(n, **kw)
+        heading = 2.0 * math.pi * torch.rand(n, **kw)
+        axis = torch.stack([torch.cos(heading), torch.sin(heading), torch.zeros_like(heading)], 1)
+        self.tilt_quat[env_ids] = quat_from_axis_angle(axis, angle)
+
+    def _ambient_force(self) -> torch.Tensor:
+        """What the surroundings add to the wind's force this step, (N, 3) N, world: the
+        rain's momentum, and near a surface the rotors' extra thrust (ground, deck), the pull
+        toward the wall and the downwash coming back."""
+        amb, st = self.cfg.ambient, self.sim.state
+        f = torch.zeros(self.num_envs, 3, dtype=self.dtype, device=self.device)
+        f[:, 2] = -self.amb_down
+        if not amb.surfaces:
+            return f
+        thrust = self.sim.thrust  # what the rotors give now, after the motor lag
+        r = self.amb_radius
+        d_ground, d_deck, d_wall = st.pos[:, 2], self.deck_clearance(st.pos), self.clearance(st.pos)
+        gain = (surface_gain(r, d_ground, self.amb_ground_coef)
+                * surface_gain(r, d_deck, self.amb_ceiling_coef))
+        x_wall = nearness(r, d_wall)
+        f = f + ((gain - 1.0) * thrust)[:, None] * body_z_world(st.quat)
+        f = f + (self.amb_wall_pull * thrust * x_wall * x_wall)[:, None] * self.wall_normal
+        if amb.unsteady[1] > 0:
+            near = (nearness(r, d_ground) ** 2 + nearness(r, d_deck) ** 2
+                    + x_wall * x_wall).clamp(max=1.0)
+            a = math.exp(-self.dt / amb.unsteady_tau_s)
+            self.unsteady_noise = a * self.unsteady_noise + math.sqrt(1.0 - a * a) * torch.randn(
+                self.num_envs, 3, generator=self.ambient_gen, device=self.device,
+                dtype=self.dtype)
+            f = f + (self.amb_unsteady * thrust * near)[:, None] * self.unsteady_noise
+        return torch.nan_to_num(f)
+
+    def _baro_wind(self, state: QuadState) -> torch.Tensor:
+        """How far the barometer's reading has moved since the engage because of the air
+        moving past its static port, (N,) m (``cfg.ambient.baro_wind_m_per_mps2``)."""
+        air = wind.air_velocity(self.wind, self.episode_time, state.pos) - state.vel
+        err = torch.nan_to_num(self.amb_baro_wind * (air * air).sum(-1))
+        self.baro_wind_ref = torch.where(self.episode_step == 1, err, self.baro_wind_ref)
+        self.baro_wind_err = err - self.baro_wind_ref
+        return self.baro_wind_err
 
     def _add_sensor_noise(self, o: torch.Tensor) -> None:
         """Gyro and attitude noise, and slow velocity wander (cfg.sensor_noise)."""
@@ -590,15 +737,33 @@ class StructureHoldEnv:
             thrust = self.max_thrust_act * cfg.actuation.thrust_fraction(u)
         else:
             thrust = thrust * self.thrust_gain
-        thrust_n, weight_n = thrust, cfg.quad.mass * self.mass_scale * GRAVITY
-        torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
+        weight_n = cfg.quad.mass * self.mass_scale * GRAVITY
+        ambient = cfg.ambient.active
+        if ambient:
+            # The battery sags under load: the top of the throttle gives less than its share.
+            cap = self.max_thrust_act
+            thrust = thrust * sag_gain(self.amb_sag, (thrust / cap).clamp(0.0, 1.0),
+                                       (weight_n / cap).clamp(max=1.0))
+        thrust_n = thrust
+        gyro = self.sim.state.ang_vel
+        if cfg.sensor_noise.biased:
+            gyro = gyro + self.gyro_bias
+        torque = self.rate_pid(self.rate_sp, gyro)
         self.wind_force = wind.disturbance_force(
             self.wind, self.episode_time, self.sim.state.pos, self.sim.state.vel
         )
+        force = self.wind_force
+        if ambient:
+            # Thinner air and a lower battery give less torque per unit of rate-loop output,
+            # and thinner air pushes less.
+            torque = torque * self.amb_power[:, None]
+            self.wind_force = self.wind_force * self.amb_drag[:, None]
+            self.ambient_force = self._ambient_force()
+            force = self.wind_force + self.ambient_force
         tau_ext = self._wall_yaw_torque(self.sim.state.pos)
         vel_before = self.sim.state.vel.clone()
-        state = (self.sim.step(thrust, torque, self.wind_force) if tau_ext is None
-                 else self.sim.step(thrust, torque, self.wind_force, tau_ext))
+        state = (self.sim.step(thrust, torque, force) if tau_ext is None
+                 else self.sim.step(thrust, torque, force, tau_ext))
         self.episode_step += 1
         self.episode_time += cfg.dt
         self.engage_time += cfg.dt
@@ -620,8 +785,10 @@ class StructureHoldEnv:
         if self.fusion is not None:
             accel = torch.where(finite[:, None], (state.vel - vel_before) / cfg.dt,
                                 torch.zeros_like(vel_before))
-            self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
-                                                                    ~est.stale, true_pos=state.pos)
+            baro = (self._baro_wind(state) if cfg.ambient.baro_wind and cfg.fusion.baro
+                    else None)
+            self.estimate_pos, self.estimate_vel = self.fusion.step(
+                accel, est.pos, est.vel, ~est.stale, true_pos=state.pos, baro_offset=baro)
         self.estimate_stale, self.estimate_age = est.stale, est.age
         if self.heading_err is not None:
             self.heading_err.step()
@@ -760,9 +927,11 @@ class StructureHoldEnv:
         o[:, OBS["pos_err"]] = self.to_latched(self.estimate_pos - self.hold_point).clamp(
             -cfg.obs_pos_clip_m, cfg.obs_pos_clip_m)
         o[:, OBS["vel"]] = self.to_latched(self.estimate_vel - self.hold_vel)
-        o[:, OBS["gravity_body"]] = quat_rotate_inverse(state.quat, down)
+        biased = cfg.sensor_noise.biased
+        o[:, OBS["gravity_body"]] = quat_rotate_inverse(
+            quat_mul(self.tilt_quat, state.quat) if biased else state.quat, down)
         o[:, OBS["heading"]] = quat_rotate(self.believed_quat, fwd)[:, :2]
-        rates = state.ang_vel
+        rates = state.ang_vel + self.gyro_bias if biased else state.ang_vel
         pid = self.rate_pid
         if pid.gyro_alpha < 1.0:
             # PX4's filtered gyro as the rate loop last read it, one tick old: the delay

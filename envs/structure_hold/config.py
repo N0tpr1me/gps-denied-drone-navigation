@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from envs.ambient import AmbientConfig
 from envs.disturbance import DisturbanceConfig
 from envs.estimate import EstimateCorruptionConfig
 from envs.estimate.ekf import FusionConfig
@@ -197,22 +198,44 @@ class SensorNoise:
     ten times more than in the mock; in the mock, noisy rate or velocity inputs lift its hold
     the same way (docs/decisions.md, 2026-10-22). Off by default; its own generator, so it
     changes nothing else.
+
+    Two slow IMU errors, what temperature and vibration leave after EKF2's own bias states
+    (``docs/environment-factors.md``), each a constant per episode, per axis normal with a
+    standard deviation drawn uniformly between 0 and the maximum here, from a generator of
+    their own:
+
+    - ``gyro_bias_rad_s``: on the body rates the rate loop and the policy read, so the
+      vehicle turns at minus the bias when the loop thinks it is still (a gyro warming up
+      drifts a few hundredths of a rad/s before EKF2 has it);
+    - ``tilt_bias_deg``: the attitude the estimator reports is tipped by this about a
+      horizontal axis (an accelerometer offset or vibration EKF2 reads as gravity: 1 deg is
+      0.17 m/s^2 sideways). The gravity input and ``env.believed_quat`` carry it, so the PD
+      yardstick steers with the same wrong attitude.
     """
 
     ang_vel_std_rad_s: float = 0.0
     gravity_std: float = 0.0
     vel_wander_std_mps: float = 0.0
     vel_wander_tau_s: float = 0.3
+    gyro_bias_rad_s: float = 0.0
+    tilt_bias_deg: float = 0.0
 
     def __post_init__(self) -> None:
-        if min(self.ang_vel_std_rad_s, self.gravity_std, self.vel_wander_std_mps) < 0:
+        if min(self.ang_vel_std_rad_s, self.gravity_std, self.vel_wander_std_mps,
+               self.gyro_bias_rad_s, self.tilt_bias_deg) < 0:
             raise ValueError("sensor noise stds must be >= 0")
         if self.vel_wander_tau_s <= 0:
             raise ValueError("vel_wander_tau_s must be positive")
+        if self.tilt_bias_deg > 20:
+            raise ValueError("tilt_bias_deg must be at most 20")
 
     @property
     def active(self) -> bool:
         return max(self.ang_vel_std_rad_s, self.gravity_std, self.vel_wander_std_mps) > 0
+
+    @property
+    def biased(self) -> bool:
+        return max(self.gyro_bias_rad_s, self.tilt_bias_deg) > 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> SensorNoise:
@@ -244,6 +267,14 @@ class RangeSensor:
     the second reading. 0 turns it off. A single outlier would otherwise kick the policy for
     a whole sample period: with 1 % outliers and no gate, v23's 2.2 to 6 Hz rate content
     doubled in the Gazebo-like check (``docs/wall-range.md``).
+
+    Glass and water (``docs/environment-factors.md``): per episode, with probability
+    ``glass_prob``, the surface lets the beam through or mirrors it, so for stretches the
+    reading is the thing behind it: the true range plus an extra drawn in ``glass_extra_m``,
+    for a share of the time drawn in ``glass_frac``, in stretches ``glass_dwell_s`` long on
+    average. Two agreeing readings pass the spike gate, as they do in the module, so the
+    input then says the wall is that much further away than it is. Off by default; its own
+    generator.
     """
 
     present_prob: float = 0.0
@@ -260,10 +291,20 @@ class RangeSensor:
     max_age_s: float = 0.2  # WallGuardLimits::max_age_us
     obs_clip_m: float = 1.0  # the input's clip: past 1 m off the hold point a reading is suspect
     spike_gate_m: float = 0.25  # 5 m/s between two 20 Hz readings: no hover moves that fast
+    glass_prob: float = 0.0
+    glass_extra_m: tuple[float, float] = (0.5, 3.0)
+    glass_frac: tuple[float, float] = (0.2, 0.8)
+    glass_dwell_s: float = 0.5
 
     def __post_init__(self) -> None:
-        for name in ("scale_error", "dropout_s"):
+        for name in ("scale_error", "dropout_s", "glass_extra_m", "glass_frac"):
             object.__setattr__(self, name, _range(getattr(self, name), name))
+        if not 0.0 <= self.glass_prob <= 1.0:
+            raise ValueError("range glass_prob must lie in [0, 1]")
+        if self.glass_extra_m[0] < 0 or self.glass_frac[0] < 0 or self.glass_frac[1] > 1:
+            raise ValueError("range glass_extra_m must be >= 0 and glass_frac in [0, 1]")
+        if self.glass_dwell_s <= 0:
+            raise ValueError("range glass_dwell_s must be positive")
         if not 0.0 <= self.present_prob <= 1.0 or not 0.0 <= self.outlier_prob <= 1.0:
             raise ValueError("range present_prob and outlier_prob must lie in [0, 1]")
         if self.rate_hz <= 0 or self.max_age_s <= 0 or self.obs_clip_m <= 0:
@@ -480,6 +521,9 @@ class StructureHoldConfig:
     # The estimator's heading off the true one (a compass near steel; envs/estimate/heading.py,
     # docs/heading-error.md). Off by default.
     heading_error: HeadingErrorConfig = field(default_factory=HeadingErrorConfig)
+    # Air density, battery, rain and rotors near a surface (envs/ambient,
+    # docs/environment-factors.md). Off by default.
+    ambient: AmbientConfig = field(default_factory=AmbientConfig)
 
     def __post_init__(self) -> None:
         if self.vision_offset_down_m < 0:
@@ -537,6 +581,7 @@ class StructureHoldConfig:
             "surface_pass": SurfacePass.from_dict,
             "fusion": FusionConfig.from_dict,
             "heading_error": HeadingErrorConfig.from_dict,
+            "ambient": AmbientConfig.from_dict,
         }
         for key, build in nested.items():
             if key in d:

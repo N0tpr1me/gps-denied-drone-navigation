@@ -240,3 +240,81 @@ def test_fault_start_holds_faults_back_and_keeps_the_later_draws():
     jumped = np.stack([model.step(pos[k], vel[k]).jumped for k in range(400, 600)])
     assert not jumped[:, : n // 2].any() and jumped[:, n // 2:].any()
 
+
+
+def test_poor_seeing_is_off_by_default_and_scales_what_it_says():
+    """degrade_*: a share of the episodes gets noisier, walks further and loses the fix and
+    jumps more often; the others, and every config without it, fly the estimate they had."""
+    from dataclasses import replace
+
+    n = 400
+    pos, vel = ramp(600, n)
+    base = EstimateCorruptionConfig()
+    a = run(EstimateCorruptor(base, n, DT, seed=4), pos, vel)
+    # Ranges without a probability do nothing, and neither does a probability without ranges.
+    for off in (replace(base, degrade_noise_scale=(2.0, 4.0)), replace(base, degrade_prob=1.0)):
+        assert not off.degrades
+        b = run(EstimateCorruptor(off, n, DT, seed=4), pos, vel)
+        np.testing.assert_array_equal(a["pos"], b["pos"])
+        np.testing.assert_array_equal(a["stale"], b["stale"])
+
+    cfg = replace(base, degrade_prob=0.5, degrade_noise_scale=(3.0, 3.0),
+                  degrade_walk_scale=(2.0, 2.0), degrade_jump_rate_scale=(10.0, 10.0),
+                  degrade_dropout_rate_scale=(20.0, 20.0))
+    assert cfg.degrades
+    model = EstimateCorruptor(cfg, n, DT, seed=4)
+    c = run(model, pos, vel)
+    poor = model.quality[:, 0] > 1.0
+    assert 0.4 < poor.mean() < 0.6
+    np.testing.assert_array_equal(model.quality[poor], np.tile([3.0, 2.0, 10.0, 20.0],
+                                                               (poor.sum(), 1)))
+    # The episodes with the standard estimate are the ones they were, bit for bit.
+    np.testing.assert_array_equal(c["pos"][:, ~poor], a["pos"][:, ~poor])
+    np.testing.assert_array_equal(c["stale"][:, ~poor], a["stale"][:, ~poor])
+    # The poor ones lose the fix and jump far more often.
+    assert c["dropout_started"][:, poor].mean() > 5 * max(a["dropout_started"][:, poor].mean(),
+                                                           1e-5)
+    assert c["jumped"][:, poor].mean() > 4 * max(a["jumped"][:, poor].mean(), 1e-5)
+    # A new episode draws its seeing again.
+    before = model.quality.copy()
+    model.reset(pos[0], vel[0], env_ids=np.arange(n // 2))
+    assert (model.quality[: n // 2] != before[: n // 2]).any()
+    np.testing.assert_array_equal(model.quality[n // 2:], before[n // 2:])
+
+
+def test_seeing_factors_scale_the_noise_and_the_walk():
+    n = 2000
+    still = np.zeros((300, n, 3))
+    noisy = only(pos_noise_std_m=0.02, vel_noise_std_mps=0.05)
+    model = EstimateCorruptor(noisy, n, DT, seed=0)
+    model.reset(still[0], still[0])
+    model.set_quality([4.0, 1.0, 1.0, 1.0], env_ids=np.arange(n // 2))
+    out = model.step(still[0], still[0])
+    assert out.pos[: n // 2].std() == pytest.approx(0.08, rel=0.1)
+    assert out.pos[n // 2:].std() == pytest.approx(0.02, rel=0.1)
+    assert out.vel[: n // 2].std() == pytest.approx(0.2, rel=0.1)
+
+    walk = only(bias_walk_std_m_per_sqrt_s=0.01, bias_max_m=0.05)
+    model = EstimateCorruptor(walk, n, DT, seed=0)
+    model.reset(still[0], still[0])
+    model.set_quality([1.0, 3.0, 1.0, 1.0], env_ids=np.arange(n // 2))
+    for _ in range(100):
+        out = model.step(still[0], still[0])
+    assert out.pos[: n // 2].std() == pytest.approx(0.03, rel=0.15)  # 3 x 0.01 x sqrt(1 s)
+    assert out.pos[n // 2:].std() == pytest.approx(0.01, rel=0.15)
+    for _ in range(3000):
+        out = model.step(still[0], still[0])
+    assert np.abs(out.pos[: n // 2]).max() == pytest.approx(0.15, abs=1e-9)  # the cap scales too
+    assert np.abs(out.pos[n // 2:]).max() == pytest.approx(0.05, abs=1e-9)
+
+
+def test_seeing_config_is_validated_and_read_from_yaml_lists():
+    cfg = EstimateCorruptionConfig.from_dict({"degrade_prob": 0.3,
+                                              "degrade_noise_scale": [1, 5],
+                                              "degrade_walk_scale": 2})
+    assert cfg.degrade_noise_scale == (1.0, 5.0) and cfg.degrade_walk_scale == (2.0, 2.0)
+    cfg.validate(DT)
+    for bad in (dict(degrade_prob=1.5), dict(degrade_noise_scale=(3.0, 1.0)),
+                dict(degrade_walk_scale=(-1.0, 1.0))):
+        with pytest.raises(ValueError):
+            EstimateCorruptionConfig(**bad).validate(DT)

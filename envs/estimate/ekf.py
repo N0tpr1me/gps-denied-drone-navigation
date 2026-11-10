@@ -51,6 +51,16 @@ with the horizontal position and the velocity reset to the fix but the height le
 The vision height is then not fused at all: the bias estimator absorbs it. ``step`` needs
 the true position for the barometer in this mode.
 
+Pressure that is not height (barometer reference only; ``docs/environment-factors.md``): a
+barometer reads 12 Pa as one metre, and indoors the air pressure moves by more than that
+when a door or a shutter opens, the ventilation starts, or a train pushes air down a tunnel.
+``baro_step_rate_hz`` draws such events: each moves the reading by ``baro_step_m`` (either
+way), reached with the time constant ``baro_step_tau_s``, and with ``baro_step_decay_s`` set
+it leaks back to nothing (a door that shuts again, a train that has passed). ``step`` also
+takes ``baro_offset``, metres added to the reading from outside: the env passes the wind on
+the static port (``envs/ambient``). The fused height follows all of it, as it follows the
+barometer's own walk, because the barometer is the reference. Off by default.
+
 Not modelled: attitude and bias states, EKF2's limit of five horizontal resets per fusion
 start (after it, EKF2 stops and restarts the fusion, which resets anyway). Off by default;
 the ``gz_x500_sitl`` airframe turns it on (docs/decisions.md 2026-10-23).
@@ -92,8 +102,21 @@ class FusionConfig:
     baro_noise_m: float = 0.02  # white noise per fused sample
     baro_walk_m_per_sqrt_s: float = 0.005  # the barometer's slow error (pressure, wind)
     baro_walk_max_m: float = 0.3
+    # Pressure events the barometer reads as height (module docstring). A 10 Pa step, a door
+    # onto a windy street, is 0.8 m.
+    baro_step_rate_hz: float = 0.0
+    baro_step_m: tuple[float, float] = (0.0, 0.0)  # magnitude, random sign
+    baro_step_tau_s: float = 1.0
+    baro_step_decay_s: float | None = None  # None: the step stays
 
     def __post_init__(self) -> None:
+        lo, hi = ((float(self.baro_step_m),) * 2 if isinstance(self.baro_step_m, (int, float))
+                  else (float(self.baro_step_m[0]), float(self.baro_step_m[1])))
+        object.__setattr__(self, "baro_step_m", (lo, hi))
+        if not 0 <= lo <= hi or self.baro_step_rate_hz < 0 or self.baro_step_tau_s <= 0:
+            raise ValueError("fusion baro_step needs 0 <= min <= max metres, rate >= 0, tau > 0")
+        if self.baro_step_decay_s is not None and self.baro_step_decay_s <= 0:
+            raise ValueError("fusion baro_step_decay_s must be positive or None")
         for name in ("vision_rate_hz", "pos_noise_m", "vel_noise_mps", "gate_sd",
                      "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s",
                      "baro_rate_hz", "baro_noise_m"):
@@ -109,6 +132,10 @@ class FusionConfig:
     @property
     def baro(self) -> bool:
         return self.height_source == "baro"
+
+    @property
+    def baro_steps(self) -> bool:
+        return self.baro and self.baro_step_rate_hz > 0 and self.baro_step_m[1] > 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> FusionConfig:
@@ -152,6 +179,11 @@ class TorchFusion:
         # height at the delayed horizon it is fused at (buffered like the IMU).
         self.baro_err = z(n)
         self.baro_clock = 0.0
+        # Pressure events (cfg.baro_step_*): where the reading is heading, and where it is.
+        # Their own generator, so turning them on leaves every other draw as it was.
+        self.step_gen = torch.Generator(device=self.device).manual_seed(
+            int(seed) * 104729 + 0xBA5)
+        self.baro_step_target, self.baro_step = z(n), z(n)
         self.true_z = z(k, n)
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
@@ -168,10 +200,27 @@ class TorchFusion:
         self.since_fuse[ids] = 0.0
         self.stopped[ids] = False
         self.baro_err[ids] = 0.0  # EKF2's height origin is the barometer's level at the start
+        self.baro_step_target[ids] = 0.0
+        self.baro_step[ids] = 0.0
         self.true_z[:, ids] = pos[:, 2]
         if self.cfg.imu_bias_mps2 > 0:  # no draw when off, so other draws stay as they were
             self.imu_bias[ids] = self.cfg.imu_bias_mps2 * torch.randn(
                 pos.shape[0], 3, generator=self.gen, device=self.device, dtype=self.dtype)
+
+    def _pressure_events(self) -> None:
+        """One step of the pressure events: new ones arrive, old ones leak away, and the
+        reading follows with its lag."""
+        cfg, dt = self.cfg, self.dt
+        u = torch.rand(self.n, 3, generator=self.step_gen, device=self.device, dtype=self.dtype)
+        lo, hi = cfg.baro_step_m
+        size = (lo + (hi - lo) * u[:, 1]) * torch.where(u[:, 2] < 0.5, -1.0, 1.0)
+        if cfg.baro_step_decay_s is not None:
+            self.baro_step_target = self.baro_step_target * (1.0 - dt / max(
+                cfg.baro_step_decay_s, dt))
+        self.baro_step_target = self.baro_step_target + torch.where(
+            u[:, 0] < cfg.baro_step_rate_hz * dt, size, torch.zeros_like(size))
+        self.baro_step = self.baro_step + min(1.0, dt / cfg.baro_step_tau_s) * (
+            self.baro_step_target - self.baro_step)
 
     def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor,
               gate_var: float | None = None) -> torch.Tensor:
@@ -222,11 +271,12 @@ class TorchFusion:
 
     def step(self, accel: torch.Tensor, fix_pos: torch.Tensor, fix_vel: torch.Tensor,
              fresh: torch.Tensor, true_pos: torch.Tensor | None = None,
-             ) -> tuple[torch.Tensor, torch.Tensor]:
+             baro_offset: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Advance one step with the true acceleration ``accel`` (N, 3) and the latest fix;
         ``fresh`` (N,) is False while the fix is stale. ``true_pos`` (N, 3) is what the
-        barometer measures the height of, needed with ``height_source`` "baro". Returns
-        (position, velocity) now."""
+        barometer measures the height of, needed with ``height_source`` "baro";
+        ``baro_offset`` (N,) is metres added to its reading from outside (the wind on the
+        static port). Returns (position, velocity) now."""
         cfg, dt = self.cfg, self.dt
         if cfg.baro and true_pos is None:
             raise ValueError('fusion height_source "baro" needs true_pos')
@@ -254,11 +304,17 @@ class TorchFusion:
             self.baro_err = (self.baro_err + cfg.baro_walk_m_per_sqrt_s * dt ** 0.5 * torch.randn(
                 self.n, generator=self.gen, device=self.device, dtype=self.dtype)
             ).clamp(-cfg.baro_walk_max_m, cfg.baro_walk_max_m)
+            if cfg.baro_steps:
+                self._pressure_events()
             self.baro_clock += dt
             if self.baro_clock >= 1.0 / cfg.baro_rate_hz - 1e-9:
                 self.baro_clock -= 1.0 / cfg.baro_rate_hz
                 z_meas = self.true_z[0] + self.baro_err + cfg.baro_noise_m * torch.randn(
                     self.n, generator=self.gen, device=self.device, dtype=self.dtype)
+                if cfg.baro_steps:
+                    z_meas = z_meas + self.baro_step
+                if baro_offset is not None:
+                    z_meas = z_meas + torch.nan_to_num(baro_offset)
                 y = torch.zeros_like(self.p_d)
                 y[:, 2] = z_meas - self.p_d[:, 2]
                 only_z = torch.tensor([False, False, True], device=self.device).expand(self.n, 3)
