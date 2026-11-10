@@ -280,3 +280,57 @@ def test_table_lists_the_pass_numbers_when_a_batch_flew_passes():
     assert "standoff p95 m" in text and "| wall1m_pass_wind_8ms | mean of 2 |" in text
     plain = [row_from_summary(summary(seed=1), ekf(CLEAN))]
     assert "standoff" not in table({**batch, "rows": plain, "aggregate": aggregate(plain)})
+
+
+def test_rows_carry_what_the_reference_took_out():
+    s = summary(p95=0.2)
+    s["metrics"].update(p95_logged_setpoint_m=0.5, ground_offset_m=0.3, setpoint_moved_m=1.2)
+    row = row_from_summary(s, ekf(CLEAN))
+    assert (row["p95_logged_setpoint_m"], row["ground_offset_m"]) == (0.5, 0.3)
+    agg = aggregate([row])["wall1m_wind_8ms"]
+    assert agg["p95_logged_setpoint_m_mean"] == 0.5 and agg["setpoint_moved_m_worst"] == 1.2
+    # A batch scored before 2026-11-10, or a log with no stretch on the ground: NaN.
+    old = row_from_summary(summary(), ekf(CLEAN))
+    assert math.isnan(old["p95_logged_setpoint_m"])
+    s["metrics"]["ground_offset_m"] = None
+    assert math.isnan(row_from_summary(s, ekf(CLEAN))["ground_offset_m"])
+
+
+def test_rescore_rewrites_the_batch_from_each_runners_rescore(tmp_path, monkeypatch):
+    import json
+    import sys
+    import types
+
+    from eval.baselines import run_baseline
+
+    monkeypatch.setattr(run_baseline, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(run_baseline, "git_commit", lambda: "new1234")
+    rows = [row_from_summary(summary(seed=s, p95=0.5), ekf(CLEAN)) for s in (1, 2)]
+    for r in rows:
+        (tmp_path / r["run"]).mkdir(parents=True)
+        (tmp_path / r["run"] / "ekf.json").write_text(json.dumps(ekf(CLEAN)))
+    (tmp_path / "runs" / "b").mkdir()
+    batch_file = tmp_path / "runs" / "b" / "batch.json"
+    batch_file.write_text(json.dumps({"label": "tuned", "params": "p", "commit": "old",
+                                      "rows": rows, "aggregate": aggregate(rows)}))
+
+    def again(out):
+        if out.name == "x_2":
+            raise FileNotFoundError("flight.ulg")  # the log is gone: the row stays
+        s = summary(seed=1, p95=0.3)
+        s["metrics"].update(p95_logged_setpoint_m=0.5, ground_offset_m=0.2,
+                            setpoint_moved_m=0.0)
+        return s
+
+    fake = types.ModuleType("fake_runner")
+    fake.rescore = again
+    monkeypatch.setitem(sys.modules, "fake_runner", fake)
+    monkeypatch.setitem(run_baseline.RUNNERS, "estimate",
+                        ("fake_runner", "estimate_summary.json", "Hold"))
+    batch = run_baseline.rescore(batch_file)
+    assert [r["p95_m"] for r in batch["rows"]] == [0.3, 0.5]
+    assert batch["rows"][0]["p95_logged_setpoint_m"] == 0.5
+    assert batch["rescored_at"] == "new1234"
+    assert json.loads(batch_file.read_text())["aggregate"]["wall1m_wind_8ms"][
+        "p95_m_mean"] == pytest.approx(0.4)
+    assert "0.300" in (batch_file.parent / "table.md").read_text()

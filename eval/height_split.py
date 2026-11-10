@@ -23,8 +23,11 @@ estimate rather than fly back), and the stock runner scores against that moving 
 the hold runner and ``eval/partner_session.py`` score against a fixed point. The column
 puts both controllers on the fixed one.
 
-A diagnostic read-out of flown batches, not a run and not the scorer; the headline numbers
-stay ``eval.metrics``' until ``docs/decisions.md`` says otherwise.
+A diagnostic read-out of flown batches, not a run and not the scorer. Since 2026-11-10
+(``docs/decisions.md``) the Gazebo runners score the last column themselves
+(``eval.ulog.gazebo_reference``): "p95 as scored" here is then the number against the
+setpoint as logged, the one every table before that date carries, and this read-out shows
+what each of the two steps did to it.
 
     python -m eval.height_split runs/pooled_tuned_seeds1-8.json runs/pooled_v22_seeds1-8.json
     python -m eval.height_split --per-seed runs/<batch>/batch.json
@@ -41,27 +44,13 @@ from typing import Any
 import numpy as np
 
 from eval.metrics import GRID_DT_S, resample
-from eval.ulog import ESTIMATE, GROUNDTRUTH, load_topics, ned_to_enu, trace_from_topics
+from eval.ulog import ground_offset, heights, load_topics, trace_from_topics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LIFT_M = 0.2             # truth height above its first sample that counts as off the ground
-GROUND_SPAN_S = (3.0, 0.5)  # the offset is the mean from 3 s to 0.5 s before lift-off
 FIELDS = ("p95_m", "h_p95_m", "v_p95_m", "ground_offset_m", "v_p95_no_offset_m",
           "p95_no_offset_m", "p95_fixed_no_offset_m", "setpoint_moved_m")
 SMOOTH_S = 5.0           # "slow" drift of the height estimate: the range of its 5 s mean
 EST_FIELDS = ("est_mean_m", "est_std_m", "est_drift_m", "est_from_ground_m")
-
-
-def ground_offset(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
-                  lift_m: float = LIFT_M, span_s: tuple[float, float] = GROUND_SPAN_S) -> float:
-    """Estimated height minus true height (m, up positive), averaged over the stretch just
-    before lift-off. NaN when the flight never lifts or the stretch is not in the log."""
-    lifted = np.flatnonzero(up_truth - up_truth[0] > lift_m)
-    if lifted.size == 0:
-        return math.nan
-    t_lift = float(t[lifted[0]])
-    m = (t >= t_lift - span_s[0]) & (t <= t_lift - span_s[1]) & np.isfinite(up_est)
-    return float(np.mean(up_est[m] - up_truth[m])) if m.any() else math.nan
 
 
 def height_estimate_error(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
@@ -132,18 +121,7 @@ def flight_split(run: Path) -> dict[str, float]:
     trace = trace_from_topics(topics, start_us, hold_point=hold_point)
     _, pos, sp, _ = resample(trace, GRID_DT_S, max(window[0], trace.t[0]),
                              min(window[1], trace.t[-1]))
-
-    def seconds(msg: dict[str, np.ndarray]) -> np.ndarray:
-        return (np.asarray(msg["timestamp"], dtype=np.int64) - start_us) * 1e-6
-
-    truth, est = topics[GROUNDTRUTH], topics[ESTIMATE]
-    t = seconds(truth)
-    order = np.argsort(t)
-    t = t[order]
-    up_truth = ned_to_enu(truth["x"], truth["y"], truth["z"])[order, 2]
-    te = seconds(est)
-    eo = np.argsort(te)
-    up_est = np.interp(t, te[eo], ned_to_enu(est["x"], est["y"], est["z"])[eo, 2])
+    t, up_truth, up_est = heights(topics, start_us)
     offset = ground_offset(t, up_truth, up_est)
     return {**split_error(pos - sp, offset), **fixed_point_error(pos, sp, offset),
             **height_estimate_error(t, up_truth, up_est, (float(window[0]), float(window[1])),
@@ -157,9 +135,12 @@ def batch_split(batch_file: Path) -> dict[str, Any]:
         if not r.get("flown") or r.get("p95_m") is None:
             continue
         s = flight_split(REPO_ROOT / r["run"])
-        # The same number the batch table carries, or this read-out is of something else.
-        if abs(s["p95_m"] - r["p95_m"]) > 1e-3:
-            raise ValueError(f"{r['run']}: p95 {s['p95_m']:.4f} m here, {r['p95_m']:.4f} m "
+        # The same number the batch carries against the setpoint as logged (its p95 itself
+        # in a batch scored before 2026-11-10), or this read-out is of something else.
+        logged = r.get("p95_logged_setpoint_m")
+        logged = r["p95_m"] if logged is None or not math.isfinite(logged) else logged
+        if abs(s["p95_m"] - logged) > 1e-3:
+            raise ValueError(f"{r['run']}: p95 {s['p95_m']:.4f} m here, {logged:.4f} m "
                              "in the batch")
         rows.append({"scenario": r["scenario"], "seed": r["seed"], **s})
     return {"label": batch["label"], "params": batch.get("params"), "rows": rows}
@@ -167,8 +148,9 @@ def batch_split(batch_file: Path) -> dict[str, Any]:
 
 def table(split: dict[str, Any], per_seed: bool) -> str:
     lines = [f"`{split['label']}` (`{split['params']}`), mean over seeds; m", "",
-             "| scenario | n | p95 as scored | horizontal p95 | vertical p95 | height offset "
-             "on the ground, mean (min to max) | vertical p95, offset out | p95, offset out "
+             "| scenario | n | p95, setpoint as logged | horizontal p95 | vertical p95 "
+             "| height offset on the ground, mean (min to max) | vertical p95, offset out "
+             "| p95, offset out "
              "| p95, offset out, fixed hold point | setpoint moved, worst |",
              "|---|---|---|---|---|---|---|---|---|---|"]
     scenarios = list(dict.fromkeys(r["scenario"] for r in split["rows"]))
@@ -195,7 +177,7 @@ def table(split: dict[str, Any], per_seed: bool) -> str:
             f"| {mean['est_drift_m']:.3f} ({max(r['est_drift_m'] for r in rows):.3f}) "
             f"| {mean['est_from_ground_m']:+.3f} |")
     if per_seed:
-        lines += ["", "| scenario | seed | p95 as scored | horizontal p95 | vertical p95 "
+        lines += ["", "| scenario | seed | p95, setpoint as logged | horizontal p95 | vertical p95 "
                   "| height offset on the ground | vertical p95, offset out | p95, offset out "
                   "| p95, offset out, fixed hold point | setpoint moved |",
                   "|---|---|---|---|---|---|---|---|---|---|"]

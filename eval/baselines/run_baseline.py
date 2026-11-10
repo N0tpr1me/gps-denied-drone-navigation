@@ -7,6 +7,7 @@
     python -m eval.baselines.run_baseline --compare runs/<stock>/batch.json runs/<tuned>/batch.json
     python -m eval.baselines.run_baseline --runner hold --label structure_hold_v3 \\
         --params eval/baselines/px4_tuned_v2.params -- --param SH_FB_EN=1
+    python -m eval.baselines.run_baseline --rescore runs/<batch>/batch.json
 
 Each flight is one ``sim2real.estimate_bridge.run_estimate`` run (Gazebo wall_slab, wind
 plugin, GPS off, EKF2 on the corrupted vision estimate), scored on the TRUE position with
@@ -29,6 +30,14 @@ isolation_options``); ``--jobs auto`` fits as many as the free CPUs allow. The d
 at a time, is how every batch before 2026-11 was flown (the Mac). Rows come out in the same
 order either way. SITL needs no GPU: Gazebo runs server-only with no camera, so on the GPU
 server the flights use CPU cores and leave the GPUs to training.
+
+The reference of the score (Decided 2026-11-10, ``docs/decisions.md``): the setpoint at the
+start of the scored hold, one fixed point for both runners, with the height EKF2 read on the
+ground before lift-off (minus Gazebo's) taken out of it (``eval.ulog.gazebo_reference``).
+Each row also carries ``p95_logged_setpoint_m``, the p95 against the setpoint exactly as
+logged, which is what every table before that date shows, with ``ground_offset_m`` and
+``setpoint_moved_m`` saying what the two steps took out. ``--rescore`` scores a flown batch
+again from its ulogs (no flight) and rewrites the batch file and each flight's summary.
 
 Crash: the vehicle came within ``eval.metrics.CONTACT_RADIUS_M`` of the wall (a contact)
 or the flight never completed (hover test error, no log). With ``--runner hold`` a crash is
@@ -69,6 +78,9 @@ METRICS = ("p95_m", "rms_m", "max_m", "worst_toward_surface_m", "min_clearance_m
            "recovery_max_s",
            # The deck over a hold under a bridge (docs/bridge-holds.md); NaN without one.
            "worst_toward_surface2_m", "min_clearance_surface2_m")
+# What the score's reference took out (eval.ulog.gazebo_reference); NaN in a batch scored
+# before 2026-11-10 and where the log had no stretch on the ground.
+REFERENCE = ("p95_logged_setpoint_m", "ground_offset_m", "setpoint_moved_m")
 
 
 def git_commit() -> str:
@@ -150,8 +162,8 @@ def row_from_summary(summary: dict[str, Any], ekf: dict[str, Any] | None,
         row["pass"] = {k: flown.get(k) for k in ("travel_m", "standoff_p95_m", "along_p95_m",
                                                  "p95_while_moving_m", "p95_while_still_m",
                                                  "end_error_m")}
-    for key in METRICS:
-        row[key] = float(metrics[key]) if key in metrics else math.nan
+    for key in METRICS + REFERENCE:
+        row[key] = float(metrics[key]) if metrics.get(key) is not None else math.nan
     return row
 
 
@@ -164,7 +176,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                                "post_hold_fails": sum(r.get("post_hold_fail", False) for r in rs),
                                "failsafes": sum(r["failsafe"] for r in rs),
                                "failsafes_in_hover": sum(r["failsafe_in_hover"] for r in rs)}
-        for key in METRICS:
+        for key in METRICS + REFERENCE:
             vals = [r[key] for r in rs if not math.isnan(r.get(key, math.nan))]
             agg[f"{key}_mean"] = statistics.fmean(vals) if vals else math.nan
             # min clearance: the worst is the smallest; everything else the largest.
@@ -192,13 +204,18 @@ def table(batch: dict[str, Any]) -> str:
                      f"| {'yes' if r['failsafe'] else 'no'} "
                      f"({'yes' if r['failsafe_in_hover'] else 'no'}) |")
     lines += ["", "| scenario | p95 mean / worst m | worst toward wall mean / worst m "
-              "| crashes | post-hold failed | failsafes (in hover) |", "|---|---|---|---|---|---|"]
+              "| crashes | post-hold failed | failsafes (in hover) "
+              "| p95 against the setpoint as logged, mean m | height offset on the ground, "
+              "mean m | setpoint moved, worst m |", "|---|---|---|---|---|---|---|---|---|"]
     for name, a in batch["aggregate"].items():
         lines.append(f"| {name} | {fmt(a['p95_m_mean'])} / {fmt(a['p95_m_worst'])} "
                      f"| {fmt(a['worst_toward_surface_m_mean'])} / "
                      f"{fmt(a['worst_toward_surface_m_worst'])} | {a['crashes']}/{a['n']} "
                      f"| {a.get('post_hold_fails', 0)}/{a['n']} "
-                     f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) |")
+                     f"| {a['failsafes']}/{a['n']} ({a['failsafes_in_hover']}) "
+                     f"| {fmt(a.get('p95_logged_setpoint_m_mean', math.nan))} "
+                     f"| {fmt(a.get('ground_offset_m_mean', math.nan))} "
+                     f"| {fmt(a.get('setpoint_moved_m_worst', math.nan), 2)} |")
     passes = [r for r in batch["rows"] if r.get("pass")]
     if passes:
         # Surface passes (eval/pass_score.py): the error split along the wall normal (the
@@ -258,6 +275,39 @@ def pool(batches: list[dict[str, Any]], out: Path) -> dict[str, Any]:
               "seeds": seeds, "rows": rows, "aggregate": aggregate(rows)}
     out.write_text(json.dumps(pooled, indent=2) + "\n")
     return pooled
+
+
+def rescore(batch_file: Path) -> dict[str, Any]:
+    """Score every flight of a batch again from its ulog (after a change to the scoring):
+    each run folder's summary is rewritten by its runner's ``rescore``, then the batch file
+    (a batch folder's ``batch.json``, with its ``table.md``, or a pooled file). A flight
+    whose log is gone or cannot be scored keeps its row and is named."""
+    import importlib
+
+    batch = json.loads(batch_file.read_text())
+    runner = batch.get("runner", "estimate")
+    module, summary_name, expected_mode = RUNNERS[runner]
+    again = importlib.import_module(module).rescore
+    rows = []
+    for old in batch["rows"]:
+        out = REPO_ROOT / old["run"]
+        try:
+            summary = again(out)
+        except Exception as exc:  # keep the row as it was scored, and say so
+            print(f"{old['run']}: not rescored ({type(exc).__name__}: {exc})", flush=True)
+            rows.append(old)
+            continue
+        ekf_path = out / "ekf.json"
+        ekf = json.loads(ekf_path.read_text()) if ekf_path.exists() else None
+        rows.append(row_from_summary(summary, ekf, expected_mode,
+                                     hold_s_of(batch.get("run_args") or [])))
+    batch["rows"] = rows
+    batch["aggregate"] = aggregate(rows)
+    batch["rescored_at"] = git_commit()
+    batch_file.write_text(json.dumps(batch, indent=2) + "\n")
+    if batch_file.name == "batch.json":
+        (batch_file.parent / "table.md").write_text(table(batch))
+    return batch
 
 
 def spread(batch: dict[str, Any], key: str = "p95_m") -> str:
@@ -464,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="merge these batch.json files (same label, disjoint seeds) into "
                          "--out, print the per-seed spread and exit")
     ap.add_argument("--out", type=Path, help="where --pool writes the pooled batch.json")
+    ap.add_argument("--rescore", nargs="+", type=Path, metavar="BATCH",
+                    help="score these flown batches again from their ulogs (batch.json or "
+                         "pooled files; no flight), rewrite them and exit")
     ap.add_argument("run_args", nargs="*", help="extra run_estimate arguments, after --")
     args = ap.parse_args(argv)
     if args.pool:
@@ -473,12 +526,16 @@ def main(argv: list[str] | None = None) -> int:
         print(table(pooled))
         print(spread(pooled))
         return 0
+    if args.rescore:
+        for path in args.rescore:
+            print(table(rescore(path)))
+        return 0
     if args.compare:
         a, b = (json.loads(p.read_text()) for p in args.compare)
         print(compare(a, b))
         return 0
     if not args.label or not args.params:
-        ap.error("--label and --params are required unless --compare is given")
+        ap.error("--label and --params are required unless --compare, --pool or --rescore is given")
     if args.jobs != "auto":
         try:
             args.jobs = int(args.jobs)
