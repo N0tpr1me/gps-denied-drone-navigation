@@ -408,7 +408,7 @@ until 10 s after the VIO steadied (52 and 53 s of waiting); then both armed and 
 hover as if nothing had happened, 110 m of offset in the estimate and all.
 
 In PX4 SIH (`sitl_test.py --prearm`, a scripted VIO over MAVLink, stock commander): arming
-accepted on a still VIO, refused 1.9 and 2.1 s after it started to run, still refused 6 s
+accepted on a still VIO, refused 1.8 s after it started to run (twice), still refused 6 s
 after it stopped, accepted 11.0 s after it was still and 5.1 s after it went silent; the
 acceptance flight that follows passed.
 

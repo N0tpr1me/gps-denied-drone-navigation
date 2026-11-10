@@ -351,7 +351,7 @@ venv also needs `setuptools<70` for the UAVCAN generator): `px4_fmu-v6c_structur
 uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946,952 B,
 about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
 in. With the VIO runaway trip and the EKF2 cut (2026-11-09) `px4_fmu-v6x_structurehold` is at
-99.27 % (1,951,816 B, about 14 KB spare). The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+99.27 % (1,951,816 B, about 14 KB spare); with the pre-arm VIO check (2026-11-09) at 99.38 % (1,953,832 B, about 12 KB spare). The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it
@@ -394,8 +394,8 @@ Hold, with a "keep-out" warning. First runs (2026-11-02): settled 1.00 and 1.02 
 running off at 0.5 m/s^2 to 2.8 m/s, still again, running again and then silent. Arming in
 the stock mode must be accepted on the still VIO, refused once it runs, still refused 6 s
 after it stops, accepted after 10 s still and 5 s after silence; the normal flight follows.
-First run (2026-11-09): refused 1.9 and 2.1 s after the VIO started to run, allowed 11.0 s
-after it was still and 5.1 s after it went silent. SIH's EKF2 does not fuse this VIO; what
+First run (2026-11-09): refused 1.8 s after the VIO started to run (both times), allowed
+11.0 s after it was still and 5.1 s after it went silent. SIH's EKF2 does not fuse this VIO; what
 EKF2 and stock PX4 do with it is the Gazebo flight in `docs/field-faults.md`.
 
 From the PX4 shell: `commander mode ext1` engages, `commander mode ext2` lands through
