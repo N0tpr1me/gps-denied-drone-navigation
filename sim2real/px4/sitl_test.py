@@ -1233,9 +1233,10 @@ def check_ulog(path: Path, result: dict) -> None:
 class RtfSampler:
     """Gazebo's real-time factor every few seconds through the flight, as hover_test.py
     records it: a flight that ran slow met its wind and its estimate faults late on our
-    clock, and a benchmark batch is only read next to this number. The first ``settle_s``
-    are not counted: Gazebo reports a factor near zero while it is still starting, long
-    before the takeoff. Does nothing in SIH (no ``gz``, no ``PX4_GZ_WORLD``)."""
+    clock, and a benchmark batch is only read next to this number. Nothing is counted in the
+    first ``settle_s`` nor before the first sample at 0.9 or above: Gazebo reports a factor
+    near zero while it is still starting (a minute on a cold machine), long before the
+    takeoff. Does nothing in SIH (no ``gz``, no ``PX4_GZ_WORLD``)."""
 
     PATTERN = re.compile(r"real_time_factor:\s*([0-9.eE+-]+)")
 
@@ -1250,13 +1251,17 @@ class RtfSampler:
 
     def _run(self) -> None:
         began = time.monotonic()
+        up = False  # Gazebo has reached real time once
         while not self._stop.is_set():
             try:
                 out = subprocess.run(["gz", "topic", "-e", "-t", self.topic, "-n", "1"],
                                      capture_output=True, text=True, timeout=5.0).stdout
                 found = self.PATTERN.search(out)
-                if found and time.monotonic() - began >= self.settle_s:
-                    self.values.append(float(found.group(1)))
+                value = float(found.group(1)) if found else None
+                if value is not None and time.monotonic() - began >= self.settle_s:
+                    up = up or value >= 0.9
+                if value is not None and up:
+                    self.values.append(value)
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 pass
             self._stop.wait(self.period_s)
