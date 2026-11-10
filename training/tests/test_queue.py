@@ -143,6 +143,28 @@ def test_runs_jobs_in_order_with_deps_and_records_state(tmp_path):
     assert state(tmp_path)["bad"]["parts"].__len__() == 2
 
 
+def test_only_leaves_the_other_jobs_out_of_the_state(tmp_path):
+    marker = tmp_path / "order.txt"
+    path = write_queue(tmp_path, [
+        {"id": "a", "cmd": f"echo a >> {marker}", "hours": 0.01},
+        {"id": "b", "cmd": f"echo b >> {marker}", "after": ["a"], "hours": 0.01},
+    ])
+    # A job outside --only counts as done for ordering, in this run only: it never ran, so
+    # the state must not say it did, or a later run of the queue would skip it.
+    assert run(path, tmp_path, "--device", "cpu", "--only", "b") == 0
+    assert "a" not in state(tmp_path)
+    assert run(path, tmp_path, "--device", "cpu", "--only", "a") == 0
+    assert marker.read_text().split() == ["b", "a"]
+    # A state file written before this was fixed: "ok" with no part on record never ran.
+    state_path = tmp_path / "runs" / "queue_t" / "state.json"
+    old = state(tmp_path)
+    old["a"] = {"status": "ok", "parts": []}
+    state_path.write_text(json.dumps(old))
+    assert run(path, tmp_path, "--device", "cpu") == 0
+    assert marker.read_text().split() == ["b", "a", "a"]
+    assert len(state(tmp_path)["a"]["parts"]) == 1
+
+
 def test_chain_resumes_from_the_previous_part(tmp_path, monkeypatch):
     # fake_entry writes no policy.pt; stand one in so the chain has a checkpoint to resume.
     real_start = queue.Runner.start
