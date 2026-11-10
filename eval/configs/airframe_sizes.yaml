@@ -1,19 +1,14 @@
 # Bring your own drone (docs/airframe-sizes.md): the released policy, v24 and any candidate
-# added by name, against the cascaded PD on five drone sizes in the mock, all flown through the
+# added by name, against the cascaded PD on the x500, the x500 with a payload and a 300 g
+# quad in the mock (the 3 kg and 16 kg drones: airframe_sizes_big.yaml), all flown through the
 # same PX4 pieces as the Gazebo benchmark (rate loop and filters, 83 Hz tick, EKF2-like fusion
 # on the barometer), so only the vehicle differs:
 #   - the x500 (gz_x500_sitl, 2.06 kg, thrust/weight 1.69),
 #   - the x500 with a 25, 35, 40 and 50 % payload (max thrust unchanged, so thrust/weight
 #     1.35, 1.25, 1.21 and 1.13; inertia up 7 to 15 % for a box just under the frame, as the
 #     Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*),
-#   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6),
-#   - a 3 kg quad (mid_3kg: Holybro X650, 650 mm, thrust/weight 3.0), and the same drone at
-#     its 6.3 kg take-off limit,
-#   - a 16 kg heavy lifter (heavy_16kg: the Freefly Alta X's airframe, 1415 mm, 33 inch props,
-#     thrust/weight 4.3), and the Alta X at its 35.5 kg maximum. Freefly publishes no rotor
-#     lag, and the hold turns on it, so the 16 kg drone is scored at 40, 60 and 120 ms (the
-#     preset's assumption), each with the rate loop a tune would give it
-#     (airframe_rand.rate_loop_follows_lag; envs/structure_hold/airframes.py).
+#   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6;
+#     its own rate gains as autotune would give them; envs/structure_hold/airframes.py).
 # A policy trained on the x500 flies the others through the module's own thrust mapping
 # (eval.gate1.ModuleThrustScale), as the module would. The 40 and 50 % payloads hover at a
 # normalised thrust of 0.89 and 0.93, at and above the module's 0.9 clamp: those cells
@@ -28,7 +23,7 @@
 name: airframe_sizes
 entrypoint: eval.gate1
 seed: 7101  # unused: the seeds are params.seeds
-expected_hours: 0.9  # 14 cells x 1536 episodes x 3 controllers: about 1 min each on 4 CPU cores
+expected_hours: 0.75  # 8 cells x 3 seeds, 100 s each for v22, v24 and the PD on 4 CPU cores
 gpus: 1
 params:
   controllers:
@@ -106,34 +101,6 @@ params:
       label: "300 g class, hover thrust error +/-15 %"
       env: {airframe: small_300g, contact_radius_m: 0.18,
             airframe_rand: {hover_thrust_error: [-0.15, 0.15]}}
-    # Contact radius: half the diagonal plus a prop radius. The 16 kg airframe is 2.3 m across
-    # its props, so it holds at 2 to 3 m.
-    - name: mid_3kg
-      label: "3 kg class, 0-8 m/s"
-      env: {airframe: mid_3kg, contact_radius_m: 0.52}
-    - name: mid_3kg_max
-      label: "3 kg class at its 6.3 kg take-off limit, 0-8 m/s (hover at 0.81)"
-      env: {airframe: mid_3kg, contact_radius_m: 0.52,
-            airframe_rand: {mass_scale: 2.1, thrust_to_weight_scale: 0.4762, inertia_scale: 1.3,
-                            hover_thrust_error: -0.01}}
-    - name: heavy_16kg_lag40
-      label: "16 kg, rotor lag 40 ms, 0-8 m/s"
-      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
-            airframe_rand: {motor_tau_s: 0.04, rate_loop_follows_lag: true}}
-    - name: heavy_35kg_lag40
-      label: "Alta X at its 35.5 kg maximum, rotor lag 40 ms, 0-8 m/s"
-      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
-            airframe_rand: {mass_scale: 2.219, thrust_to_weight_scale: 0.4507, inertia_scale: 1.3,
-                            motor_tau_s: 0.04, rate_loop_follows_lag: true}}
-    - name: heavy_16kg_lag60
-      label: "16 kg, rotor lag 60 ms, 0-8 m/s"
-      envelope: false
-      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0],
-            airframe_rand: {motor_tau_s: 0.06, rate_loop_follows_lag: true}}
-    - name: heavy_16kg
-      label: "16 kg, rotor lag 120 ms (the preset), 0-8 m/s"
-      envelope: false
-      env: {airframe: heavy_16kg, contact_radius_m: 1.13, hold_distance: [2.0, 3.0]}
 smoke:
   num_envs: 6
   bootstrap: 50

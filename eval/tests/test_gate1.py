@@ -141,7 +141,8 @@ def test_fly_scores_a_pass_against_the_moving_hold_point():
 
 
 @pytest.mark.parametrize("config", ["gate1.yaml", "gate1_stress.yaml", "gate1_x500.yaml",
-                                    "gate1_x500_ekf_pass.yaml", "airframe_sizes.yaml"])
+                                    "gate1_x500_ekf_pass.yaml", "airframe_sizes.yaml",
+                                    "airframe_sizes_big.yaml"])
 def test_smoke_run_writes_report(tmp_path, config):
     run_dir = tmp_path / "run"
     out = subprocess.run(
@@ -185,4 +186,4 @@ def test_policies_by_name_join_the_controllers(tmp_path):
     report = json.loads((run_dir / "report.json").read_text())
     assert [c["name"] for c in report["controllers"]] == ["v22", "v19", "pd"]
     cells = {c["name"]: c for c in report["cells"]}
-    assert {"x500", "x500_payload50", "small_300g", "mid_3kg", "heavy_16kg"} <= set(cells)
+    assert {"x500", "x500_payload50", "small_300g"} <= set(cells)
