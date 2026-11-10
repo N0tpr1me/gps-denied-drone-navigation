@@ -46,4 +46,15 @@ Design points, each explained in its module docstring:
 - **Crash is a wall contact or a mission PX4 never finished.** Ending more than 0.5 m from
   the last waypoint (the estimate drifted) is "not completed", not a crash, as in the mock.
   `--rescore BATCH_DIR` re-scores a batch's ulogs after a scoring change.
+- **A benchmark batch flies one flight at a time, in seed halves.** Each half stays under
+  an hour; `--pool BATCH_DIR ... --out DIR` merges them into one batch, and `--replace` lets
+  a re-flight (a later batch) take the place of a flight of the same route and seed.
+- **The real-time factor is part of the result.** Start `sim2real/docker/rtf_sampler.sh`
+  beside a batch: it writes `rtf_samples.txt` into each flight's folder, and the tables show
+  each flight's mean and worst sample and flag any under 0.9 (Gazebo's start-up samples are
+  skipped). Three flagged flights re-flown at real time gave the same numbers, so the flag
+  is a prompt to look, not proof the flight is wrong.
+- **Arming is tried again for 30 s** when PX4 denies it (the heading estimate can settle a
+  moment after the health stream says armable). A flight that never arms is "not flown",
+  not a crash.
 - The host side needs the `torch` extra, as `envs/route_follow` imports it.
