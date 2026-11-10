@@ -30,6 +30,11 @@
  * prevention reads (obstacle_distance and horizontal distance_sensors) keeps the hold point
  * of all three modes that far from any obstacle (KeepOut.hpp). Not avoidance: the point
  * only moves away from what is measured too close.
+ *
+ * Surface pass (SH_PASS_LEN, off by default): after the engage the hold point slides that
+ * far along the wall, or up it, at the same standoff and holds where it stops (PassPath.hpp,
+ * docs/surface-passes.md). The policy reads its velocity relative to the moving point, so
+ * it needs no new input; the wall guard and the keep-out act on the moving point.
  */
 
 #pragma once
@@ -68,10 +73,21 @@
 #include <uORB/topics/vehicle_rates_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 
+// How an external mode tells commander which controllers to run changed in PX4 v1.18:
+// v1.16 and v1.17 take a vehicle_control_mode on config_control_setpoints, v1.18 takes a
+// setpoint type on setpoint_config and that topic is gone. The header's presence picks.
+#if __has_include(<uORB/topics/setpoint_config.h>)
+#include <uORB/topics/setpoint_config.h>
+#define SH_HAS_SETPOINT_CONFIG 1
+#else
+#define SH_HAS_SETPOINT_CONFIG 0
+#endif
+
 #include "Handback.hpp"
 #include "HoldController.hpp"
 #include "KeepOut.hpp"
 #include "ParamLimits.hpp"
+#include "PassPath.hpp"
 #include "PilotStatus.hpp"
 #include "PolicyController.hpp"
 #include "RangeHover.hpp"
@@ -80,9 +96,20 @@
 
 using namespace time_literals;
 
+// PX4 v1.18 made ModuleBase a plain class that keeps the running instance in a per-module
+// Descriptor; up to v1.17 it is a template on the module's own class with static members.
+// Nothing in the headers says which, so CMakeLists.txt looks and sets SH_MODULE_DESCRIPTOR.
+#ifdef SH_MODULE_DESCRIPTOR
+class StructureHold : public ModuleBase, public ModuleParams, public px4::WorkItem
+#else
 class StructureHold : public ModuleBase<StructureHold>, public ModuleParams, public px4::WorkItem
+#endif
 {
 public:
+#ifdef SH_MODULE_DESCRIPTOR
+	static Descriptor desc;
+#endif
+
 	StructureHold();
 	~StructureHold() override;
 
@@ -97,9 +124,12 @@ public:
 	static constexpr const char *MODE_NAME = "Structure Hold";
 	static constexpr const char *LAND_MODE_NAME = "Structure Land";
 	static constexpr const char *HOVER_MODE_NAME = "Structure Hover";
+	static constexpr const char *CHECK_NAME = "Structure Hold VIO";  // the pre-arm check
 	static constexpr float HOVER_WALL_RANGE_M = 5.f;  // a trip hands back to Structure Hover inside this
 	static constexpr float GUARD_SPEED_TAU_S = 0.3f;  // low-pass on the guard's push rate (feed-forward)
 	static constexpr float LAND_SLOW_MPS = 0.3f;      // Structure Land's descent while it lags the guard
+	static constexpr float PASS_FLOOR_M = 1.f;        // a pass down the wall stops this far above the ground
+	static constexpr float PASS_AHEAD_M = 0.1f;       // a pass looks this far past its braking distance for obstacles
 	static constexpr hrt_abstime CONTROL_INTERVAL = 10_ms;  // 100 Hz outer loop
 	static constexpr hrt_abstime STANDBY_STATUS_INTERVAL = 200_ms;
 	static constexpr hrt_abstime LIVE_INTERVAL = 200_ms;    // the live array; MAVLink streams it at its own rate
@@ -117,9 +147,14 @@ public:
 private:
 	void Run() override;
 
+	// ModuleBase's record of the running instance, in either of its two forms.
+	static void setInstance(StructureHold *instance);
+	static StructureHold *runningInstance();
+
 	// Mode registration with commander
 	void sendRegistration(const char *name, uint64_t &request_id);
 	void sendUnregistration(const char *name, int8_t mode_id, int8_t arming_check_id);
+	void sendCheckRegistration();
 	void checkRegistrationReplies();
 	void sendControlModeConfig(int8_t mode_id, bool position_control);
 	void replyToArmingCheck(uint8_t request_id);
@@ -135,6 +170,7 @@ private:
 	structure_hold::Trip checkWatchdog(const hrt_abstime now, const matrix::Dcmf &r, float position_error_m,
 					   bool range_only = false);
 	void controlStep(const hrt_abstime now);
+	matrix::Vector3f passStep(const hrt_abstime now);  // moves the hold point; returns its velocity
 	void engageGuarded(const vehicle_local_position_s &lpos, bool descend);
 	void guardedStep(const hrt_abstime now);
 	bool rangeHoverWanted(const hrt_abstime now) const;
@@ -183,7 +219,11 @@ private:
 	// Publications
 	uORB::Publication<register_ext_component_request_s> _register_request_pub{ORB_ID(register_ext_component_request)};
 	uORB::Publication<unregister_ext_component_s> _unregister_pub{ORB_ID(unregister_ext_component)};
+#if SH_HAS_SETPOINT_CONFIG
+	uORB::Publication<setpoint_config_s> _setpoint_config_pub{ORB_ID(setpoint_config)};
+#else
 	uORB::Publication<vehicle_control_mode_s> _config_control_setpoints_pub{ORB_ID(config_control_setpoints)};
+#endif
 	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	uORB::Publication<vehicle_rates_setpoint_s> _rates_setpoint_pub{ORB_ID(vehicle_rates_setpoint)};
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
@@ -208,6 +248,11 @@ private:
 	uint64_t _hover_request_id{0};
 	int8_t _hover_mode_id{-1};     // Structure Hover; stays -1 with SH_HB_GUARD 0
 	int8_t _hover_arming_check_id{-1};
+	// SH_WD_GND_V: an arming check of its own, not tied to a mode, so commander applies its
+	// answer to arming in every mode. Stays -1 with the parameter at 0.
+	bool _prearm_registration_sent{false};
+	uint64_t _prearm_request_id{0};
+	int8_t _prearm_check_id{-1};
 
 	// Vehicle state cache
 	vehicle_status_s _vehicle_status{};
@@ -218,6 +263,7 @@ private:
 	bool _hover_thrust_from_estimator{false};
 	bool _armed{false};
 	bool _landed{true};  // vehicle_land_detected; on the ground until it says otherwise
+	bool _at_rest{false};  // and its at-rest flag: the IMU alone saw no movement for 1 s
 
 	// Mode state
 	uint8_t _state{structure_hold_status_s::STATE_UNREGISTERED};
@@ -241,12 +287,27 @@ private:
 	float _fix_frozen_s{0.f};
 	structure_hold::RunawayFix _runaway_fix{};  // the fix's velocity against the IMU's
 	bool _runaway_warned{false};
+	// SH_WD_GND_V: the VIO's speed while the vehicle is disarmed and at rest; while it says
+	// moving, arming is refused in every mode (replyToArmingCheck).
+	structure_hold::StillFix _still_fix{};
+	bool _ground_runaway{false};     // RunawayFix tripped while disarmed: wait for StillFix
+	bool _prearm_warned{false};
+	hrt_abstime _prearm_warned_us{0};
+	bool preArmBlocked() const { return !_armed && _param_wd_gnd_v.get() > 0.f && _still_fix.moving(); }
+	void updatePreArm(hrt_abstime now);
 	// SH_WD_EV_CUT: EKF2_EV_CTRL as it was before the module cleared its position and
 	// velocity bits on a runaway VIO; -1 while EKF2 is untouched.
 	param_t _param_ev_ctrl{PARAM_INVALID};
 	int32_t _ev_ctrl_saved{-1};
 	void cutVision(bool cut);
 	float _last_estimate_age_s{0.f};
+
+	// Surface pass (SH_PASS_LEN, PassPath.hpp): the path, how far it has moved the hold
+	// point since engage, and the time of its last step.
+	structure_hold::PassPath _pass{};
+	matrix::Vector3f _pass_offset{};
+	hrt_abstime _pass_us{0};
+	const char *_pass_stop_why{""};  // what ended the pass early, for the pilot's line
 
 	// Forward rangefinder and the floor it puts under the hold point (WallGuard.hpp):
 	// the newest forward-facing distance_sensor sample from any instance.
@@ -319,6 +380,7 @@ private:
 		(ParamFloat<px4::params::SH_WD_FRZ_T>) _param_wd_frz_t,
 		(ParamFloat<px4::params::SH_WD_VIO_DV>) _param_wd_vio_dv,
 		(ParamInt<px4::params::SH_WD_EV_CUT>) _param_wd_ev_cut,
+		(ParamFloat<px4::params::SH_WD_GND_V>) _param_wd_gnd_v,
 		(ParamFloat<px4::params::SH_RST_HOLD>) _param_rst_hold,
 		(ParamInt<px4::params::SH_TEST_FAULT>) _param_test_fault,
 		(ParamInt<px4::params::SH_BENCH>) _param_bench,
@@ -345,6 +407,10 @@ private:
 		(ParamFloat<px4::params::SH_KO_DIST>) _param_ko_dist,
 		(ParamFloat<px4::params::SH_SHIFT_MAX>) _param_shift_max,
 		(ParamFloat<px4::params::SH_GCS_PER>) _param_gcs_per,
+		(ParamFloat<px4::params::SH_PASS_LEN>) _param_pass_len,
+		(ParamInt<px4::params::SH_PASS_DIR>) _param_pass_dir,
+		(ParamFloat<px4::params::SH_PASS_SPD>) _param_pass_spd,
+		(ParamFloat<px4::params::SH_PASS_T0>) _param_pass_t0,
 		(ParamFloat<px4::params::MPC_THR_HOVER>) _param_mpc_thr_hover,
 		(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed
 	)

@@ -1,0 +1,254 @@
+# The GPU server's third queue (docs/gpu-server-plan.md "Week 3"): mock scoring on one card,
+# no new training, ranked by what it tells a buyer. Written 2026-11-09 for a shared machine where
+# one GPU is free and the CPUs are too loaded for training, so every job is an evaluation of a
+# policy that already exists (v22 released, v24 the wall-range candidate) on the GPU mock.
+# Every job is under 1 h on 1 GPU; Zain allows 2 GPUs at once on the shared machine:
+#
+#   python -m training.queue training/queues/server_week3.yaml --dry-run --gpus 1
+#   python -m training.queue training/queues/server_week3.yaml --smoke
+#   python -m training.queue training/queues/server_week3.yaml --max-gpus 2
+#
+# Nothing here depends on server_week1/2 or the other queues; the Gazebo jobs that go with it
+# fly in the cloud. Three parts, in order:
+#   1. four open questions the mock answers in about 4 GPU-hours: how do the policies fly the
+#      heavy dust a real VIO measured, is v24's lead over v22 in the release check more than the
+#      check's sampling, how often does the dust runaway check trip falsely, and does v24's
+#      wall-range input survive a steady wrong heading near steel;
+#   2. v24's release pack on the benchmark's own set-up (barometer height). The cloud's Gazebo
+#      re-fly confirmed v24 on 2026-11-09 (docs/wall-range.md) and the release is Zain's
+#      decision; this is the paperwork a release needs: Gate 1 nominal and stress, the
+#      Basalt-fitted estimate, and the failure rate per FMEA fault;
+#   3. v24's hold datasheet (three wind directions).
+# If Zain keeps v22, drop parts 2 and 3 (`--only` the part 1 ids, docs/gpu-server-plan.md
+# "Week 3").
+name: server_week3
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- 1. open questions
+  # docs/vio-render.md "Next" 2: real Basalt in heavy dust is a slow silent walk, not the
+  # degrade fault's noise and losses; nothing has flown those numbers yet.
+  - id: dust_heavy
+    gpu: true
+    launch: eval/configs/fault_rates_dust_measured.yaml
+    set: {params.only: [dust_heavy]}
+    hours: 0.5
+    why: "heavy dust for the whole hold at Basalt's measured walk, v22, v24 and the PD, 20,480 episodes"
+
+  - id: dust_cloud
+    gpu: true
+    launch: eval/configs/fault_rates_dust_measured.yaml
+    set: {params.only: [dust_cloud]}
+    hours: 0.5
+    why: "a dust cloud arriving mid-hold: the reported position walks 0.4 m off the wall in 20 s, as measured"
+
+  - id: dark_dust
+    gpu: true
+    launch: eval/configs/fault_rates_dust_measured.yaml
+    set: {params.only: [dark_dust]}
+    hours: 0.5
+    why: "dark with dust: Basalt's fastest measured walk (0.029 m/sqrt(s), metres in a minute)"
+
+  - id: dust_table
+    cmd: >
+      python -m eval.fault_rates collect {run:dust_heavy} {run:dust_cloud} {run:dark_dust}
+      --out runs/fault_rates/dust_measured.md
+    smoke_cmd: python -c "import eval.fault_rates"
+    after: [dust_heavy, dust_cloud, dark_dust]
+    hours: 0.05
+    why: "one table: crashes per 20,480 with the 95 % bound, p95 and closest approach, v22, v24 and the PD in measured dust"
+
+  # The release check said v24 p95 0.136 vs v22 0.176 m on 2 seeds x 64 episodes per cell
+  # (run 20261109-161451). Two new check seeds at four times the episodes: the same verdict on
+  # 512 fresh episodes per cell means the lead is v24's, not the sample's.
+  - id: v24_check_fresh
+    gpu: true
+    launch: eval/configs/gazebo_check_v24_range.yaml
+    set: {params.seeds: [7003, 7004], params.num_envs: 256}
+    hours: 0.8
+    why: "v24 vs v22 in the release check on two unseen check seeds, 4x the episodes per cell"
+
+  # The heavy-dust runaway check (SH_WD_VIO_DV, eval/vio_runaway.py, docs/field-faults.md
+  # "Heavy dust") had 0 false trips in 31 flight hours on the cloud CPUs. 2048 flights a set
+  # instead of 128 is about 500 flight hours on healthy, stress and dust VIOs: a false-trip
+  # bound a buyer can read, and the catch rate of slow runaways on 4096 flights each.
+  - id: runaway_false_trips
+    gpu: true
+    launch: eval/configs/vio_runaway.yaml
+    set: {params.num_envs: 2048}
+    hours: 0.8
+    why: "the dust runaway check at 16x the flights: false trips per flight hour with a 95 % bound, and how many 0.25 to 3 m/s^2 runaways it catches"
+
+  # docs/heading-error.md: in the mock v22 circles into the wall at a steady 30 deg wrong
+  # heading in every episode. Gazebo's EKF2 never held a steady 30 deg (it averaged 22), and
+  # there v22 held, so the steady case is the mock's to answer. v24 reads the forward range to
+  # the wall, which a wrong heading does not turn: does that input keep it off the wall?
+  - id: heading_v24_range
+    gpu: true
+    launch: eval/configs/gazebo_check_heading.yaml
+    set:
+      params.controllers.1: {name: v24, policy: training/policies/structure_hold_v24.onnx}
+      params.base_env.range: &range_v24
+        {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+         scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+         dropout_s: [0.2, 2.0]}
+    hours: 0.8
+    why: "v22 vs v24 with a rangefinder on the eight heading-error cells (15 to 45 deg, drift, steps, 30 deg at 8 m/s): whether the range input keeps a turned frame off the wall"
+
+  # ---------------------------------------------------------------- 2. v24's release pack
+  # v24's Gate 1 runs (2026-11-01) fused on vision height; the benchmark and gz_x500_sitl fly on
+  # the barometer since 2026-11-03 (v22's own barometer Gate 1: run 20261103-023211).
+  - id: v24_gate1_baro
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_range_v24.yaml
+    set: {params.base_env.fusion.height_source: baro}
+    hours: 0.5
+    why: "v24's Gate 1 nominal set with the fusion on barometer height, against the PD"
+
+  - id: v24_gate1_stress_baro_p1
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_stress_range_v24_p1.yaml
+    set: {params.base_env.fusion.height_source: baro}
+    hours: 0.5
+    why: "Gate 1 stress set part 1 on barometer height"
+
+  - id: v24_gate1_stress_baro_p2
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_stress_range_v24_p2.yaml
+    set: {params.base_env.fusion.height_source: baro}
+    hours: 0.5
+    why: "Gate 1 stress set part 2 on barometer height"
+
+  - id: v24_gate1_stress_baro_p3
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_stress_range_v24_p3.yaml
+    set: {params.base_env.fusion.height_source: baro}
+    hours: 0.5
+    why: "Gate 1 stress set part 3 on barometer height"
+
+  # v22 failed one cell of 6 on the estimate fitted to real Basalt on EuRoC (run
+  # 20261101-020237); the same set-up with v24 beside it (v19's slot) and the rangefinder on.
+  - id: v24_gate1_basalt_fit
+    gpu: true
+    launch: eval/configs/gate1_x500_ekf_basalt_fit_v22.yaml
+    set:
+      params.controllers.1: {name: v24, policy: training/policies/structure_hold_v24.onnx}
+      params.gate_controller: v24
+      params.base_env.range: *range_v24
+    hours: 0.6
+    why: "v24 and v22 on the Basalt-fitted estimate: whether v24 passes the cell v22 failed"
+
+  # The FMEA rows of server_week2 (fault_rates_v22.yaml) with v24 and its rangefinder.
+  - id: v24_fault_nominal
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: &v24_faults
+      params.controllers: [{name: v24, policy: training/policies/structure_hold_v24.onnx}]
+      params.base_env.range: *range_v24
+      params.only: [nominal]
+    hours: 0.3
+    why: "F8 with v24: vio_default as flown, 20,480 episodes, v24 and the PD"
+
+  - id: v24_fault_reset
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [reset]}
+    hours: 0.3
+    why: "F1 with v24: VIO reset to the origin"
+
+  - id: v24_fault_restart
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [restart]}
+    hours: 0.3
+    why: "F2 with v24: VIO restart, a 2 s gap then the reset"
+
+  - id: v24_fault_dropout3
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [dropout3]}
+    hours: 0.3
+    why: "F3 with v24: a 3 s dropout dead-reckoned toward the wall"
+
+  - id: v24_fault_silence5
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [silence5]}
+    hours: 0.3
+    why: "F4 with v24: the 5 s before SH_WD_EST_TO trips"
+
+  - id: v24_fault_freeze1
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [freeze1]}
+    hours: 0.3
+    why: "F6 with v24: the 1 s before SH_WD_FRZ_T trips"
+
+  - id: v24_fault_drift
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [drift]}
+    hours: 0.3
+    why: "F7 with v24: a 3 cm/s walk of the reported position for 20 s, the case the range input is for"
+
+  - id: v24_fault_degrade
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [degrade]}
+    hours: 0.3
+    why: "F36 with v24: the made-up degrade fault, for the row beside week 2's"
+
+  - id: v24_fault_jumps5x
+    gpu: true
+    launch: eval/configs/fault_rates_v22.yaml
+    set: {<<: *v24_faults, params.only: [jumps5x]}
+    hours: 0.3
+    why: "F8 with v24 at the training stress rates"
+
+  - id: v24_fault_table
+    cmd: >
+      python -m eval.fault_rates collect {run:v24_fault_nominal} {run:v24_fault_reset}
+      {run:v24_fault_restart} {run:v24_fault_dropout3} {run:v24_fault_silence5}
+      {run:v24_fault_freeze1} {run:v24_fault_drift} {run:v24_fault_degrade}
+      {run:v24_fault_jumps5x} --out runs/fault_rates/fault_rates_v24.md
+    smoke_cmd: python -c "import eval.fault_rates"
+    after: [v24_fault_nominal, v24_fault_reset, v24_fault_restart, v24_fault_dropout3,
+            v24_fault_silence5, v24_fault_freeze1, v24_fault_drift, v24_fault_degrade,
+            v24_fault_jumps5x]
+    hours: 0.05
+    why: "v24's failure table, one row per FMEA fault, to set beside week 2's v22 table"
+
+  # ---------------------------------------------------------------- 3. v24's hold datasheet
+  - id: v24_datasheet_into
+    gpu: true
+    launch: eval/configs/hold_datasheet_into.yaml
+    set: &v24_sheet
+      params.controllers: [{name: v24, policy: training/policies/structure_hold_v24.onnx}]
+      params.gate_controller: v24
+      params.base_env.range: *range_v24
+    hours: 0.9
+    why: "v24's datasheet sweep, wind into the wall: 48 cells, 0 to 14 m/s, 1 and 3 m, four estimate qualities"
+
+  - id: v24_datasheet_along
+    gpu: true
+    launch: eval/configs/hold_datasheet_along.yaml
+    set: *v24_sheet
+    hours: 0.9
+    why: "the same with the wind along the wall"
+
+  - id: v24_datasheet_lee
+    gpu: true
+    launch: eval/configs/hold_datasheet_lee.yaml
+    set: *v24_sheet
+    hours: 0.9
+    why: "the same with the wind away from the wall"
+
+  - id: v24_datasheet_table
+    cmd: >
+      python -m eval.hold_datasheet {run:v24_datasheet_into} {run:v24_datasheet_along}
+      {run:v24_datasheet_lee} --out runs/hold_datasheet/datasheet_v24.md
+    smoke_cmd: python -m eval.hold_datasheet --help > /dev/null
+    after: [v24_datasheet_into, v24_datasheet_along, v24_datasheet_lee]
+    hours: 0.05
+    why: "v24's datasheet table, to set beside week 2's v22 table"

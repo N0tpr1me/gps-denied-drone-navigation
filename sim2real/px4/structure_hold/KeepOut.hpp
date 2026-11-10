@@ -100,6 +100,7 @@ struct KeepOutOutput {
 	float shift_m{0.f};          // how far the hold point moved this tick
 	bool no_room{false};         // the keep-out could not be met everywhere
 	bool capped{false};          // the retreat cap held the point short of the keep-out this tick
+	float ahead_m{-1.f};         // nearest obstacle point to the look-ahead point, -1 without one
 };
 
 class KeepOut
@@ -169,8 +170,13 @@ public:
 	 * One tick, after the points are in. ``pos_ned`` is the vehicle, ``normal_ned`` the
 	 * horizontal unit wall normal (structure x), ``wall_m`` the forward rangefinder's
 	 * perpendicular wall distance or negative without one. Moves ``hold_ned`` (xy only).
+	 *
+	 * ``ahead_ned`` (xy, optional) is where a moving hold point is about to be, as an offset
+	 * from it: ``ahead_m`` then says how close the nearest obstacle is to that place, so a
+	 * surface pass can brake before the keep-out has to push (StructureHold.cpp).
 	 */
-	KeepOutOutput apply(const float pos_ned[3], const float normal_ned[2], float wall_m, float hold_ned[3])
+	KeepOutOutput apply(const float pos_ned[3], const float normal_ned[2], float wall_m, float hold_ned[3],
+			    const float *ahead_ned = nullptr)
 	{
 		KeepOutOutput out{};
 		out.points = _n;
@@ -279,6 +285,12 @@ public:
 			const float c = hypotf(hx - (pos_ned[0] + _px[i]), hy - (pos_ned[1] + _py[i]));
 			out.nearest_m = out.nearest_m < 0.f ? c : fminf(out.nearest_m, c);
 			worst = fmaxf(worst, k - c);
+
+			if (ahead_ned != nullptr) {
+				const float a = hypotf(hx + ahead_ned[0] - (pos_ned[0] + _px[i]),
+						       hy + ahead_ned[1] - (pos_ned[1] + _py[i]));
+				out.ahead_m = out.ahead_m < 0.f ? a : fminf(out.ahead_m, a);
+			}
 		}
 
 		if (plane) {

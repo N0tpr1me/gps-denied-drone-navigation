@@ -7,6 +7,10 @@ renders.
 
 - PX4 **v1.17.0**, pinned in `docs/decisions.md`. Moving the pin means re-tuning the
   baseline, so change the `PX4_TAG` build arg, the tag in `run.sh` and the decision row together.
+- Other releases, for compatibility checks only (`docs/px4-versions.md`): `PX4_TAG=v1.16.2
+  ./run.sh build` builds `structure-hold/px4-sitl:v1.16.2` beside the pinned image, and every
+  runner takes it with `--image`. The default everywhere stays v1.17.0, and no benchmark
+  number comes from another release.
 - MAVSDK-Python 3.17.4 inside the image for scripted flights.
 - Nothing graphical by default: Gazebo runs server-only (`HEADLESS=1`). The watch image
   below adds an opt-in browser view.
@@ -46,6 +50,10 @@ its own Gazebo partition (`GZ_PARTITION`), so the Gazebo instances cannot discov
 other over Docker's bridge network. Each container already has its own network namespace,
 so the MAVLink ports do not clash. The stock runner's rows record Gazebo's real-time factor
 (`rtf_min`); fewer jobs if it sags.
+
+The other runners do not record it themselves: run `./rtf_sampler.sh &` beside a batch and it
+appends a sample every 15 s to `rtf_samples.txt` in each running flight's folder
+(`sim2real.route_follow.run_mission` reads it into its tables).
 
 ## Building in the Claude cloud container
 

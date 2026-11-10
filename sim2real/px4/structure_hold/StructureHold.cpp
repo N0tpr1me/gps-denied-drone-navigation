@@ -27,6 +27,44 @@ StructureHold::~StructureHold()
 	perf_free(_tick_perf);
 }
 
+void StructureHold::updatePreArm(const hrt_abstime now)
+{
+	if (_armed || _param_wd_gnd_v.get() <= 0.f) {
+		_prearm_warned = false;
+		_ground_runaway = false;
+		return;
+	}
+
+	// A runaway RunawayFix caught on the ground (the vehicle carried, say, so StillFix had
+	// no at-rest slots to judge) blocks too, and both clear the same way: the VIO seen
+	// still for ten seconds at rest, or silent.
+	if (fixRunaway() && !_ground_runaway) {
+		_ground_runaway = true;
+		_still_fix.distrust();
+	}
+
+	_still_fix.tick(now);
+
+	if (_ground_runaway && !_still_fix.moving()) {
+		_ground_runaway = false;
+		_runaway_fix.reset();
+	}
+
+	const bool blocked = _still_fix.moving();
+
+	// Said when it starts and every 15 s while it lasts, so it is on screen when the pilot
+	// tries to arm: commander's own refusal does not say why.
+	if (blocked && (!_prearm_warned || now - _prearm_warned_us > 15_s)) {
+		_prearm_warned_us = now;
+		mavlink_log_critical(&_mavlink_log_pub, "Structure Hold: arming blocked, the VIO reports motion with the vehicle on the ground (SH_WD_GND_V)");
+
+	} else if (!blocked && _prearm_warned) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: arming allowed again, the VIO is still or silent");
+	}
+
+	_prearm_warned = blocked;
+}
+
 void StructureHold::cutVision(bool cut)
 {
 	if (_param_ev_ctrl == PARAM_INVALID || cut == (_ev_ctrl_saved >= 0)) {
@@ -108,6 +146,7 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_wd_frz_t, param_limits::SH_WD_FRZ_T, "SH_WD_FRZ_T");
 	sanitizeParam(_param_wd_vio_dv, param_limits::SH_WD_VIO_DV, "SH_WD_VIO_DV");
 	sanitizeParam(_param_wd_ev_cut, param_limits::SH_WD_EV_CUT, "SH_WD_EV_CUT");
+	sanitizeParam(_param_wd_gnd_v, param_limits::SH_WD_GND_V, "SH_WD_GND_V");
 	sanitizeParam(_param_rst_hold, param_limits::SH_RST_HOLD, "SH_RST_HOLD");
 	sanitizeParam(_param_bench, param_limits::SH_BENCH, "SH_BENCH");
 	sanitizeParam(_param_p_pos, param_limits::SH_P_POS, "SH_P_POS");
@@ -133,6 +172,10 @@ void StructureHold::updateParams()
 	sanitizeParam(_param_ko_dist, param_limits::SH_KO_DIST, "SH_KO_DIST");
 	sanitizeParam(_param_shift_max, param_limits::SH_SHIFT_MAX, "SH_SHIFT_MAX");
 	sanitizeParam(_param_gcs_per, param_limits::SH_GCS_PER, "SH_GCS_PER");
+	sanitizeParam(_param_pass_len, param_limits::SH_PASS_LEN, "SH_PASS_LEN");
+	sanitizeParam(_param_pass_dir, param_limits::SH_PASS_DIR, "SH_PASS_DIR");
+	sanitizeParam(_param_pass_spd, param_limits::SH_PASS_SPD, "SH_PASS_SPD");
+	sanitizeParam(_param_pass_t0, param_limits::SH_PASS_T0, "SH_PASS_T0");
 
 	WatchdogLimits limits{};
 	limits.estimate_timeout_us = static_cast<uint64_t>(_param_wd_est_to.get() * 1e6f);
@@ -143,6 +186,7 @@ void StructureHold::updateParams()
 	_watchdog.setLimits(limits);
 	_pilot.setLimits(limits);
 	_runaway_fix.setLimit(_param_wd_vio_dv.get());
+	_still_fix.setLimit(_param_wd_gnd_v.get());
 
 	_gains.p_pos = _param_p_pos.get();
 	_gains.p_vel = _param_p_vel.get();
@@ -189,6 +233,14 @@ void StructureHold::updateParams()
 	keep_out.wall_min_m = _param_wall_min.get();
 	keep_out.max_total_shift_m = _param_shift_max.get();
 	_keep_out.setLimits(keep_out);
+
+	// The surface pass (PassPath.hpp); read at the next engage.
+	PassLimits pass{};
+	pass.length_m = _param_pass_len.get();
+	pass.vertical = _param_pass_dir.get() == 1;
+	pass.speed_mps = _param_pass_spd.get();
+	pass.start_s = _param_pass_t0.get();
+	_pass.setLimits(pass);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -205,6 +257,20 @@ void StructureHold::sendRegistration(const char *name, uint64_t &request_id)
 	request.register_arming_check = true;  // required for a mode
 	request.register_mode = true;
 	request.register_mode_executor = false;
+	_register_request_pub.publish(request);
+}
+
+void StructureHold::sendCheckRegistration()
+{
+	// An arming check with no mode: commander applies its answer to arming in every mode
+	// (PX4 ExternalChecks, a registration without a nav state), and never to a running one.
+	register_ext_component_request_s request{};
+	request.timestamp = hrt_absolute_time();
+	_prearm_request_id = request.timestamp ^ 0x5347u;
+	request.request_id = _prearm_request_id;
+	strncpy(request.name, CHECK_NAME, sizeof(request.name) - 1);
+	request.px4_ros2_api_version = register_ext_component_request_s::LATEST_PX4_ROS2_API_VERSION;
+	request.register_arming_check = true;
 	_register_request_pub.publish(request);
 }
 
@@ -262,6 +328,16 @@ void StructureHold::checkRegistrationReplies()
 			PX4_INFO("Structure Hover registered: mode_id %d, arming_check_id %d", _hover_mode_id,
 				 _hover_arming_check_id);
 			sendControlModeConfig(_hover_mode_id, true);
+
+		} else if (_prearm_check_id == -1 && _prearm_registration_sent && reply.request_id == _prearm_request_id) {
+			if (!reply.success) {
+				// Commander takes no registration while armed: asked again after the disarm.
+				PX4_WARN("pre-arm VIO check registration rejected by commander");
+				continue;
+			}
+
+			_prearm_check_id = reply.arming_check_id;
+			PX4_INFO("pre-arm VIO check registered: arming_check_id %d", _prearm_check_id);
 		}
 	}
 
@@ -277,6 +353,11 @@ void StructureHold::checkRegistrationReplies()
 	} else if (!_hover_registration_sent && _param_hb_guard.get() != 0) {
 		sendRegistration(HOVER_MODE_NAME, _hover_request_id);
 		_hover_registration_sent = true;
+
+	} else if (!_prearm_registration_sent && _param_wd_gnd_v.get() > 0.f
+		   && !(_hover_registration_sent && _hover_mode_id == -1)) {
+		sendCheckRegistration();
+		_prearm_registration_sent = true;
 	}
 }
 
@@ -287,6 +368,18 @@ void StructureHold::sendControlModeConfig(int8_t mode_id, bool position_control)
 	// mc_rate_control follows. Structure Land: PX4's whole position-to-rate cascade, fed
 	// by our trajectory_setpoint, as in its own position modes (the land detector reads
 	// the climb-rate flag and the commanded descent to find touchdown).
+#if SH_HAS_SETPOINT_CONFIG
+	// PX4 v1.18: the same two sets of controllers, named by setpoint type (commander's
+	// ModeUtil/setpoint_types.cpp). No setpoint timeout, as on v1.17, where none exists:
+	// the module's own watchdog and the arming-check reply cover a stalled module.
+	setpoint_config_s config{};
+	config.timestamp = hrt_absolute_time();
+	config.source_id = mode_id;
+	config.type = position_control ? setpoint_config_s::TYPE_TRAJECTORY : setpoint_config_s::TYPE_RATES;
+	config.should_apply = true;
+	config.timeout_ms = 0;
+	_setpoint_config_pub.publish(config);
+#else
 	vehicle_control_mode_s config{};
 	config.timestamp = hrt_absolute_time();
 	config.source_id = mode_id;
@@ -303,6 +396,7 @@ void StructureHold::sendControlModeConfig(int8_t mode_id, bool position_control)
 	config.flag_control_offboard_enabled = false;
 	config.flag_control_termination_enabled = false;
 	_config_control_setpoints_pub.publish(config);
+#endif
 }
 
 void StructureHold::replyToArmingCheck(uint8_t request_id)
@@ -343,6 +437,14 @@ void StructureHold::replyToArmingCheck(uint8_t request_id)
 		// for want of a local position.
 		reply.registration_id = _hover_arming_check_id;
 		reply.mode_req_local_position = _param_hb_range.get() == 0;
+		_arming_check_reply_pub.publish(reply);
+	}
+
+	if (_prearm_check_id != -1) {
+		// SH_WD_GND_V: no arming, in any mode, on a VIO that reports motion while the vehicle
+		// sits at rest (StillFix). Always true once armed: this never stops a flight.
+		reply.registration_id = _prearm_check_id;
+		reply.can_arm_and_run = !preArmBlocked();
 		_arming_check_reply_pub.publish(reply);
 	}
 
@@ -392,6 +494,10 @@ void StructureHold::engage(const vehicle_local_position_s &lpos)
 	float hold[3];
 	_setpoint.pos.copyTo(hold);
 	_policy.engage(hold, _setpoint.yaw);  // structure x = the heading at engage
+	// The surface pass, if one is set (SH_PASS_LEN); never on the bench.
+	_pass.engage(_setpoint.yaw, !_landed);
+	_pass_offset.zero();
+	_pass_us = 0;
 
 	if (_landed) {
 		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: engaged on the ground (SH_BENCH 1), props off only");
@@ -688,6 +794,11 @@ void StructureHold::updateFix(const hrt_abstime now)
 			if (useOdometryFix()) {
 				_runaway_fix.fix(_last_fix_sample_us, v(0), v(1), v(2), odom.reset_counter);
 			}
+
+			if (!_armed) {
+				// The speed is the same in any frame, so the VIO's own frame is checked too.
+				_still_fix.fix(_last_fix_us, odom.velocity[0], odom.velocity[1], odom.velocity[2], _landed && _at_rest);
+			}
 		}
 	}
 
@@ -840,7 +951,14 @@ void StructureHold::applyKeepOut(const hrt_abstime now, const Vector3f &pos, con
 	_setpoint.pos.copyTo(hold);
 	const float normal[2] = {cosf(_setpoint.yaw), sinf(_setpoint.yaw)};
 	const float before[2] = {hold[0], hold[1]};
-	_keep_out_out = _keep_out.apply(pos_ned, normal, _wall_out.range_ok ? _wall_out.wall_m : -1.f, hold);
+	// A pass along the wall looks ahead to where its point would come to rest if it braked
+	// now (controlStep stops it when an obstacle is within the keep-out of that place).
+	const float reach = _pass.brakeDistance() + PASS_AHEAD_M;
+	const float ahead[2] = {_pass.direction()[0] * reach, _pass.direction()[1] * reach};
+	const bool look = _state == structure_hold_status_s::STATE_ENGAGED && _pass.moving()
+			  && !(fabsf(_pass.direction()[2]) > 0.f);
+	_keep_out_out = _keep_out.apply(pos_ned, normal, _wall_out.range_ok ? _wall_out.wall_m : -1.f, hold,
+					look ? ahead : nullptr);
 
 	if (_keep_out_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);
@@ -959,11 +1077,13 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 		if (PX4_ISFINITE(_local_position.delta_heading) && _param_ctrl.get() == 1) {
 			_setpoint.yaw = _policy.rotateFrame(_local_position.delta_heading);
+			_pass.rotate(_local_position.delta_heading);
 			PX4_INFO("heading reset by %.1f deg: structure yaw now %.1f deg",
 				 (double)math::degrees(_local_position.delta_heading), (double)math::degrees(_setpoint.yaw));
 
 		} else if (PX4_ISFINITE(_local_position.delta_heading)) {
 			_setpoint.yaw = matrix::wrap_pi(_setpoint.yaw + _local_position.delta_heading);
+			_pass.rotate(_local_position.delta_heading);
 		}
 	}
 
@@ -980,8 +1100,39 @@ void StructureHold::controlStep(const hrt_abstime now)
 
 	const Vector3f pos(_local_position.x, _local_position.y, _local_position.z);
 
+	// The surface pass moves the hold point first; the guards then act on the moved point,
+	// so its standoff floor and the keep-out hold along the whole pass.
+	Vector3f pass_vel = passStep(now);
+
 	// Measured floor under the hold point before either controller reads it.
 	applyWallGuard(now, pos, r);
+
+	if (_pass.moving() && !_pass.ending()) {
+		// What ends a pass early: an obstacle within the keep-out of where the point would
+		// come to rest, or one the keep-out already answers (pushing on against it would
+		// walk the point back until SH_SHIFT_MAX and then into it), a wall guard that has
+		// used up its retreat, and the ground under a pass down the wall. The point brakes
+		// to rest (PassPath::stop); passStep says so once it is there.
+		const char *why = nullptr;
+
+		if (_keep_out_out.shift_m > 0.f || _keep_out_out.no_room
+		    || (_keep_out_out.ahead_m >= 0.f && _keep_out_out.ahead_m < _keep_out.limits().keep_out_m)) {
+			why = "keep-out";
+
+		} else if (_wall_out.capped) {
+			why = "wall guard cap";
+
+		} else if (_pass.direction()[2] > 0.f && _local_position.dist_bottom_valid
+			   && _local_position.dist_bottom < PASS_FLOOR_M) {
+			why = "ground";
+		}
+
+		if (why != nullptr) {
+			_pass.stop();
+			_pass_stop_why = why;
+		}
+	}
+
 	pilotStep(now, MODE_NAME, r, position_error_m, false);
 
 	Vector3f vel(_local_position.vx, _local_position.vy, _local_position.vz);
@@ -1010,6 +1161,7 @@ void StructureHold::controlStep(const hrt_abstime now)
 		VehicleSample sample{};
 		pos.copyTo(sample.pos_ned);
 		vel.copyTo(sample.vel_ned);
+		pass_vel.copyTo(sample.hold_vel_ned);  // the velocity input is relative to it
 
 		for (int i = 0; i < 3; i++) {
 			for (int j = 0; j < 3; j++) {
@@ -1059,7 +1211,7 @@ void StructureHold::controlStep(const hrt_abstime now)
 		// Placeholder cascade: hold the captured setpoint.
 		HoldState st{};
 		st.pos = pos;
-		st.vel = vel;
+		st.vel = vel - pass_vel;  // velocity feed-forward along a pass
 		st.q = q;
 		_last_output = holdStep(_gains, st, _setpoint, _hover_thrust);
 		_fallback_active = false;
@@ -1070,6 +1222,50 @@ void StructureHold::controlStep(const hrt_abstime now)
 	_last_loop_time_us = static_cast<uint32_t>(hrt_absolute_time() - start);
 	_max_loop_time_us = math::max(_max_loop_time_us, _last_loop_time_us);
 	perf_end(_loop_perf);
+}
+
+Vector3f StructureHold::passStep(const hrt_abstime now)
+{
+	const float dt = _pass_us > 0 && now > _pass_us ? (now - _pass_us) * 1e-6f : 0.f;
+	_pass_us = now;
+
+	// The point waits while the vehicle does not follow it (passWaits, PassPath.hpp): the
+	// brake-and-hover fallback brakes to a hover on a stale fix, and the fix that returns
+	// then finds the point about where the vehicle stopped, not seconds of pass ahead of
+	// it. A policy without the fallback flies on through a short dropout, and so does the
+	// point.
+	const FallbackRule &rule = _policy.rule();
+	const bool fallback_on = _param_ctrl.get() == 1 && (rule.enabled || rule.forced);
+	const PassStep step = _pass.step(dt, passWaits(_stale_s, fallback_on,
+				   rule.forced ? 0.f : rule.threshold_s));
+
+	if (step.started) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: pass %.1f m at %.1f m/s",
+				 (double)_pass.plan().length_m, (double)_pass.plan().speed_mps);
+	}
+
+	const Vector3f delta(step.delta_ned);
+
+	if (delta.norm_squared() > 0.f) {
+		_setpoint.pos += delta;
+		_pass_offset += delta;
+
+		if (_param_ctrl.get() == 1) {
+			float hold[3];
+			_setpoint.pos.copyTo(hold);
+			_policy.moveHold(hold);
+		}
+	}
+
+	if (step.finished) {
+		mavlink_log_info(&_mavlink_log_pub, "Structure Hold: pass done");
+
+	} else if (step.stopped) {
+		mavlink_log_warning(&_mavlink_log_pub, "Structure Hold: pass stopped after %.1f m: %s",
+				    (double)_pass.travelled(), _pass_stop_why);
+	}
+
+	return Vector3f(step.vel_ned);
 }
 
 void StructureHold::guardedStep(const hrt_abstime now)
@@ -1386,6 +1582,7 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.odometry_fix = useOdometryFix();
 	status.vio_imu_dv = _runaway_fix.disagreement();
 	status.vio_runaway = fixRunaway();
+	status.arming_blocked = preArmBlocked();
 	status.wall_distance_m = _wall_out.wall_m;
 	status.hold_clearance_m = _wall_out.clearance_m;
 	status.standoff_shift_m = _wall_guard.totalShift();
@@ -1394,6 +1591,11 @@ void StructureHold::publishStatus(const hrt_abstime now)
 	status.keep_out_shift_m = _keep_out.totalShift();
 	status.keep_out_points = static_cast<uint8_t>(_keep_out_out.points);
 	status.keep_out_no_room = _keep_out_out.no_room;
+
+	if (_state == structure_hold_status_s::STATE_ENGAGED) {
+		status.pass_state = static_cast<uint8_t>(_pass.state());
+		_pass_offset.copyTo(status.pass_offset_ned);
+	}
 	const bool flying = _state == structure_hold_status_s::STATE_ENGAGED
 			    || _state == structure_hold_status_s::STATE_HOVER
 			    || _state == structure_hold_status_s::STATE_LANDING;
@@ -1563,7 +1765,15 @@ void StructureHold::Run()
 			sendUnregistration(HOVER_MODE_NAME, _hover_mode_id, _hover_arming_check_id);
 		}
 
+		if (_prearm_check_id != -1) {
+			sendUnregistration(CHECK_NAME, -1, _prearm_check_id);
+		}
+
+#ifdef SH_MODULE_DESCRIPTOR
+		exit_and_cleanup(desc);
+#else
 		exit_and_cleanup();
+#endif
 		return;
 	}
 
@@ -1581,7 +1791,9 @@ void StructureHold::Run()
 	if (_mode_id == -1 || (_land_registration_sent && _land_mode_id == -1)
 	    || (_hover_registration_sent && _hover_mode_id == -1)
 	    || (!_land_registration_sent && _param_land_en.get() != 0)
-	    || (!_hover_registration_sent && _param_hb_guard.get() != 0)) {
+	    || (!_hover_registration_sent && _param_hb_guard.get() != 0)
+	    || (_prearm_registration_sent && _prearm_check_id == -1)
+	    || (!_prearm_registration_sent && _param_wd_gnd_v.get() > 0.f)) {
 		checkRegistrationReplies();
 
 		if (_mode_id == -1) {
@@ -1616,6 +1828,15 @@ void StructureHold::Run()
 		if (_armed && !armed) {
 			_last_trip = Trip::None;
 			_runaway_fix.reset();  // a VIO that ran away is trusted again after a disarm
+
+			if (_prearm_check_id == -1) {
+				_prearm_registration_sent = false;  // rejected while armed: ask again
+			}
+		}
+
+		if (_armed != armed) {
+			_still_fix.reset();  // the ground check starts over on every arm and disarm
+			_ground_runaway = false;
 		}
 
 		_armed = armed;
@@ -1631,6 +1852,7 @@ void StructureHold::Run()
 
 	if (_land_detected_sub.update(&land_detected)) {
 		_landed = land_detected.landed;
+		_at_rest = land_detected.at_rest;
 	}
 
 	_attitude_sub.update(&_attitude);
@@ -1647,6 +1869,8 @@ void StructureHold::Run()
 					     (double)_runaway_fix.disagreement());
 		}
 	}
+
+	updatePreArm(now);
 
 	// SH_WD_EV_CUT: a runaway caught while the module is in charge (or handing back) takes
 	// the VIO out of EKF2, which otherwise turns its attitude to follow it; it goes back in
@@ -1770,13 +1994,36 @@ void StructureHold::Run()
 // ---------------------------------------------------------------------------------------
 // Module boilerplate
 
+#ifdef SH_MODULE_DESCRIPTOR
+ModuleBase::Descriptor StructureHold::desc{task_spawn, custom_command, print_usage};
+#endif
+
+void StructureHold::setInstance(StructureHold *instance)
+{
+#ifdef SH_MODULE_DESCRIPTOR
+	desc.object.store(instance);
+	desc.task_id = instance ? task_id_is_work_queue : -1;
+#else
+	_object.store(instance);
+	_task_id = instance ? task_id_is_work_queue : -1;
+#endif
+}
+
+StructureHold *StructureHold::runningInstance()
+{
+#ifdef SH_MODULE_DESCRIPTOR
+	return is_running(desc) ? get_instance<StructureHold>(desc) : nullptr;
+#else
+	return is_running() ? get_instance() : nullptr;
+#endif
+}
+
 int StructureHold::task_spawn(int argc, char *argv[])
 {
 	StructureHold *instance = new StructureHold();
 
 	if (instance) {
-		_object.store(instance);
-		_task_id = task_id_is_work_queue;
+		setInstance(instance);
 
 		if (instance->init()) {
 			return PX4_OK;
@@ -1787,8 +2034,7 @@ int StructureHold::task_spawn(int argc, char *argv[])
 	}
 
 	delete instance;
-	_object.store(nullptr);
-	_task_id = -1;
+	setInstance(nullptr);
 
 	return PX4_ERROR;
 }
@@ -1832,9 +2078,11 @@ static int runPolicyBench(int iterations)
 int StructureHold::custom_command(int argc, char *argv[])
 {
 	if (argc > 0 && !strcmp(argv[0], "bench")) {
-		if (is_running() && (get_instance()->_state == structure_hold_status_s::STATE_ENGAGED
-				     || get_instance()->_state == structure_hold_status_s::STATE_LANDING
-				     || get_instance()->_state == structure_hold_status_s::STATE_HOVER)) {
+		const StructureHold *running = runningInstance();
+
+		if (running && (running->_state == structure_hold_status_s::STATE_ENGAGED
+				|| running->_state == structure_hold_status_s::STATE_LANDING
+				|| running->_state == structure_hold_status_s::STATE_HOVER)) {
 			PX4_ERR("refused while engaged");
 			return 1;
 		}
@@ -1844,7 +2092,7 @@ int StructureHold::custom_command(int argc, char *argv[])
 	}
 
 	if (argc > 0 && !strcmp(argv[0], "trip")) {
-		if (!is_running()) {
+		if (!runningInstance()) {
 			PX4_ERR("not running");
 			return 1;
 		}
@@ -1958,5 +2206,9 @@ Land is ext2) or from a ground station / MAVLink as the external mode by name.
 
 extern "C" __EXPORT int structure_hold_main(int argc, char *argv[])
 {
+#ifdef SH_MODULE_DESCRIPTOR
+	return ModuleBase::main(StructureHold::desc, argc, argv);
+#else
 	return StructureHold::main(argc, argv);
+#endif
 }

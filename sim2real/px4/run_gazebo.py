@@ -35,6 +35,14 @@ sequence lands through the module's Structure Land mode (``--land structure``, t
 which keeps the wall guard down to touchdown) or stock Land (``--land stock``, the sequence
 before 2026-10-28).
 
+A scenario with a ``pass`` block (``wall1m_pass_wind_8ms``; docs/surface-passes.md "In
+Gazebo") flies its first hold as a surface pass: the module's ``SH_PASS_*`` are set from the
+scenario, the hold lasts the scenario's ``hover_s`` and starts at the scenario's
+``engage_at_s`` on PX4's clock, and the score is made against the moving hold point (the one
+captured at engage plus the pass offset the module logs), with the pass numbers of
+``eval/pass_score.py`` in ``hold.json`` under ``pass``. Stock PX4 flies the same pass through
+``sim2real.estimate_bridge.run_estimate``.
+
 Exit code 0 when the flight passed its checks, both traces verify, GPS was never used and
 EKF2 fused the vision stream (a profile with a ``gps`` block flies with GPS on instead, and
 EKF2 must have used it: ``run_estimate.gps_as_expected``). For the benchmark,
@@ -58,6 +66,7 @@ import yaml
 
 from envs.frames import ned_to_enu
 from eval.metrics import Surface, compute_metrics
+from eval.pass_score import moving_trace, pass_numbers
 from eval.ulog import load_topics as load_trace_topics
 from eval.ulog import trace_from_topics
 from sim2real.estimate_bridge.bridge import Rangefinder
@@ -92,7 +101,9 @@ STATE_STANDBY, STATE_ENGAGED, STATE_HANDBACK, STATE_LANDING, STATE_HOVER = 1, 2,
 def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: float,
                    settle_s: float, drift_tol: float, params: list[str], name: str,
                    env: dict[str, str], watch: bool = False, land: str = "structure",
-                   cpuset: str | None = None, world: str = WORLD) -> list[str]:
+                   cpuset: str | None = None, world: str = WORLD,
+                   flight_args: list[str] | None = None) -> list[str]:
+    """``flight_args``: more sitl_test.py options (a scenario's surface pass)."""
     cmd = ["docker", "run", "--rm", "--name", name, *isolation_options(name, cpuset),
            "-v", f"{out}:/out", "-v", f"{REPO_ROOT}:/repo:ro",
            "-e", f"PX4_GZ_WORLD={world}", "-e", f"PX4_GZ_MODEL_POSE={pose}",
@@ -107,7 +118,7 @@ def docker_command(image: str, out: Path, pose: str, altitude: float, hold_s: fl
             "--settle-s", str(settle_s), "--drift-tol", str(drift_tol), "--land", land]
     for p in params:
         cmd += ["--param", p]
-    return cmd
+    return cmd + list(flight_args or [])
 
 
 # ---------------------------------------------------------------------------------------
@@ -145,6 +156,28 @@ def hold_point_enu(status: dict[str, np.ndarray], start_us: int,
     i = int(np.flatnonzero(t >= window[0] - 1e-9)[0])
     ned = np.array([status[f"setpoint_ned[{k}]"][i] for k in range(3)], dtype=float)
     return ned_to_enu(ned)
+
+
+def pass_reference_enu(status: dict[str, np.ndarray], start_us: int,
+                       window: tuple[float, float]) -> tuple[np.ndarray, np.ndarray] | None:
+    """The moving hold point of a surface pass over the first engaged stretch: (times,
+    points in ENU), or None for a build without the pass fields or a hold without a pass.
+
+    The point is the one the module held at the window's start plus what the pass has moved
+    it since (``pass_offset_ned``), not the logged setpoint itself: the wall guard and the
+    keep-out move that too, and a hold point pushed off the wall must still count as error,
+    as it does for a plain hold."""
+    if "pass_offset_ned[0]" not in status:
+        return None
+    t = (np.asarray(status["timestamp"], dtype=np.int64) - start_us) * 1e-6
+    offset = np.stack([np.asarray(status[f"pass_offset_ned[{k}]"], dtype=float)
+                       for k in range(3)], axis=1)
+    a, b = engaged_stretches(status)[0]
+    if not np.any(np.linalg.norm(offset[a:b], axis=1) > 0):
+        return None
+    i = int(np.flatnonzero(t >= window[0] - 1e-9)[0])
+    ref = hold_point_enu(status, start_us, window) + ned_to_enu(offset[a:b] - offset[i])
+    return t[a:b], ref
 
 
 def hold_stats(status: dict[str, np.ndarray], start_us: int,
@@ -264,6 +297,9 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
     topics, start_us2 = load_trace_topics(ulog)
     hold_point = hold_point_enu(status, start_us, window)
     trace = trace_from_topics(topics, start_us2, hold_point=hold_point)
+    moving = pass_reference_enu(status, start_us, window)
+    if moving is not None:
+        trace = moving_trace(trace, *moving)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
     surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
                 if sc.surface2_normal_toward is not None else None)
@@ -282,9 +318,13 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
     # corrupted profile (vio_at_engage) jumps by design.
     held = (trace.t >= window[0]) & (trace.t <= window[1])
     if held.any():
-        err = trace.pos[held] - hold_point
+        err = trace.pos[held] - trace.pos_sp[held]  # the hold point, moving or not
         hold["truth_drift"] = {"xy_max_m": float(np.hypot(err[:, 0], err[:, 1]).max()),
                                "z_max_m": float(np.abs(err[:, 2]).max())}
+    if moving is not None:
+        hold["pass"] = pass_numbers(trace, window, sc.wall_normal_toward)
+        state = np.asarray(status["pass_state"])
+        hold["pass"]["state_last"] = int(state[engaged_stretches(status)[0][1] - 1])
     after = trace.t > window[1]
     if after.any():
         d = surface.distance(trace.pos[after])
@@ -312,9 +352,21 @@ def judge_hold_on_truth(summary: dict[str, Any], hold: dict[str, Any], drift_tol
     if drift is None or checks is None or "error" in summary:
         return  # a sequence that raised (sitl_test.py "error") failed, whatever the truth says
     keys = ("position_held", "altitude_held")
+    flown = hold.get("pass")
+    if flown is not None:
+        keys += ("pass_standoff_held", "pass_reached_end")
     summary["estimate_checks"] = {k: checks[k] for k in keys if k in checks}
     checks["position_held"] = drift["xy_max_m"] <= drift_tol
     checks["altitude_held"] = drift["z_max_m"] <= drift_tol
+    if flown is not None:
+        # The same two pass checks on truth: the standoff kept, and the vehicle at the end
+        # of the whole length (the point's travel is the module's; the vehicle's is ours).
+        length = abs(float((summary.get("pass") or {}).get("length_m", 0.0)))
+        if "pass_standoff_held" in checks:
+            checks["pass_standoff_held"] = flown["standoff_max_m"] <= drift_tol
+        if "pass_reached_end" in checks:
+            checks["pass_reached_end"] = (abs(flown["travel_m"] - length) <= 0.05
+                                          and flown["end_error_m"] <= drift_tol)
     summary["passed"] = all(checks.values())
 
 
@@ -341,7 +393,9 @@ def main(argv: list[str] | None = None) -> int:
                                      "with --watch)")
     ap.add_argument("--watch", action="store_true",
                     help="watch the flight live in a browser (needs run.sh build-watch)")
-    ap.add_argument("--hold-s", type=float, default=60.0, help="time in Structure Hold")
+    ap.add_argument("--hold-s", type=float,
+                    help="time in Structure Hold (default 60 s; a scenario with a pass: its "
+                         "hover_s)")
     ap.add_argument("--settle-s", type=float, default=5.0, help="stock-mode hover times")
     ap.add_argument("--drift-tol", type=float, default=1.0,
                     help="hold drift tolerance, judged on truth here (sitl_test applies it "
@@ -362,6 +416,14 @@ def main(argv: list[str] | None = None) -> int:
     sc = load_scenario(args.scenario)
     if args.scenario_seed is not None:
         sc = dataclasses.replace(sc, seed=args.scenario_seed)
+    if args.hold_s is None:
+        args.hold_s = sc.hover.hover_s if sc.surface_pass is not None else 60.0
+    flight_args: list[str] = []
+    if sc.surface_pass is not None:
+        # The estimate's dropouts hold the pass back (PassPath, hold), so it may finish
+        # later than the trapezoid says; the hold after it is there to absorb that.
+        flight_args = [*sc.surface_pass.flight_args(), "--pass-slack-s",
+                       str(max(args.hold_s - sc.surface_pass.start_s - 12.0, 2.0))]
     prof = load_profile(args.profile)
     if args.seed is not None:
         prof = prof.with_seed(args.seed)
@@ -384,12 +446,14 @@ def main(argv: list[str] | None = None) -> int:
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hold_s": args.hold_s, "settle_s": args.settle_s, "disturbance": params_summary(wind),
     }
+    if sc.surface_pass is not None:
+        config["pass"] = dataclasses.asdict(sc.surface_pass)
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
                          to_environment(px4_params), watch=args.watch, land=args.land,
-                         cpuset=args.cpuset, world=sc.world)
+                         cpuset=args.cpuset, world=sc.world, flight_args=flight_args)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)
     if args.watch:
@@ -400,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
         "scenario": sc.name, "profile": prof.name, "seed": prof.seed, "commit": commit,
         "module_params": args.param, "land": args.land, "run": str(out.relative_to(REPO_ROOT)),
         "flight_exit_code": flight_status,
+        # For run_baseline's rows: how long the scored hold was meant to last.
+        "hold_s": args.hold_s,
     }
     ulog = out / "flight.ulg"
     summary_path = out / "summary.json"

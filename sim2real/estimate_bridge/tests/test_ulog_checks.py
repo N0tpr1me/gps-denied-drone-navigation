@@ -142,3 +142,49 @@ def test_estimate_error_reports_the_heading_error_across_the_wrap():
     assert abs(h["mean_deg"] - np.degrees(0.3)) < 1e-6
     assert abs(h["max_abs_deg"] - np.degrees(0.3)) < 1e-6
     assert estimate_error(synthetic_topics(), START, (7.0, 11.0))["heading_error"] is None
+
+
+# ---------------------------------------------------------------------------------------
+# The stock pass flight (sim2real/px4/pass_flight.py; docs/surface-passes.md "In Gazebo")
+
+
+def test_docker_command_flies_the_pass_script_for_a_pass_scenario(tmp_path):
+    from sim2real.gazebo.scenario import load_scenario
+
+    sc = load_scenario("wall1m_pass_wind_8ms")
+    cmd = run_estimate.docker_command("img", tmp_path, sc.spawn.px4_pose(), 2.5, 30.0, "c", {},
+                                      pass_args=sc.surface_pass.flight_args())
+    tail = cmd[cmd.index("img") + 1:]
+    assert tail[:3] == ["with-sitl", "python3", "/repo/sim2real/px4/pass_flight.py"]
+    assert tail[tail.index("--hold-s") + 1] == "30.0"
+    assert tail[tail.index("--pass-len") + 1] == "5.0"
+    assert tail[tail.index("--engage-at-boot-s") + 1] == "60.0"
+    assert "hover-test" not in cmd
+
+
+def test_offboard_window_is_the_first_offboard_stretch_trimmed():
+    t = np.arange(0.0, 100.0, 0.5)
+    nav = np.full(t.size, 4)            # Hold
+    nav[(t >= 60) & (t < 90)] = 14      # Offboard
+    nav[(t >= 90) & (t < 95)] = 18      # Land
+    topics = {STATUS: {"timestamp": (START + t * 1e6).astype(np.int64), "nav_state": nav}}
+    w = run_estimate.offboard_window(topics, START)
+    assert w is not None and abs(w[0] - 62.0) < 1e-6 and abs(w[1] - 90.0) < 1e-6
+    nav[:] = 4
+    assert run_estimate.offboard_window(topics, START) is None
+    assert run_estimate.offboard_window({}, START) is None
+
+
+def test_stock_pass_checks_rejudged_on_truth():
+    summary = {"checks": {"pass_tracked": False, "pass_reached_end": True, "landed": True},
+               "pass": {"length_m": 5.0}, "passed": False}
+    metrics = {"pass": {"error_max_m": 0.6, "travel_m": 5.0, "end_error_m": 0.2}}
+    run_estimate.judge_pass_on_truth(summary, metrics)
+    assert summary["passed"] and summary["checks"]["pass_tracked"]
+    assert summary["estimate_checks"] == {"pass_tracked": False, "pass_reached_end": True}
+    metrics["pass"]["error_max_m"] = 1.4
+    run_estimate.judge_pass_on_truth(summary, metrics)
+    assert not summary["passed"]
+    failed = {"checks": {"pass_tracked": True}, "error": "TimeoutError: arming", "passed": False}
+    run_estimate.judge_pass_on_truth(failed, metrics)
+    assert "estimate_checks" not in failed and not failed["passed"]

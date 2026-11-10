@@ -206,3 +206,87 @@ def test_make_run_dir_never_shares_a_folder(tmp_path):
     a = make_run_dir(tmp_path / "runs", "20261101-000000_sitl_hold_x")
     b = make_run_dir(tmp_path / "runs", "20261101-000000_sitl_hold_x")
     assert a != b and a.is_dir() and b.name.endswith("-2")
+
+
+# ---------------------------------------------------------------------------------------
+# Surface passes (docs/surface-passes.md "In Gazebo")
+
+
+def pass_status() -> dict[str, np.ndarray]:
+    """synthetic_status with a pass in its first engaged stretch (2 to 8 s): from 3 s the
+    hold point slides 2 m east at 0.5 m/s, and at 6 s a guard moves the logged setpoint
+    0.2 m south as well."""
+    status = synthetic_status()
+    t = (status["timestamp"] - START) * 1e-6
+    east = np.clip((t - 3.0) * 0.5, 0.0, 2.0)
+    east[t >= 8] = 0.0  # the next engage starts a new hold
+    status["pass_offset_ned[0]"] = np.zeros_like(east, dtype=np.float32)
+    status["pass_offset_ned[1]"] = east.astype(np.float32)
+    status["pass_offset_ned[2]"] = np.zeros_like(east, dtype=np.float32)
+    status["setpoint_ned[1]"] = (2.0 + east).astype(np.float32)
+    status["setpoint_ned[0]"] = np.where((t >= 6) & (t < 8), 0.8, 1.0).astype(np.float32)
+    state = np.zeros(len(t), np.uint8)
+    state[(t >= 2) & (t < 3)] = 1
+    state[(t >= 3) & (t < 7)] = 2
+    state[(t >= 7) & (t < 8)] = 3
+    status["pass_state"] = state
+    return status
+
+
+def test_pass_reference_is_the_hold_point_plus_the_pass_offset():
+    status = pass_status()
+    w = run_gazebo.hold_window(status, START, settle_s=2.0)  # 4 to 8 s: the pass is 0.5 m in
+    ref_t, ref = run_gazebo.pass_reference_enu(status, START, w)
+    assert abs(ref_t[0] - 2.0) < 1e-6 and abs(ref_t[-1] - 7.99) < 1e-6
+    # ENU: east is x. At the window's start the reference is the logged setpoint there.
+    at = lambda s: ref[int(np.argmin(np.abs(ref_t - s)))]  # noqa: E731
+    assert np.allclose(at(4.0), [2.5, 1.0, 2.5], atol=1e-5)
+    assert np.allclose(at(2.5), [2.0, 1.0, 2.5], atol=1e-5)   # before the pass started
+    assert np.allclose(at(5.0), [3.0, 1.0, 2.5], atol=1e-5)
+    # The guard's 0.2 m is not in the reference: a point pushed off the wall is error.
+    assert np.allclose(at(7.5), [4.0, 1.0, 2.5], atol=1e-5)
+
+
+def test_no_pass_reference_without_a_pass_or_its_fields():
+    plain = synthetic_status()
+    w = run_gazebo.hold_window(plain, START, settle_s=2.0)
+    assert run_gazebo.pass_reference_enu(plain, START, w) is None  # an older build's log
+    for k in range(3):
+        plain[f"pass_offset_ned[{k}]"] = np.zeros(len(plain["state"]), np.float32)
+    assert run_gazebo.pass_reference_enu(plain, START, w) is None  # SH_PASS_LEN 0
+
+
+def test_docker_command_forwards_the_pass_to_the_flight(tmp_path):
+    from sim2real.gazebo.scenario import load_scenario
+
+    sc = load_scenario("wall1m_pass_wind_8ms")
+    cmd = run_gazebo.docker_command("img", tmp_path, sc.spawn.px4_pose(), 2.5, 30.0, 5.0, 1.0,
+                                    ["SH_FB_EN=1"], "name", {},
+                                    flight_args=sc.surface_pass.flight_args())
+    assert cmd[cmd.index("--pass-len") + 1] == "5.0"
+    assert cmd[cmd.index("--engage-at-boot-s") + 1] == "60.0"
+    assert "--pass-up" not in cmd
+    assert cmd.index("--pass-len") > cmd.index("hold-test")
+    assert cmd[cmd.index("--param") + 1] == "SH_FB_EN=1"
+
+
+def test_pass_checks_rejudged_on_truth():
+    summary = {"checks": {"position_held": False, "altitude_held": True,
+                          "pass_standoff_held": False, "pass_reached_end": False,
+                          "pass_done": True},
+               "pass": {"length_m": -5.0}, "passed": False}
+    hold = {"truth_drift": {"xy_max_m": 0.4, "z_max_m": 0.2},
+            "pass": {"standoff_max_m": 0.3, "travel_m": 5.0, "end_error_m": 0.2}}
+    run_gazebo.judge_hold_on_truth(summary, hold, 1.0)
+    assert summary["passed"]
+    assert summary["estimate_checks"] == {"position_held": False, "altitude_held": True,
+                                          "pass_standoff_held": False,
+                                          "pass_reached_end": False}
+    # A pass the module cut short did not reach the end, however well it was tracked.
+    hold["pass"]["travel_m"] = 2.6
+    run_gazebo.judge_hold_on_truth(summary, hold, 1.0)
+    assert not summary["checks"]["pass_reached_end"] and not summary["passed"]
+    # And a vehicle that came 1.2 m off its standoff did not hold it.
+    hold["pass"].update(travel_m=5.0, standoff_max_m=1.2)
+    run_gazebo.judge_hold_on_truth(summary, hold, 1.0)
+    assert summary["checks"]["pass_reached_end"] and not summary["checks"]["pass_standoff_held"]

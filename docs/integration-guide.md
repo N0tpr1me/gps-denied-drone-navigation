@@ -26,7 +26,7 @@ on PX4 v1.17.0. The code is the authority: the parameter table below is checked 
  gyro, attitude, land detector, hover thrust ──────────┤
                                                        ▼
                                   Structure Hold module (one work-queue item, 100 Hz)
-                         policy (MLP) ─ fallback ─ watchdog ─ wall guard ─ keep-out
+          pass path ─ policy (MLP) ─ fallback ─ watchdog ─ wall guard ─ keep-out
                                                        │
          Structure Hold (ext1):  vehicle_rates_setpoint ──▶ PX4 rate controller ──▶ mixer
          Structure Land/Hover (ext2/ext3): trajectory_setpoint ──▶ PX4 position controller
@@ -37,13 +37,16 @@ on PX4 v1.17.0. The code is the authority: the parameter table below is checked 
 
 The module never replaces PX4's estimator, rate controller, mixer, failsafes or arming
 checks. It is a flight mode like Position mode, registered through PX4's external mode
-interface, and commander can take the vehicle out of it at any time.
+interface, and commander can take the vehicle out of it at any time. Through the same
+interface it adds one arming check of its own (`SH_WD_GND_V`, 0 turns it off): while the
+vehicle sits disarmed and at rest and the VIO reports that it is moving, commander refuses
+to arm, in every mode.
 
 ## What the drone must provide
 
 | Need | Requirement | Why |
 | --- | --- | --- |
-| Firmware | PX4 v1.17.0, or a fork of exactly that release | The external-mode handshake and the topics below are v1.17's; another release is a re-check on our side |
+| Firmware | PX4 v1.17.0, or a fork of exactly that release, for everything in this guide and every hold number. The same module source also builds and passes its simulator acceptance flights on v1.16.2 and v1.18.0-rc1 (`docs/px4-versions.md`) | The interface below is the same on the three releases (the module adapts to v1.18's external-mode and parameter changes at build time), but the benchmark, the bench test and the safety manual are on v1.17.0 only; a real flight on another release is a re-check on our side first |
 | Airframe | A multicopter that flies well in stock Position mode on its own VIO with GPS off | Structure Hold flies on top of your rate loop and your estimate; it does not fix either. GPS or RTK may be fused as well, with the forward rangefinder and `SH_WALL_REQ` 1 (`docs/field-faults.md`, "GPS on") |
 | Flight controller | About 125 KB of free flash and a single-precision FPU | The policy's weights are compiled in. A 2 MB board needs the multicopter-only build (`sim2real/px4/boards/structurehold.px4board`) |
 | Position estimate | VIO into EKF2 as external vision (`ODOMETRY`, `estimator_type` VISION or VIO), logged as `vehicle_visual_odometry` | The hold point and the policy's position error come from EKF2's `vehicle_local_position`; the VIO samples tell a fresh fix from a stale one |
@@ -85,7 +88,7 @@ reckons.
 | `trajectory_setpoint` | Every tick in Structure Land and Structure Hover | xy position on the guarded point, yaw, descent rate (Land) or held height (Hover); acceleration-only xy in the range hold (`SH_HB_RANGE`) |
 | `vehicle_command` | On a trip or refusal | `DO_SET_MODE` for each handback target in turn |
 | `register_ext_component_request`, `arming_check_reply`, `config_control_setpoints` | At start and on every commander poll | Mode registration, availability, and which PX4 controllers commander must enable |
-| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, keep-out distance, nearest obstacle and shift, loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
+| `structure_hold_status` | Every tick while engaged, at a low rate otherwise; logged by default | State, trip reason, setpoint, error, commands, fallback, wall distance and guard shift, keep-out distance, nearest obstacle and shift, the surface pass's state and how far it has moved the hold point (`pass_state`, `pass_offset_ned`), loop time (`sim2real/px4/msg/StructureHoldStatus.msg`) |
 | STATUSTEXT (via `mavlink_log`) | Whenever a safety function acts, at each engage, near a watchdog limit, and every `SH_GCS_PER` s while a mode flies | Below |
 | `debug_array` (MAVLink `DEBUG_FLOAT_ARRAY` "SH_STATUS") | 5 Hz; PX4 streams it at 1 Hz on a ground-station link, 10 Hz onboard | The live numbers: state, hold error, wall distance, clearance, guard shift, fix age, time left before the no-fix trip, closest watchdog limit and how much of it is used, trip, tilt (`docs/pilot-status.md`) |
 
@@ -108,6 +111,33 @@ Hover moves up to ext2. On the PX4 shell: `commander mode ext1` / `ext2` / `ext3
 in. Fly to the standoff in Position mode, face the structure, switch in. A switch while
 the vehicle still moves is fine: it stops and holds (checked at about 2 m/s in SITL,
 `sitl_test.py --moving-engage`), but the hold point is where the switch happened.
+
+**Surface pass** (`SH_PASS_LEN`, 0 = off by default; `docs/surface-passes.md`). With a
+length set, each engage flies one pass: the hold point stays at the engage point for
+`SH_PASS_T0` seconds, then moves `SH_PASS_LEN` metres in a straight line at right angles to
+the heading at engage, level (positive to the right of the nose, negative to the left) or,
+with `SH_PASS_DIR` 1, straight up (positive) or down. It speeds up at 0.5 m/s^2 to
+`SH_PASS_SPD`, slows down the same way, and holds at the end. The nose stays on the engage
+heading and the standoff is the one at engage, so square up to the face first: each 5 deg
+off square changes the standoff by 0.09 m per metre flown. The four values are read at the
+engage; changing them mid-pass changes nothing until the next one. The same policy flies
+it: its velocity input is taken relative to the moving point, so nothing else changes.
+
+- The wall guard and the keep-out act on the moving point, as on a still one.
+- A short dropout of the position fix does not hold the pass back: EKF2 dead-reckons and
+  the vehicle follows the point as before. Once the fix has been stale for 2 s the point
+  brakes and waits, and goes on when the fix is fresh, so a pass through a long dropout
+  takes that much longer. With the brake-and-hover fallback on (`SH_FB_EN` 1) it waits from
+  `SH_FB_T` instead, because the vehicle brakes then.
+- The pass ends early, braking to a stop where the point then stays for the rest of the
+  hold, when an obstacle seen by the collision-prevention sensors is within the keep-out of
+  where the point would come to rest (0.25 m ahead at 0.5 m/s, plus 0.1 m), when the wall
+  guard has used up `SH_SHIFT_MAX`, or when a pass down comes within 1 m of the ground
+  (PX4's `dist_bottom`, when valid). The pilot is told why.
+- To stop a pass by hand, switch to Position mode. To fly the next one, engage again; set
+  `SH_PASS_LEN` 0 for a plain hold. There is no raster or route: one straight line per
+  engage, and whatever starts the next one (the pilot, a companion computer setting the
+  parameter and the mode) is the integrator's.
 
 **Disengage.** Switch to any other mode. Position mode is stock PX4 and always works.
 
@@ -165,6 +195,10 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_KO_DIST` | -1.0 | -1 to 5 | m | Keep-out from obstacles PX4's collision-prevention sensors see (not the structure ahead, which keeps `SH_WALL_MIN`). -1 follows PX4's `CP_DIST` (off unless you set it); 0 off |
 | `SH_WALL_REQ` | 0 | 0 or 1 | | 1: the mode is unavailable without a usable forward range. Set 1 on any drone with one |
 | `SH_SHIFT_MAX` | 3.0 | 0 to 10 | m | Retreat cap: the wall guard and the keep-out each move the hold point at most this far in one hold, then stop and tell the pilot. Keep it above the biggest estimate jump your drone can meet (1.5 m with GPS on). 0 removes the cap |
+| `SH_PASS_LEN` | 0.0 | -10 to 10 | m | Surface pass: after the engage the hold point moves this far along the wall at the same standoff, then holds there. Positive to the right of the nose, negative to the left (up and down with `SH_PASS_DIR` 1). 0 no pass: a plain hold. Read at each engage |
+| `SH_PASS_DIR` | 0 | 0 or 1 | | Pass direction: 0 along the wall, 1 up or down it |
+| `SH_PASS_SPD` | 0.5 | 0.1 to 1 | m/s | Pass cruise speed; it speeds up and slows down at 0.5 m/s^2. Tested at 0.5 m/s |
+| `SH_PASS_T0` | 3.0 | 0 to 60 | s | Hold this long after the engage before the pass starts |
 | `SH_LAND_EN` | 1 | 0 or 1 | | Register Structure Land, the guarded landing (reboot) |
 | `SH_HB_GUARD` | 1 | 0 or 1 | | Register Structure Hover and hand back into it first next to a measured wall (reboot) |
 | `SH_HB_RANGE` | 1 | 0 or 1 | | Structure Hover holds the wall distance on the rangefinder alone when the position estimate is gone |
@@ -174,6 +208,7 @@ a warning (`ParamLimits.hpp`). "Reboot" means the change applies after a reboot.
 | `SH_WD_FRZ_T` | 1.0 | 0 to 10 | s | A VIO fix that has not moved for this long trips. 0 off |
 | `SH_WD_VIO_DV` | 0.8 | 0 to 10 | m/s | VIO runaway: the VIO's velocity change over 3 s may differ from the IMU's by this much. Checks only an ODOMETRY velocity in `MAV_FRAME_LOCAL_NED` or `MAV_FRAME_BODY_FRD` (`LOCAL_FRD` is not checked). Replay your own healthy logs first (`python -m eval.vio_runaway replay <ulog>`) and keep it at least twice their largest value. 0 off |
 | `SH_WD_EV_CUT` | 1 | 0 or 1 | | On a VIO runaway caught while a Structure mode flies or hands back, clear `EKF2_EV_CTRL`'s position and velocity bits (yaw kept) so EKF2 stops fusing the VIO, which it otherwise follows with its attitude; the old value goes back when the VIO restarts (`reset_counter`) or on disarm. The change is a normal parameter write, so PX4 saves it; if the module stops mid-flight it puts it back. 0 leaves EKF2 alone |
+| `SH_WD_GND_V` | 0.3 | 0 to 5 | m/s | Pre-arm VIO check: with the vehicle disarmed and at rest (the land detector's `at_rest`, IMU only), a VIO whose velocity averages more than this over 1 s, 2 s in a row, blocks arming in every mode through an arming check the module registers with commander (no mode attached, name "Structure Hold VIO"), with a critical message repeated every 15 s. Any velocity frame is checked (a speed is the same in all). Arming is allowed again after 10 s under the limit at rest, or 5 s after the VIO goes silent; a runaway caught by `SH_WD_VIO_DV` while disarmed blocks and clears the same way. Never acts once armed. 0 = off |
 | `SH_RST_HOLD` | 0.0 | 0 to 60 | s | Refuse an engage this long after an EKF2 xy reset. 0 off |
 | `SH_GCS_PER` | 10.0 | 0 to 60 | s | Period of the one-line status sent to the ground station while a mode flies (`docs/pilot-status.md`). 0 off; the engage line and near-limit warnings are sent regardless |
 | `SH_FIX_SRC` | 0 | 0 to 2 | | What counts as a fix: 0 auto (VIO odometry if present, else local position), 1 VIO odometry, 2 local position |
@@ -217,14 +252,21 @@ Inspector).
 | Critical | `Structure Hold: wall guard has moved the hold point <s> m back this hold (SH_SHIFT_MAX), not moving it further` | The retreat cap: the guard stops moving the point; the pilot takes over |
 | Critical | `Structure Hold: keep-out has moved the hold point <s> m this hold (SH_SHIFT_MAX), not moving it further` | The same cap on the keep-out |
 | Critical | `Structure Hover: position lost, holding <d> m from the wall on the rangefinder` | `SH_HB_RANGE` 1 only |
+| Critical | `Structure Hold: VIO velocity ran <v> m/s from the IMU's (SH_WD_VIO_DV), VIO not trusted until it restarts` | The VIO runaway check, in any mode and on the ground |
+| Critical | `Structure Hold: EKF2 stops fusing the VIO (EKF2_EV_CTRL <a> to <b>) until it restarts or disarm` | `SH_WD_EV_CUT` 1, a runaway caught while a Structure mode flies or hands back |
+| Critical | `Structure Hold: arming blocked, the VIO reports motion with the vehicle on the ground (SH_WD_GND_V)` | The pre-arm VIO check, disarmed only; repeated every 15 s while it lasts |
 | Warning | `Structure Hold: wall guard moved the hold point <s> m back, to <d> m from the wall` | The guard pushed the hold point |
 | Warning | `Structure Hold: keep-out moved the hold point <s> m, to <d> m from the nearest obstacle` | The keep-out pushed the hold point (first push of each engage) |
 | Warning | `Structure Hold: keep-out <d> m is on but no obstacle data is coming in` | At engage, with the keep-out on and no fresh `obstacle_distance` or side range |
+| Warning | `Structure Hold: pass stopped after <s> m: <reason>` | A surface pass ended early (`keep-out`, `wall guard cap` or `ground`); the hold point stays where it stopped |
 | Warning | `Structure Hold: fallback, braking on a stale estimate` / `fresh fix, policy flies again` | The fallback starts and ends |
 | Warning | `Structure Hold: engaged on the ground (SH_BENCH 1), props off only` | Bench test |
+| Info | `Structure Hold: pass <l> m at <v> m/s` / `pass done` | A surface pass starts moving (`SH_PASS_LEN`, `SH_PASS_SPD`) and reaches its end |
 | Info | `Structure Hold: locked out until disarm` | After a latched trip |
 | Info | `Structure Hold: handing back to <mode>` | Each handback target in turn |
 | Info | `Structure Hover: position back, holding on the estimate` | `SH_HB_RANGE` 1 only |
+| Info | `Structure Hold: EKF2 fuses the VIO again (EKF2_EV_CTRL <a>)` | The VIO restarted or the vehicle disarmed after the cut |
+| Info | `Structure Hold: arming allowed again, the VIO is still or silent` | The pre-arm block lifted |
 
 | Severity | Message | When |
 | --- | --- | --- |
@@ -282,6 +324,10 @@ it beats the released policy in our simulator checks and in Gazebo
   sensors, at least `SH_KO_DIST` from any obstacle they see, by moving the point away from
   what is too close; it never steers round anything (`docs/decisions.md`, keep-out row).
   An obstacle that keeps coming keeps pushing the hold point away.
+- A surface pass is one straight line along a flat face. It does not follow a curved or
+  stepped surface, plan a raster, or look for obstacles beyond what PX4's
+  collision-prevention sensors report; without those sensors nothing on board sees what is
+  on the line (`docs/safety-manual.md`, F48).
 - It does not choose the standoff: the hold point is where the vehicle was at engage,
   pushed back by the wall guard if too close.
 - It does not cover stock modes: in Position mode, Land and failsafes PX4 flies as stock,

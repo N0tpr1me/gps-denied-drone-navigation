@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # PX4 custom modes (px4_custom_mode.h), as sim2real/px4/sitl_test.py decodes the heartbeat.
 MAIN_AUTO, SUB_EXTERNAL1 = 4, 11
+MAIN_OFFBOARD = 6
 
 
 def structure_hold_engaged(custom_mode: int) -> bool:
@@ -12,6 +13,15 @@ def structure_hold_engaged(custom_mode: int) -> bool:
     main_mode = (custom_mode >> 16) & 0xFF
     sub_mode = (custom_mode >> 24) & 0xFF
     return main_mode == MAIN_AUTO and sub_mode >= SUB_EXTERNAL1
+
+
+def offboard_engaged(custom_mode: int) -> bool:
+    """Whether PX4 is in Offboard mode. The stock-PX4 side of the surface pass benchmark
+    flies its pass there (``sim2real/px4/pass_flight.py``), and its switch into Offboard is
+    its engage: an engage-keyed fault schedule starts there, as it does at the module's own
+    engage, so both meet the same faults at the same point of the pass. Nothing else in the
+    repo flies Offboard."""
+    return (custom_mode >> 16) & 0xFF == MAIN_OFFBOARD
 
 
 # The module refuses to engage on the ground, and the flight sequence tries exactly that
