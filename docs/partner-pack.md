@@ -18,7 +18,7 @@ in the safety manual, `docs/safety-manual.md`.
 
 A PX4 flight mode ("Structure Hold", external mode 1) that holds a multicopter 1 to 3 m
 from a wall, pier or deck in gusts, without GPS, on the drone's own position estimate
-(VIO into EKF2). A small neural network (policy v22) sends body rates and thrust to PX4's
+(VIO into EKF2). A small neural network (policy v24) sends body rates and thrust to PX4's
 stock rate controller. A classical watchdog hands control back to stock PX4 on any fault,
 and a forward rangefinder keeps the hold point off the wall (the wall guard). The pilot
 can always take over by switching to Position mode. In our PX4 SITL benchmark (Gazebo,
@@ -116,7 +116,7 @@ If your firmware is a fork, or you build with a vendor flow (for example ModalAI
 from us, we do this on the tree you send).
 
 **Check:** on the PX4 shell (QGC, Analyze Tools, MAVLink Console), `structure_hold status`
-says `state: standby` and names the policy (`structure_hold_v22`). QGC lists three new
+says `state: standby` and names the policy (`structure_hold_v24`). QGC lists three new
 flight modes: Structure Hold, Structure Land and Structure Hover.
 
 ## Step 2: sensors and parameters

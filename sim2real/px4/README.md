@@ -284,15 +284,22 @@ sim2real/px4/
 After a policy release, regenerate both headers and commit them:
 
 ```bash
-python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v22.onnx
-python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v22.onnx
+python -m sim2real.px4.tools.export_policy_header training/policies/structure_hold_v24.onnx
+python -m sim2real.px4.tools.make_test_vectors training/policies/structure_hold_v24.onnx
 ```
+
+The committed headers are v24's (released 2026-11-10; 23 inputs per step, the last two the
+forward rangefinder's). For a drone without a forward rangefinder build with v22, the
+fallback: run the same two commands on `structure_hold_v22.onnx` in that build's tree and
+do not commit the result. v24 flies without a range too (the input's usable flag is then
+off), but it is only level with v22 there, and v22 is the policy that was benchmarked
+without one.
 
 A policy with the engage-time input (v22 on, 21 inputs per step) gets `HAS_ENGAGE_TIME`
 in its header and reads `VehicleSample::engage_s`, the seconds since `StructureHold::engage`
 (a wall-guard move of the hold point does not restart it, as in the env).
 
-A policy with the wall-range input (v23 candidate on, 23 inputs per step) gets
+A policy with the wall-range input (v23 on, v24 the first released; 23 inputs per step) gets
 `HAS_WALL_RANGE` and reads `VehicleSample::range_ok` / `range_err_m` from the forward
 rangefinder the wall guard already reads. `RangeReference` (`WallGuard.hpp`, unit-tested in
 `test_wall_guard.cpp`) latches the hold point's measured wall distance at the first usable
@@ -305,7 +312,7 @@ position estimate moved away from the wall by as much (since 2026-11-26: glass, 
 and water read too far, and the policy would fly at the wall to close the gap). See
 `docs/wall-range.md`.
 
-`RATE_HZ` in the generated header is the tick the policy trained at (v9, v10, v19 and v22: 83 Hz, the
+`RATE_HZ` in the generated header is the tick the policy trained at (v9, v10, v19, v22 and v24: 83 Hz, the
 12 ms tick the module's 10 ms `CONTROL_INTERVAL` gives on Gazebo's 4 ms gyro). It is
 informational: the module keeps `CONTROL_INTERVAL` at 10 ms and never derives it from
 `RATE_HZ`.
@@ -341,7 +348,7 @@ overflowed flash by 87 KB (2026-10-31). `boards/structurehold.px4board` is a boa
 that drops the fixed-wing, VTOL and airspeed modules (as PX4's own
 `fmu-v6x/multicopter.px4board` does), SIH, the MSP OSD driver and the precision-landing
 target estimator and the Septentrio GNSS driver (u-blox and
-the other GPS drivers stay), none of which a GPS-denied multicopter next to a wall uses, and turns the
+the other GPS drivers stay), and since 2026-11-10 three EKF2 fusion options (below), none of which a GPS-denied multicopter next to a wall uses, and turns the
 module on. With only the fixed-wing, VTOL and airspeed modules dropped, the fmu-v6x build
 still overflowed by 2 KB. Since 2026-11-02 it also drops the AUAV airspeed driver and
 EKF2's airspeed and sideslip fusion (PX4's own multicopter variant drops sideslip too): on
@@ -365,7 +372,15 @@ uses 95.6 % of flash (1,879,280 B) and `px4_fmu-v6x_structurehold` 99.0 % (1,946
 about 19 KB spare), checked 2026-11-02 with the pilot's live status and the keep-out both
 in. With the VIO runaway trip and the EKF2 cut (2026-11-09) `px4_fmu-v6x_structurehold` is at
 99.27 % (1,951,816 B, about 14 KB spare); with the pre-arm VIO check (2026-11-09) at 99.38 % (1,953,832 B, about 12 KB spare). With the surface pass on top (2026-11-10) it is at 99.55 %
-(1,957,176 B, about 9 KB spare): room has to be made before much more goes in. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
+(1,957,176 B, about 9 KB spare): room has to be made before much more goes in. v24's header
+(2026-11-10; its first layer reads two more inputs over 15 steps, about 8.6 KB with the
+range input's code) took that to 99.99 % (1,965,792 B, 288 bytes spare), so the variant now
+also drops three EKF2 options a GPS-denied multicopter at a wall does not use: the
+auxiliary velocity fusion (`EKF2_AUXVEL`, fed only by the landing-target estimator the
+variant already drops), the auxiliary global position fusion (`EKF2_AUX_GLOBAL_POSITION`)
+and the multirotor drag fusion (`EKF2_DRAG_FUSION`, off by default in PX4, `EKF2_DRAG_CTRL`
+0). With them out the v24 build is at 99.43 % (1,954,880 B, about 11 KB spare). Put a line
+back in the board file if your drone uses one of them, and check the size. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 
 ## Fly it

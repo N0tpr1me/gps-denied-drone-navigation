@@ -164,17 +164,22 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
 
 ## Current state (late Oct 2026; check docs before relying on it)
 
-- Released policy: **v22** (`training/policies/structure_hold_v22.*`, since 2026-10-31):
-  v19 plus a 21st input, the time since engage (`docs/hold-offset.md`), which the module
-  reads when its header has it (`HAS_ENGAGE_TIME`). The module's `PolicyWeights.hpp` is
-  generated from it. v19 (20 inputs) is the fallback release.
+- Released policy: **v24** (`training/policies/structure_hold_v24.*`, since 2026-11-10,
+  Zain's yes), for a drone with a forward rangefinder: v22 plus inputs 22 and 23, the
+  rangefinder's wall distance (next bullet). The module's `PolicyWeights.hpp` and test
+  vectors are generated from it. **v22** (released 2026-10-31: v19 plus a 21st input, the
+  time since engage, `docs/hold-offset.md`, read when the header has `HAS_ENGAGE_TIME`) is
+  the fallback for a drone without a forward rangefinder: export the header from its ONNX
+  for that build, do not commit it (`sim2real/px4/README.md`). Every result written before
+  2026-11-10 that says "the released policy" means v22.
 - Wall-range input (Nov 2026, `docs/wall-range.md`): inputs 22 and 23 are the forward
   rangefinder's distance error against a reference latched at engage and its usable flag
   (mock: `cfg.range`, `RangeSensor`, off by default; module: `RangeReference` in
-  `WallGuard.hpp`, read when the header has `HAS_WALL_RANGE`). Candidate v24 is not
-  released: its Gazebo re-fly with `--rangefinder` (cloud, 2026-11-09) came out tighter than
-  v22 (mean p95 0.18 against 0.20 m, -5 to -12 %, 18 to 38 % less toward the wall, 0
-  crashes), and the release is Zain's decision.
+  `WallGuard.hpp`, read when the header has `HAS_WALL_RANGE`). v24, the first policy
+  released with it: its Gazebo re-fly with `--rangefinder` (cloud, 2026-11-09) came out
+  tighter than v22 (mean p95 0.18 against 0.20 m, -5 to -12 %, 18 to 38 % less toward the
+  wall, smoother, 0 crashes) and 44 to 45 % tighter than tuned PX4. Without a rangefinder
+  it only ties v22 in the mock. PASSNOTE
 - Long range readings (2026-11-26, Proposed, `docs/wall-range.md` "Readings that are too
   long"): glass, a wet or mirror-like face and water make the rangefinder read too far, and
   v24 flew at the wall in the mock (59 % of episodes). `RangeReference` and the mock's gate

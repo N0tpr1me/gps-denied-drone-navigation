@@ -11,7 +11,7 @@ tethered checks, scored flights) is `docs/partner-pack.md`; the hazards, their c
 what covers each one are in the safety manual, `docs/safety-manual.md`. Read both before
 the first flight.
 
-Everything here is about module behaviour as of policy v22 (`training/policies/README.md`)
+Everything here is about module behaviour as of policy v24 (`training/policies/README.md`)
 on PX4 v1.17.0. The code is the authority: the parameter table below is checked against
 `sim2real/px4/structure_hold/structure_hold_params.c` by
 `sim2real/px4/tests/test_integration_guide.py`, and the handback order against
@@ -177,7 +177,7 @@ The handback order (decided rows in `docs/decisions.md`; `Handback.hpp`):
 The brake-and-hover fallback is not a handback: after `SH_FB_T` without a fresh fix the
 module brakes on the estimated velocity and holds level, and the policy takes over again
 on the first fresh fix (`docs/fallback.md`). It is on or off per policy (`SH_FB_EN` -1 uses
-the policy's own setting; v22's is off).
+the policy's own setting; v24's is off, as v22's was).
 
 PX4's own failsafes (RC loss, battery, geofence, position loss for `COM_POS_FS_DELAY`)
 act on the external modes exactly as on stock modes, and they win.

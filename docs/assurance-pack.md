@@ -8,7 +8,7 @@
 | Document | Structure Hold assurance pack |
 | Version | 0.1, draft: the fields in section 3 and the safety manual signature are still to fill |
 | Date | 2026-11-02 |
-| Checked against | `main` at `e185a80` (policy v22, PX4 v1.17.0) |
+| Checked against | `main` at `e185a80` (policy v22, PX4 v1.17.0); the parts list regenerated for policy v24, the release since 2026-11-10 |
 | Owner | Zain |
 | Companions | `docs/safety-manual.md` (hazards, failure table, sign-off), `docs/integration-guide.md` (the interface) |
 
