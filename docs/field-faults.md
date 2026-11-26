@@ -542,6 +542,8 @@ What this says, in plain words:
   start looks), and the same check in the Auterion app.
 - More seeds and the other wall scenarios, on the real image (GPU server or Mac), before any
   number here goes into a pitch.
+  The nine faults on 8 seeds each, v22 against tuned PX4 (2026-11-10, cloud), are in
+  `docs/fault-rates.md`, "The Gazebo half": one v22 contact in dust and fog (degrade, seed 8).
 - The frozen-fix trip over more seeds and a longer freeze, with and without `SH_HB_RANGE`.
 - The range hover (`SH_HB_RANGE`, now on by default) over seeds 5 to 8 and longer silences.
 - `field_degrade` over more seeds and a harsher setting (longer losses, a faster walk, a
