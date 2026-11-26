@@ -170,3 +170,22 @@ def test_mean_heading_range_turns_only_the_mean_wind():
     ref = sample_params(base, 6, seed=5)
     for name in ("gust_start", "gust_wind", "turb_amp", "turb_phase", "k_quad", "wall_floor"):
         np.testing.assert_array_equal(getattr(into, name), getattr(ref, name))
+
+
+def test_vertical_mean_wind_is_off_by_default_and_draws_last():
+    base = sample_params(DisturbanceConfig(), 64, seed=11, wall_point=(0, 0, 0),
+                         wall_normal=(-1, 0, 0))
+    up = sample_params(DisturbanceConfig(mean_vertical=(-2.0, 3.0)), 64, seed=11,
+                       wall_point=(0, 0, 0), wall_normal=(-1, 0, 0))
+    assert not base.mean_wind[:, 2].any()
+    assert up.mean_wind[:, 2].min() >= -2.0 and up.mean_wind[:, 2].max() <= 3.0
+    assert up.mean_wind[:, 2].std() > 0.5
+    # Every other draw is the one it was.
+    np.testing.assert_array_equal(base.mean_wind[:, :2], up.mean_wind[:, :2])
+    np.testing.assert_array_equal(base.turb_phase, up.turb_phase)
+    np.testing.assert_array_equal(base.wall_floor, up.wall_floor)
+    # An updraught lifts: the force has a vertical part of its sign in still horizontal air.
+    calm = DisturbanceConfig(mean_speed=0.0, num_gusts=0, turb_sigma=0.0, mean_vertical=2.0)
+    p = sample_params(calm, 4, seed=0)
+    f = disturbance_force(p, 1.0, np.zeros((4, 3)), np.zeros((4, 3)))
+    assert (f[:, 2] > 0).all() and np.abs(f[:, :2]).max() < 1e-12
