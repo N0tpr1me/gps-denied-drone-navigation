@@ -249,3 +249,46 @@ def test_pressure_events_and_an_outside_offset_move_the_barometer_height():
         with pytest.raises(ValueError):
             FusionConfig(**bad)
     assert FusionConfig.from_dict({"baro_step_m": [0.2, 0.8]}).baro_step_m == (0.2, 0.8)
+
+
+def test_a_downward_rangefinder_keeps_the_height_through_pressure_events():
+    """Height from a downward rangefinder (EKF2_HGT_REF 2): the door that moves the
+    barometer's height does nothing to it; without a return the barometer carries the
+    height, and the range takes it back without a jump."""
+    quiet = dict(enabled=True, imu_noise_mps2=0.0, baro_noise_m=0.005,
+                 baro_walk_m_per_sqrt_s=0.0, baro_step_rate_hz=0.05, baro_step_m=(0.5, 1.0))
+    n, steps = 64, int(60.0 / DT)
+
+    def hold(cfg, ground_m=2.0, gap=None, seed=1):
+        f = TorchFusion(cfg, n, DT, seed=seed)
+        p = torch.zeros(n, 3)
+        p[:, 2] = 5.0  # a floor 2 m down, the origin 3 m above sea level
+        f.reset(torch.arange(n), p, torch.zeros(n, 3))
+        fresh = torch.ones(n, dtype=torch.bool)
+        err = []
+        for k in range(steps):
+            h = torch.full((n,), ground_m)
+            if gap is not None and gap[0] <= k * DT < gap[1]:
+                h = torch.full((n,), float("nan"))
+            pe, _ = f.step(torch.zeros(n, 3), p, torch.zeros(n, 3), fresh, true_pos=p,
+                           range_height=h)
+            err.append(pe[:, 2] - 5.0)
+        return torch.stack(err)
+
+    rng = FusionConfig(**quiet, height_source="range")
+    assert rng.baro and rng.range and rng.baro_steps and not FusionConfig().range
+    z = hold(rng)
+    # The doors do not reach the height: what is left is the range's own few cm, and the
+    # floor's level taken from one noisy first return.
+    assert float(z.abs().max()) < 0.2 and float(z[-1].abs().mean()) < 0.05
+    # Out of range: the barometer carries it, steps and all, then the range takes over.
+    zg = hold(rng, gap=(10.0, 50.0))
+    assert float(zg[int(49.0 / DT)].abs().max()) > 0.3
+    assert float((zg[1:] - zg[:-1]).abs().max()) < 0.05  # no jump either way
+    assert float(hold(rng, ground_m=20.0).abs().max()) > 0.3  # past range_max_m: barometer
+    with pytest.raises(ValueError, match="range_height"):
+        TorchFusion(rng, 1, DT, seed=0).step(*(torch.zeros(1, 3),) * 3,
+                                             torch.ones(1, dtype=torch.bool),
+                                             true_pos=torch.zeros(1, 3))
+    with pytest.raises(ValueError):
+        FusionConfig(range_max_m=0.0)

@@ -103,6 +103,12 @@ params:
        env: {fusion: {baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0], baro_step_tau_s: 1.0}}}
     - {name: baro_wind, group: height, label: "wind on the barometer's port (4-12 % of dynamic pressure)",
        env: {ambient: {baro_wind_m_per_mps2: [0.002, 0.006]}}}
+    # The answer to the doors over a flat floor: a downward rangefinder as EKF2's height
+    # reference (EKF2_HGT_REF 2), on its own and with the same doors.
+    - {name: range_height, group: height, label: "height from a downward rangefinder (no doors)",
+       env: {fusion: {height_source: range}}}
+    - {name: baro_doors_range, group: height, label: "pressure steps 0.2-1 m, height from a downward rangefinder",
+       env: {fusion: {height_source: range, baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0], baro_step_tau_s: 1.0}}}
     # ---- the IMU
     - {name: imu_drift, group: imu, label: "IMU drift (gyro bias to 0.03 rad/s, attitude tipped to 2 deg)",
        env: {sensor_noise: {gyro_bias_rad_s: 0.03, tilt_bias_deg: 2.0}}}

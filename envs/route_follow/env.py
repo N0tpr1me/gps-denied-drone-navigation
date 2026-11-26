@@ -410,6 +410,18 @@ class RouteFollowEnv:
             f = f + (self.amb_unsteady * thrust * near)[:, None] * self.unsteady_noise
         return torch.nan_to_num(f)
 
+    def _down_range(self, state: QuadState) -> torch.Tensor:
+        """The downward rangefinder's height above the floor beneath (``fusion.height_source``
+        range), (N,): the beam along body -z traced to the tunnel's or corridor's floor, times
+        the tilt's cosine, as EKF2 uses it; NaN past 45 deg of tilt or without a return."""
+        down = -body_z_world(state.quat)
+        cos = -down[:, 2]
+        pos = torch.nan_to_num(state.pos)
+        slant = self.geo.trace(pos, down[:, None, :], max_m=self.cfg.fusion.range_max_m / 0.7)
+        h = slant[:, 0] * cos
+        ok = (cos > 0.7071) & torch.isfinite(h) & (slant[:, 0] > 0)
+        return torch.where(ok, h, torch.full_like(h, float("nan")))
+
     def _baro_wind(self, state: QuadState) -> torch.Tensor:
         """How far the barometer's reading has moved since the episode began because of the
         air moving past its port, (N,) m (``cfg.ambient.baro_wind_m_per_mps2``). The draft is
@@ -488,6 +500,8 @@ class RouteFollowEnv:
             extra = {}
             if cfg.ambient.baro_wind and cfg.fusion.baro:
                 extra["baro_offset"] = self._baro_wind(state)
+            if cfg.fusion.range:
+                extra["range_height"] = self._down_range(state)
             self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
                                                                     ~est.stale, true_pos=state.pos,
                                                                     **extra)

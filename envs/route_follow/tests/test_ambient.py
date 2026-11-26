@@ -130,3 +130,23 @@ def test_a_fused_barometer_reads_the_draft_on_its_port():
         seen = max(seen, float(env.baro_wind_err.abs().max()))
     assert seen > 0.01
     assert AmbientConfig().baro_wind is False
+
+
+def test_a_downward_rangefinder_keeps_a_tunnel_route_level_through_pressure_steps():
+    doors = {"baro_step_rate_hz": 0.2, "baro_step_m": [0.5, 1.0]}
+    # A level tunnel: over a floor that climbs the range height is out by the climb.
+    tunnel = {"segments": 2, "tunnel_prob": 1.0, "climb_deg": [0.0, 0.0]}
+    worst = {}
+    for src in ("baro", "range"):
+        c = cfg(episode_length_s=20.0, estimate=CLEAN_ESTIMATE, disturbance=STILL_AIR,
+                route=tunnel, fusion={"height_source": src, **doors})
+        env = RouteFollowEnv(c, 8, seed=4)
+        pd = RoutePd(env)
+        obs, _ = env.get_observations()
+        dz = []
+        for _ in range(env.max_episode_length - 1):
+            obs, *_ = env.step(pd(obs))
+            dz.append((env.estimate_pos[:, 2] - env.sim.state.pos[:, 2]).abs())
+        worst[src] = float(torch.stack(dz)[-200:].mean())
+    assert worst["baro"] > 0.2
+    assert worst["range"] < 0.1

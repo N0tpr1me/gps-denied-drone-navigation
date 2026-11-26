@@ -677,6 +677,15 @@ class StructureHoldEnv:
             f = f + (self.amb_unsteady * thrust * near)[:, None] * self.unsteady_noise
         return torch.nan_to_num(f)
 
+    def _down_range(self, state: QuadState) -> torch.Tensor:
+        """The downward rangefinder's height above the ground (``fusion.height_source``
+        range), (N,): the slant along body -z times the tilt's cosine, which over the flat
+        ground is the height itself; NaN past 45 deg of tilt, where EKF2 stops using it."""
+        cos = body_z_world(state.quat)[:, 2]
+        h = torch.nan_to_num(state.pos[:, 2], nan=-1.0)
+        ok = (cos > 0.7071) & (h > 0)
+        return torch.where(ok, h, torch.full_like(h, float("nan")))
+
     def _baro_wind(self, state: QuadState) -> torch.Tensor:
         """How far the barometer's reading has moved since the engage because of the air
         moving past its static port, (N,) m (``cfg.ambient.baro_wind_m_per_mps2``)."""
@@ -787,8 +796,10 @@ class StructureHoldEnv:
                                 torch.zeros_like(vel_before))
             baro = (self._baro_wind(state) if cfg.ambient.baro_wind and cfg.fusion.baro
                     else None)
+            rng = self._down_range(state) if cfg.fusion.range else None
             self.estimate_pos, self.estimate_vel = self.fusion.step(
-                accel, est.pos, est.vel, ~est.stale, true_pos=state.pos, baro_offset=baro)
+                accel, est.pos, est.vel, ~est.stale, true_pos=state.pos, baro_offset=baro,
+                range_height=rng)
         self.estimate_stale, self.estimate_age = est.stale, est.age
         if self.heading_err is not None:
             self.heading_err.step()
