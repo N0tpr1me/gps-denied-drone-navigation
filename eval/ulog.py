@@ -29,18 +29,28 @@ setpoint is in: the origins differ and so may the headings. So a mocap trace nee
 The wall for ``eval.metrics`` is then given in the mocap frame as well.
 - commands: ``vehicle_rates_setpoint`` (roll, pitch, yaw rates and ``thrust_body``).
 
+Gazebo truth is in the EKF's local frame horizontally, but not always vertically: on
+barometer height EKF2 sets its origin from the first barometer sample, so its height can
+read a few decimetres on the pad before the motors start, and the setpoint lives in that
+frame. ``gazebo_reference`` is how Gazebo holds are scored since 2026-11-10
+(docs/decisions.md): that one offset, measured on the ground, comes out of the setpoint, and
+the hold is scored against the setpoint at the start of the scored window, one fixed point,
+whatever the autopilot does to its setpoint afterwards. A partner's flight gets the same
+two things from ``align_window`` and ``eval/partner_session.py``.
+
 Times are seconds since the log's start timestamp.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
 
 import numpy as np
 
 from envs import frames
-from eval.metrics import Trace
+from eval.metrics import Trace, compute_metrics
 
 GROUNDTRUTH = "vehicle_local_position_groundtruth"
 MOCAP = "vehicle_mocap_odometry"
@@ -53,6 +63,8 @@ TOPICS = [GROUNDTRUTH, MOCAP, ESTIMATE, SETPOINT, RATES]
 # right-handed z-down world frames, so the NED to ENU flip gives a z-up frame either way.
 POSE_FRAMES_Z_DOWN = (1, 2)
 MIN_ALIGN_SPREAD_M = 0.5  # horizontal RMS spread about the mean, over the align window
+LIFT_M = 0.2  # truth height above its first sample that counts as off the ground
+GROUND_SPAN_S = (3.0, 0.5)  # the ground offset is the mean from 3 s to 0.5 s before lift-off
 
 Topics = dict[str, dict[str, np.ndarray]]
 
@@ -232,3 +244,78 @@ def read_ulog(
     trace = trace_from_topics(topics, start_us, hold_point, allow_estimate, align_window)
     trace.meta["ulog"] = str(path)
     return trace
+
+
+def ground_offset(t: np.ndarray, up_truth: np.ndarray, up_est: np.ndarray,
+                  lift_m: float = LIFT_M, span_s: tuple[float, float] = GROUND_SPAN_S) -> float:
+    """Estimated height minus true height (m, up positive), averaged over the stretch just
+    before lift-off. NaN when the flight never lifts or the stretch is not in the log."""
+    lifted = np.flatnonzero(up_truth - up_truth[0] > lift_m)
+    if lifted.size == 0:
+        return math.nan
+    t_lift = float(t[lifted[0]])
+    m = (t >= t_lift - span_s[0]) & (t <= t_lift - span_s[1]) & np.isfinite(up_est)
+    return float(np.mean(up_est[m] - up_truth[m])) if m.any() else math.nan
+
+
+def heights(topics: Topics, start_us: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Log seconds, Gazebo's true height and EKF2's height at the same instants (m, up)."""
+
+    def seconds(msg: dict[str, np.ndarray]) -> np.ndarray:
+        return (np.asarray(msg["timestamp"], dtype=np.int64) - int(start_us)) * 1e-6
+
+    truth, est = topics[GROUNDTRUTH], topics[ESTIMATE]
+    t = seconds(truth)
+    order = np.argsort(t)
+    t = t[order]
+    up_truth = ned_to_enu(truth["x"], truth["y"], truth["z"])[order, 2]
+    te = seconds(est)
+    eo = np.argsort(te)
+    up_est = np.interp(t, te[eo], ned_to_enu(est["x"], est["y"], est["z"])[eo, 2])
+    return t, up_truth, up_est
+
+
+def gazebo_reference(trace: Trace, topics: Topics, start_us: int,
+                     window: tuple[float, float] | None, fixed: bool = True) -> Trace:
+    """``trace`` again with the setpoint a Gazebo hold is scored against.
+
+    The height EKF2 read on the ground before lift-off, minus Gazebo's, comes out of the
+    setpoint (it is where the estimator's frame starts, there with the motors off, not hold
+    error; whatever the estimate does after lift-off stays in). With ``fixed`` the setpoint
+    is the one in force at the start of ``window``, for the whole trace: stock PX4 moves
+    its setpoint when EKF2 resets, and a drone that then sits on the moved setpoint has
+    still left the place it was holding. A surface pass keeps its moving reference
+    (``fixed=False``): there the reference moves because it was told to.
+
+    ``meta`` gains ``ground_offset_m`` (None when the log has no stretch on the ground, and
+    then nothing is taken out) and ``setpoint_moved_m``, how far the logged setpoint
+    travelled from its first value inside the window."""
+    offset = math.nan
+    if GROUNDTRUTH in topics and ESTIMATE in topics:
+        offset = ground_offset(*heights(topics, start_us))
+    sp = trace.pos_sp.copy()
+    moved = None
+    if window is not None:
+        # The setpoint in force at the window's start, held as eval.metrics.resample holds it.
+        t0 = max(float(window[0]), float(trace.t[0]))
+        first = sp[max(int(np.searchsorted(trace.t, t0, side="right")) - 1, 0)].copy()
+        inside = (trace.t >= t0) & (trace.t <= window[1])
+        if inside.any():
+            moved = float(np.max(np.linalg.norm(sp[inside] - first, axis=1)))
+        if fixed:
+            sp[:] = first
+    if math.isfinite(offset):
+        sp[:, 2] -= offset
+    meta = {**trace.meta, "ground_offset_m": offset if math.isfinite(offset) else None,
+            "setpoint_moved_m": moved, "setpoint": "fixed" if fixed else "moving"}
+    return dataclasses.replace(trace, pos_sp=sp, meta=meta)
+
+
+def reference_numbers(scored: Trace, logged: Trace,
+                      window: tuple[float, float] | None) -> dict[str, float | None]:
+    """What ``gazebo_reference`` did, for a flight's metrics: the height offset it took out,
+    how far the logged setpoint moved, and ``p95_logged_setpoint_m``, the p95 against the
+    setpoint exactly as logged (the number every Gazebo table before 2026-11-10 carries)."""
+    return {"ground_offset_m": scored.meta.get("ground_offset_m"),
+            "setpoint_moved_m": scored.meta.get("setpoint_moved_m"),
+            "p95_logged_setpoint_m": compute_metrics(logged, window=window)["p95_m"]}

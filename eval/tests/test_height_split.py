@@ -3,12 +3,8 @@ import math
 import numpy as np
 import pytest
 
-from eval.height_split import (
-    fixed_point_error,
-    ground_offset,
-    height_estimate_error,
-    split_error,
-)
+from eval.height_split import fixed_point_error, height_estimate_error, split_error
+from eval.ulog import ground_offset
 
 
 def climb(t: np.ndarray, lift_at: float = 10.0, height: float = 2.5) -> np.ndarray:

@@ -210,3 +210,42 @@ def test_baro_height_keeps_the_imu_bias_out_of_the_height_in_a_dropout():
     err = out[-1][2] - out[-1][0]
     assert err[:, 0].abs().mean() > 0.25  # x drifts under the bias as before
     assert err[:, 2].abs().max() < 0.05  # z stays on the barometer
+
+
+def test_pressure_events_and_an_outside_offset_move_the_barometer_height():
+    """A door opens: the barometer reads the pressure step as height and the fused height
+    follows it, while the vehicle has not moved. Off by default, and vision height ignores
+    it."""
+    still = lambda t: torch.zeros(1, 3)  # noqa: E731
+    quiet = dict(enabled=True, imu_noise_mps2=0.0, baro_noise_m=0.005,
+                 baro_walk_m_per_sqrt_s=0.0)
+    steps = int(60.0 / DT)
+    zerr = lambda out: torch.stack([o[2][:, 2] - o[0][:, 2] for o in out])  # noqa: E731
+    plain = zerr(fly(FusionConfig(**quiet, height_source="baro"), still, steps, n=64))
+    assert float(plain.abs().max()) < 0.02
+    door = FusionConfig(**quiet, height_source="baro", baro_step_rate_hz=0.05,
+                        baro_step_m=(0.5, 1.0), baro_step_tau_s=1.0)
+    assert door.baro_steps and not FusionConfig(**quiet, baro_step_rate_hz=0.05,
+                                                baro_step_m=1.0).baro_steps  # vision height
+    z = zerr(fly(door, still, steps, n=64, seed=1))
+    assert 0.5 < float(z.abs().max()) < 6.0  # a few events in a minute, each 0.5 to 1 m
+    assert float((z[1:] - z[:-1]).abs().max()) < 0.05  # reached with its lag, not at once
+    assert float(z[-1].abs().mean()) > 0.3  # and it stays
+    # With a decay the pressure equalises again.
+    leak = FusionConfig(**quiet, height_source="baro", baro_step_rate_hz=0.05,
+                        baro_step_m=(0.5, 1.0), baro_step_decay_s=3.0)
+    zl = zerr(fly(leak, still, steps, n=64, seed=1))
+    assert float(zl[-1].abs().mean()) < 0.5 * float(z[-1].abs().mean())
+    # An offset from outside (the wind on the static port) is followed the same way.
+    f = TorchFusion(FusionConfig(**quiet, height_source="baro"), 2, DT, seed=0)
+    p = torch.zeros(2, 3)
+    f.reset(torch.arange(2), p, p)
+    off = torch.tensor([0.4, 0.0])
+    for _ in range(int(5.0 / DT)):
+        pe, _ = f.step(p, p, p, torch.ones(2, dtype=torch.bool), true_pos=p, baro_offset=off)
+    assert float(pe[0, 2]) == pytest.approx(0.4, abs=0.03) and abs(float(pe[1, 2])) < 0.03
+    for bad in (dict(baro_step_m=(1.0, 0.5)), dict(baro_step_rate_hz=-1.0),
+                dict(baro_step_tau_s=0.0), dict(baro_step_decay_s=0.0)):
+        with pytest.raises(ValueError):
+            FusionConfig(**bad)
+    assert FusionConfig.from_dict({"baro_step_m": [0.2, 0.8]}).baro_step_m == (0.2, 0.8)

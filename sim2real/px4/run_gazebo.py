@@ -67,8 +67,8 @@ import yaml
 from envs.frames import ned_to_enu
 from eval.metrics import Surface, compute_metrics
 from eval.pass_score import moving_trace, pass_numbers
+from eval.ulog import gazebo_reference, reference_numbers, trace_from_topics
 from eval.ulog import load_topics as load_trace_topics
-from eval.ulog import trace_from_topics
 from sim2real.estimate_bridge.bridge import Rangefinder
 from sim2real.estimate_bridge.config import load_profile
 from sim2real.estimate_bridge.params import to_environment
@@ -286,7 +286,9 @@ def landing_stretch(status: dict[str, np.ndarray], start_us: int,
 
 def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
                ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """EKF report and eval.metrics on the TRUE position over the first hold."""
+    """EKF report and eval.metrics on the TRUE position over the first hold, against the
+    module's hold point with the estimator's height offset on the ground taken out
+    (``eval.ulog.gazebo_reference``)."""
     status, start_us = load_status(ulog)
     if status is None:
         raise ValueError(f"{ulog} has no {STATUS_TOPIC}")
@@ -296,18 +298,21 @@ def score_hold(ulog: Path, sc, wind, altitude: float, settle_s: float
     ekf = analyse(ulog, altitude, window)
     topics, start_us2 = load_trace_topics(ulog)
     hold_point = hold_point_enu(status, start_us, window)
-    trace = trace_from_topics(topics, start_us2, hold_point=hold_point)
+    logged = trace_from_topics(topics, start_us2, hold_point=hold_point)
     moving = pass_reference_enu(status, start_us, window)
     if moving is not None:
-        trace = moving_trace(trace, *moving)
+        logged = moving_trace(logged, *moving)
+    trace = gazebo_reference(logged, topics, start_us2, window, fixed=moving is None)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
     surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
                 if sc.surface2_normal_toward is not None else None)
     gusts = [(float(s), float(s) + float(d))
              for s, d in zip(wind.gust_start[0], wind.gust_duration[0], strict=True)]
     metrics = compute_metrics(trace, surface, gusts, window, surface2=surface2)
+    metrics.update(reference_numbers(trace, logged, window))
     hold = {
         "window_s": list(window),
+        # The module's own hold point, as logged (the score moves it by the ground offset).
         "hold_point_enu": [float(v) for v in hold_point],
         "gusts_s": gusts,
         "module": hold_stats(status, start_us, window),
@@ -376,6 +381,30 @@ def assemble(report: dict[str, Any]) -> dict[str, Any]:
     report["ok"] = bool(report.get("flight_ok") and report.get("estimate_ok")
                         and report.get("wind_ok") and report.get("gps_ok")
                         and report.get("vision_fused"))
+    return report
+
+
+def rescore(out: Path, drift_tol: float = 1.0) -> dict[str, Any]:
+    """Score a flown run folder again from its ulog (after a change to the scoring):
+    rewrite ``hold.json`` and the hold, metrics and truth-judged checks in
+    ``hold_summary.json``, return the summary."""
+    config = yaml.safe_load((out / "config.yaml").read_text())
+    sc = dataclasses.replace(load_scenario(config["scenario"]), seed=config["scenario_seed"])
+    report = json.loads((out / "hold_summary.json").read_text())
+    _, hold = score_hold(out / "flight.ulg", sc, sample_scenario(sc), sc.hover.altitude, 2.0)
+    (out / "hold.json").write_text(json.dumps(hold, indent=2) + "\n")
+    report["hold"] = hold
+    report["metrics"] = hold["metrics"]
+    flight = report.get("flight")
+    if flight is not None and "checks" in flight:
+        # The estimate's own verdicts back first, or judging again would file the truth's
+        # verdicts of the first scoring as the estimate's.
+        flight["checks"].update(flight.get("estimate_checks", {}))
+        judge_hold_on_truth(flight, hold, drift_tol)
+        report["flight_ok"] = bool(flight.get("passed"))
+        (out / "summary.json").write_text(json.dumps(flight, indent=2) + "\n")
+    assemble(report)
+    (out / "hold_summary.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
 

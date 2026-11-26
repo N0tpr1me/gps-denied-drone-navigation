@@ -22,6 +22,16 @@ report, in this order:
    vision input stops); ``"hold"`` freezes the last fresh value (the earlier model, kept so
    old numbers stay reproducible).
 
+**Poor seeing** (off by default; ``degrade_prob``): what the camera looks at decides how good
+a VIO is, and that changes from one flight to the next, not within the model above. With
+probability ``degrade_prob`` an episode is flown in poor seeing: its white noise, its bias
+walk (and the walk's cap), its jump rate and its dropout rate are each multiplied by a factor
+drawn uniformly from the matching ``degrade_*_scale`` range. One block stands for every cause
+that reaches the flight through the camera: low light, flicker, glare, a blank or shiny or
+wet surface, smoke, drops on the lens, people walking through the picture
+(``docs/environment-factors.md`` says which shape each cause takes). The factors come from a
+generator of their own, so the events an episode would have had anyway are unchanged.
+
 Jumps and dropouts can start only ``fault_start_s`` after an env's reset (default 0: from
 the first step). Every step still draws its random numbers, so a delay changes nothing but
 the events it suppresses: faults from ``fault_start_s`` on are the same, step for step, as
@@ -77,6 +87,13 @@ class EstimateCorruptionConfig:
     runaway_at_s: float | None = None
     runaway_accel_mps2: float = 0.0
     runaway_direction: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    # Poor seeing (module docstring): the share of episodes that have it, and the (min, max)
+    # each of their factors is drawn from. 1 is the standard estimate.
+    degrade_prob: float = 0.0
+    degrade_noise_scale: tuple[float, float] = (1.0, 1.0)
+    degrade_walk_scale: tuple[float, float] = (1.0, 1.0)
+    degrade_jump_rate_scale: tuple[float, float] = (1.0, 1.0)
+    degrade_dropout_rate_scale: tuple[float, float] = (1.0, 1.0)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EstimateCorruptionConfig:
@@ -87,7 +104,17 @@ class EstimateCorruptionConfig:
         data = dict(data)
         if "runaway_direction" in data:
             data["runaway_direction"] = tuple(float(v) for v in data["runaway_direction"])
+        for name in DEGRADE_SCALES:
+            if name in data:
+                v = data[name]
+                data[name] = ((float(v), float(v)) if isinstance(v, (int, float))
+                              else (float(v[0]), float(v[1])))
         return cls(**data)
+
+    @property
+    def degrades(self) -> bool:
+        return self.degrade_prob > 0 and any(
+            getattr(self, name) != (1.0, 1.0) for name in DEGRADE_SCALES)
 
     @classmethod
     def clean(cls) -> EstimateCorruptionConfig:
@@ -125,6 +152,12 @@ class EstimateCorruptionConfig:
             raise ValueError("dropout_mode must be 'dead_reckon' or 'hold'")
         if len(self.runaway_direction) != 3 or not math.hypot(*self.runaway_direction) > 0:
             raise ValueError("runaway_direction must be a nonzero 3-vector")
+        if self.degrade_prob > 1:
+            raise ValueError("degrade_prob must lie in [0, 1]")
+        for name in DEGRADE_SCALES:
+            lo, hi = getattr(self, name)
+            if not 0 <= lo <= hi:
+                raise ValueError(f"{name}: need 0 <= min <= max, got {(lo, hi)}")
         if self.dropout_accel_bias_mps2 < 0:
             raise ValueError("dropout_accel_bias_mps2 must be >= 0")
         lo, hi = _dropout_step_range(self, dt)
@@ -133,6 +166,10 @@ class EstimateCorruptionConfig:
                 f"no whole number of {dt} s steps fits in "
                 f"[{self.dropout_min_s}, {self.dropout_max_s}] s"
             )
+
+
+DEGRADE_SCALES = ("degrade_noise_scale", "degrade_walk_scale", "degrade_jump_rate_scale",
+                  "degrade_dropout_rate_scale")
 
 
 def _dropout_step_range(cfg: EstimateCorruptionConfig, dt: float) -> tuple[int, int]:
@@ -207,6 +244,10 @@ class EstimateCorruptor:
         self.fault_start_steps = round(cfg.fault_start_s / dt)
         self.steps_since_reset = self._zeros((n,), integer=True)
         self._started = self._zeros((n,), integer=True) > 0  # all False until reset
+        # Poor seeing (cfg.degrade_*): this episode's factors on the noise, the bias walk, the
+        # jump rate and the dropout rate, one column each; all 1 unless it is on.
+        self.quality = self._zeros((n, 4)) + 1.0
+        self._degrade_rng = np.random.default_rng([int(seed), 0xDE6])
 
     # Backend hooks: the only methods the PyTorch adapter overrides.
 
@@ -278,6 +319,24 @@ class EstimateCorruptor:
         self.age = xp.where(mask, 0.0, self.age)
         self.steps_since_reset = xp.where(mask, 0, self.steps_since_reset)
         self._started = self._started | mask
+        if self.cfg.degrades:
+            self.quality = xp.where(m3, self._as_array(self.draw_quality()), self.quality)
+
+    def draw_quality(self) -> np.ndarray:
+        """A new episode's seeing for every env, (N, 4): the factors on noise, bias walk, jump
+        rate and dropout rate. Ones for the episodes that keep the standard estimate."""
+        cfg, r, n = self.cfg, self._degrade_rng, self.num_envs
+        poor = r.random(n) < cfg.degrade_prob
+        lo = np.array([getattr(cfg, name)[0] for name in DEGRADE_SCALES])
+        hi = np.array([getattr(cfg, name)[1] for name in DEGRADE_SCALES])
+        return np.where(poor[:, None], r.uniform(lo, hi, size=(n, 4)), 1.0)
+
+    def set_quality(self, quality: Any, env_ids: Any = None) -> None:
+        """Set the seeing of ``env_ids`` (default all) by hand: ``quality`` is (num_envs, 4)
+        or (4,), the factors on noise, bias walk, jump rate and dropout rate."""
+        q = self._as_array(quality) + self._zeros((self.num_envs, 4))
+        mask = self._as_mask(self._arange(self.num_envs) if env_ids is None else env_ids)
+        self.quality = self.xp.where(mask[:, None], q, self.quality)
 
     def step(self, pos: Any, vel: Any, noise: StepNoise | None = None) -> EstimateSample:
         """Advance one step of ``dt`` with the true state now; return the reported state."""
@@ -303,11 +362,15 @@ class EstimateCorruptor:
         d_vel = self.buf_vel[read, cols]
 
         # 2. Bias random walk.
-        b = cfg.bias_max_m
-        self.bias = xp.clip(self.bias + self.bias_step_std * nz.bias, -b, b)
+        # Poor seeing scales the noise, the walk and both event rates (all factors 1 unless
+        # cfg.degrade_* is on, and multiplying by 1 changes no bit).
+        q_noise, q_walk = self.quality[:, 0:1], self.quality[:, 1:2]
+        b = cfg.bias_max_m * q_walk
+        self.bias = xp.maximum(xp.minimum(self.bias + self.bias_step_std * q_walk * nz.bias, b),
+                               -b)
 
         # 3. Jumps: decay the old offset, then add any new step.
-        jumped = (nz.jump_event < self.p_jump) & faults_on
+        jumped = (nz.jump_event < self.p_jump * self.quality[:, 2]) & faults_on
         norm = xp.sqrt((nz.jump_dir * nz.jump_dir).sum(-1))[:, None]
         direction = nz.jump_dir / xp.where(norm > 1e-12, norm, 1.0)
         size = cfg.jump_min_m + (cfg.jump_max_m - cfg.jump_min_m) * nz.jump_size
@@ -316,8 +379,8 @@ class EstimateCorruptor:
         )
 
         # 4. White noise.
-        m_pos = d_pos + self.bias + self.jump_offset + cfg.pos_noise_std_m * nz.pos
-        m_vel = d_vel + cfg.vel_noise_std_mps * nz.vel
+        m_pos = d_pos + self.bias + self.jump_offset + cfg.pos_noise_std_m * q_noise * nz.pos
+        m_vel = d_vel + cfg.vel_noise_std_mps * q_noise * nz.vel
 
         # 5. Runaway: velocity error a * tau, position error a * tau^2 / 2, tau from runaway_at_s.
         if cfg.runaway_at_s is not None and cfg.runaway_accel_mps2 > 0:
@@ -331,7 +394,8 @@ class EstimateCorruptor:
         lo, hi = self.dropout_steps_min, self.dropout_steps_max
         span = hi - lo + 1
         length_steps = lo + self._to_int(xp.clip(xp.floor(nz.dropout_len * span), 0, span - 1))
-        started = (self.dropout_left == 0) & (nz.dropout_event < self.p_dropout) & faults_on
+        started = ((self.dropout_left == 0)
+                   & (nz.dropout_event < self.p_dropout * self.quality[:, 3]) & faults_on)
         self.dropout_left = xp.where(started, length_steps, self.dropout_left)
         stale = self.dropout_left > 0
         if cfg.dropout_mode == "dead_reckon":

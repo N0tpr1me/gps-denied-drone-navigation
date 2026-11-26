@@ -126,6 +126,18 @@ def test_groundtruth_needs_no_alignment():
     assert row["p95_m"] == pytest.approx(0.1, abs=0.005)
 
 
+def test_a_gazebo_flight_loses_the_height_ekf2_read_on_the_pad():
+    # EKF2 reads 0.3 m high from the pad on: the setpoint (its frame) sits 0.3 m above
+    # where the drone truly holds. Scored like every Gazebo hold, that is not hold error.
+    topics = flight(truth="groundtruth")
+    truth = topics["vehicle_local_position_groundtruth"]
+    topics["vehicle_local_position_groundtruth"] = {**truth, "z": truth["z"] + 0.3}
+    row = score_run(topics, START_US, {**RUN, "controller": "structure_hold"}, SESSION)
+    assert row["ground_offset_m"] == pytest.approx(0.3, abs=1e-6)
+    assert row["p95_m"] == pytest.approx(0.1, abs=0.005)
+    assert np.allclose(row["hold_point_enu"], HOLD_ENU)  # the setpoint as the log has it
+
+
 def test_a_short_hold_ended_early_and_reports_the_trip():
     row = score_run(flight(mode_end=40.0), START_US, {**RUN, "controller": "structure_hold"},
                     SESSION)

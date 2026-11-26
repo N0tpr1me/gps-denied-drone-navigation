@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from eval.metrics import Surface, compute_metrics, main
-from eval.ulog import trace_from_topics
+from eval.ulog import gazebo_reference, reference_numbers, trace_from_topics
 
 START_US = 1_000_000
 
@@ -232,3 +232,89 @@ def test_fit_yaw_offset_recovers_a_known_transform():
     psi, off = fit_yaw_offset(src, dst)
     assert psi == pytest.approx(-2.0)
     np.testing.assert_allclose(off, [1.0, 2.0, 3.0])
+
+
+# Gazebo's reference (docs/decisions.md, 2026-11-10): the estimator's height on the ground
+# comes out of the setpoint, and the hold is scored against the setpoint it began with.
+def gazebo_topics(ground_offset=0.3, sink_after=None, jump_at=None, with_estimate=True):
+    """60 s at 50 Hz, ENU numbers written as NED. On the ground for 10 s, a 5 s climb to
+    2.5 m, then a hold. EKF2's height reads ``ground_offset`` above the truth throughout,
+    and PX4 holds 2.5 m in EKF2's frame, so the setpoint sits that much above the truth.
+    ``sink_after``: the truth sinks 0.2 m from that time (real hold error). ``jump_at``:
+    the setpoint steps 1 m north then, and the truth goes with it within a second."""
+    t = np.arange(0.0, 60.0, 0.02)
+    us = START_US + np.round(t * 1e6).astype(np.int64)
+    up = np.clip((t - 10.0) * 0.5, 0.0, 2.5)
+    north = np.zeros_like(t)
+    sp_north = np.zeros_like(t)
+    if sink_after is not None:
+        up = up - np.where(t >= sink_after, 0.2, 0.0)
+    if jump_at is not None:
+        sp_north = np.where(t >= jump_at, 1.0, 0.0)
+        north = np.clip(t - jump_at, 0.0, 1.0)
+    topics = {
+        "vehicle_local_position_groundtruth": {
+            "timestamp": us, "x": north, "y": np.zeros_like(t), "z": -up},
+        "vehicle_local_position_setpoint": {
+            "timestamp": us, "x": sp_north, "y": np.zeros_like(t),
+            "z": np.full_like(t, -(2.5 + ground_offset))},
+    }
+    if with_estimate:
+        topics["vehicle_local_position"] = {
+            "timestamp": us, "x": north, "y": np.zeros_like(t), "z": -(up + ground_offset)}
+    return topics
+
+
+WINDOW = (20.0, 55.0)
+
+
+def test_gazebo_reference_takes_out_the_height_the_estimator_read_on_the_ground():
+    topics = gazebo_topics(ground_offset=0.3)
+    logged = trace_from_topics(topics, START_US)
+    scored = gazebo_reference(logged, topics, START_US, WINDOW)
+    # As logged the setpoint is 0.3 m above a drone that is exactly where it was sent.
+    assert compute_metrics(logged, window=WINDOW)["p95_m"] == pytest.approx(0.3, abs=1e-6)
+    assert compute_metrics(scored, window=WINDOW)["p95_m"] == pytest.approx(0.0, abs=1e-6)
+    numbers = reference_numbers(scored, logged, WINDOW)
+    assert numbers["ground_offset_m"] == pytest.approx(0.3, abs=1e-6)
+    assert numbers["p95_logged_setpoint_m"] == pytest.approx(0.3, abs=1e-6)
+    assert numbers["setpoint_moved_m"] == pytest.approx(0.0, abs=1e-9)
+    np.testing.assert_allclose(logged.pos_sp[:, 2], 2.8)  # the logged trace is untouched
+
+
+def test_gazebo_reference_keeps_height_error_made_after_lift_off():
+    topics = gazebo_topics(ground_offset=0.3, sink_after=30.0)
+    scored = gazebo_reference(trace_from_topics(topics, START_US), topics, START_US, WINDOW)
+    # The estimate sank with the truth here, so PX4 saw it; the drone is still 0.2 m low.
+    assert compute_metrics(scored, window=WINDOW)["p95_m"] == pytest.approx(0.2, abs=1e-6)
+
+
+def test_gazebo_reference_scores_against_the_setpoint_the_hold_began_with():
+    topics = gazebo_topics(ground_offset=0.0, jump_at=30.0)
+    logged = trace_from_topics(topics, START_US)
+    scored = gazebo_reference(logged, topics, START_US, WINDOW)
+    # PX4 moved its setpoint 1 m and the drone followed: little error against the setpoint
+    # as logged, a metre from where the hold began.
+    assert compute_metrics(logged, window=WINDOW)["p95_m"] < 0.1
+    assert compute_metrics(scored, window=WINDOW)["p95_m"] == pytest.approx(1.0, abs=1e-6)
+    assert scored.meta["setpoint_moved_m"] == pytest.approx(1.0)
+    assert scored.meta["setpoint"] == "fixed"
+
+
+def test_a_moving_reference_keeps_moving_and_only_loses_the_ground_offset():
+    topics = gazebo_topics(ground_offset=0.3, jump_at=30.0)
+    logged = trace_from_topics(topics, START_US)
+    scored = gazebo_reference(logged, topics, START_US, WINDOW, fixed=False)
+    np.testing.assert_allclose(scored.pos_sp[:, :2], logged.pos_sp[:, :2])
+    np.testing.assert_allclose(scored.pos_sp[:, 2], 2.5)
+    assert scored.meta["setpoint"] == "moving"
+
+
+def test_without_a_stretch_on_the_ground_nothing_is_taken_out():
+    # No estimate in the log (or a log that starts in the air): the offset is unknown, so
+    # the height is scored as logged and the row says so with None.
+    topics = gazebo_topics(ground_offset=0.3, with_estimate=False)
+    logged = trace_from_topics(topics, START_US)
+    scored = gazebo_reference(logged, topics, START_US, WINDOW)
+    assert scored.meta["ground_offset_m"] is None
+    assert compute_metrics(scored, window=WINDOW)["p95_m"] == pytest.approx(0.3, abs=1e-6)

@@ -132,7 +132,7 @@ jobs:
     smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
     after: [gz_tuned_baseline]
     hours: 0.4
-    why: "v22, 24 flights; mean p95 near the cloud re-fly of 2026-11-09 (0.33 / 0.33 / 0.29 m, 34 to 46 % below tuned), 0 crashes"
+    why: "v22, 24 flights; mean p95 near the cloud re-fly of 2026-11-09 (0.198 / 0.195 / 0.195 m scored like for like, 39 to 41 % below tuned), 0 crashes"
 
   - id: gz_v24_image
     cmd: >

@@ -69,6 +69,7 @@ from eval.ulog import (
     TOPICS,
     Topics,
     align_estimate,
+    gazebo_reference,
     ned_to_enu,
     rotate_z,
     trace_from_topics,
@@ -261,6 +262,12 @@ def score_run(topics: Topics, start_us: int, run: dict[str, Any], session: dict[
         surface = Surface(wall["point"], wall["normal"]) if wall else None
     trace = trace_from_topics(topics, start_us, hold_point=hold_point, truth=truth,
                               allow_estimate=bool(session.get("allow_estimate", False)))
+    if truth is None and GROUNDTRUTH in topics:
+        # A Gazebo flight (the sample session): the truth is in EKF2's frame but for the
+        # height EKF2 read on the pad, which a mocap or RTK session's frame fit takes out
+        # and every Gazebo hold's score does too (eval.ulog.gazebo_reference).
+        trace = gazebo_reference(trace, topics, start_us, window)
+        row["ground_offset_m"] = trace.meta["ground_offset_m"]
     gusts = [(float(a), float(b)) for a, b in run.get("gusts", [])]
     radius = session.get("contact_radius_m")
     if radius:

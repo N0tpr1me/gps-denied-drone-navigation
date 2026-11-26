@@ -47,7 +47,7 @@ import yaml
 
 from eval.metrics import Surface, compute_metrics
 from eval.pass_score import moving_trace, pass_numbers
-from eval.ulog import SETPOINT, read_ulog, trace_from_topics
+from eval.ulog import SETPOINT, gazebo_reference, reference_numbers, trace_from_topics
 from eval.ulog import load_topics as load_trace_topics
 from eval.ulog import ned_to_enu as ulog_ned_to_enu
 from sim2real.estimate_bridge.config import load_profile
@@ -162,14 +162,17 @@ def score_pass_ulog(ulog: Path, sc, params, altitude: float
     # Only the Offboard setpoints: before the switch the setpoint is stock Hold's.
     flown = (sp_t >= window[0] - PASS_SETTLE_S) & (sp_t <= window[1])
     hold_point = sp_pos[flown][np.all(np.isfinite(sp_pos[flown]), axis=1)][0]
-    trace = moving_trace(trace_from_topics(trace_topics, start_us2, hold_point=hold_point),
-                         sp_t[flown], sp_pos[flown])
+    logged = moving_trace(trace_from_topics(trace_topics, start_us2, hold_point=hold_point),
+                          sp_t[flown], sp_pos[flown])
+    # The reference moves because the pass tells it to; only the ground offset comes out.
+    trace = gazebo_reference(logged, trace_topics, start_us2, window, fixed=False)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
     surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
                 if sc.surface2_normal_toward is not None else None)
     gusts = [(float(s), float(s) + float(d))
              for s, d in zip(params.gust_start[0], params.gust_duration[0], strict=True)]
     metrics = compute_metrics(trace, surface, gusts, window, surface2=surface2)
+    metrics.update(reference_numbers(trace, logged, window))
     metrics["window_s"] = list(window)
     metrics["gusts_s"] = gusts
     metrics["pass"] = pass_numbers(trace, window, sc.wall_normal_toward)
@@ -195,20 +198,41 @@ def judge_pass_on_truth(summary: dict[str, Any], metrics: dict[str, Any],
 
 
 def score_ulog(ulog: Path, sc, params, altitude: float) -> tuple[dict[str, Any], dict[str, Any]]:
-    """EKF health report and eval.metrics on the true position, over the hover window."""
+    """EKF health report and eval.metrics on the true position, over the hover window,
+    against the setpoint PX4 had at the window's start with the estimator's height offset
+    on the ground taken out (``eval.ulog.gazebo_reference``)."""
     topics, start_us = load_topics(ulog)
     window = hover_window(topics, start_us, altitude)
     ekf = analyse(ulog, altitude, window)
-    trace = read_ulog(ulog)
+    trace_topics, start_us2 = load_trace_topics(ulog)
+    logged = trace_from_topics(trace_topics, start_us2)
+    logged.meta["ulog"] = str(ulog)
+    trace = gazebo_reference(logged, trace_topics, start_us2, window)
     surface = Surface(sc.wall_point, sc.wall_normal_toward)
     surface2 = (Surface(sc.surface2_point, sc.surface2_normal_toward)
                 if sc.surface2_normal_toward is not None else None)
     gusts = [(float(s), float(s) + float(d))
              for s, d in zip(params.gust_start[0], params.gust_duration[0], strict=True)]
     metrics = compute_metrics(trace, surface, gusts, window, surface2=surface2)
+    metrics.update(reference_numbers(trace, logged, window))
     metrics["window_s"] = list(window) if window else None
     metrics["gusts_s"] = gusts
     return ekf, metrics
+
+
+def rescore(out: Path) -> dict[str, Any]:
+    """Score a flown run folder again from its ulog (after a change to the scoring):
+    rewrite ``metrics.json`` and the metrics in ``estimate_summary.json``, return the
+    summary. Nothing else in the folder changes; the pass line is as the flight left it."""
+    config = yaml.safe_load((out / "config.yaml").read_text())
+    sc = dataclasses.replace(load_scenario(config["scenario"]), seed=config["scenario_seed"])
+    report = json.loads((out / "estimate_summary.json").read_text())
+    score = score_pass_ulog if sc.surface_pass is not None else score_ulog
+    _, metrics = score(out / "flight.ulg", sc, sample_scenario(sc), sc.hover.altitude)
+    (out / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    report["metrics"] = metrics
+    (out / "estimate_summary.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:

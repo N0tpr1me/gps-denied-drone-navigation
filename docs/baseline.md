@@ -1666,8 +1666,9 @@ centimetre.
 A second scoring difference came out of the same work and points the other way: tuned PX4
 is scored against a setpoint that PX4 itself moves after an estimate reset, Structure Hold
 against a fixed hold point. Put both on a fixed point, with the offset out, and tuned PX4
-is 0.33 m and v22 0.20 m: **about 40 % tighter, like for like**. As scored today it is 34
-to 46 %; the scorer is not changed here, both corrections are one Proposed row for Zain.
+is 0.33 m and v22 0.20 m: **about 40 % tighter, like for like**. As scored on 2026-11-09
+it was 34 to 46 %. Zain decided for both corrections on 2026-11-10; the scorer now does
+them, and "Scored like for like" at the end of this file has the benchmark that way.
 
 It is not the image (v22 on vision height on the cloud image scores the Mac's number), not
 machine load (every flight ran at real time) and not a tuning gap (below).
@@ -1720,10 +1721,12 @@ waiting for the disarm (`post_hold_fail`). With the rangefinder the closest appr
 the hold was 0.64 m or more on every flight of `v22_range_cloud`, `v24_range_cloud` and
 `v22_wind12`.
 
-### As scored today (`EKF2_HGT_REF` 0, the benchmark's set-up)
+### As scored on 2026-11-09 (`EKF2_HGT_REF` 0, the benchmark's set-up)
 
-These are the numbers `eval.metrics` prints on current main, and the ones to quote until
-the scoring question at the end of this section is decided.
+These are the numbers the runners printed until 2026-11-10, against the setpoint as the
+log has it. They were the ones to quote until the scoring question was decided; since
+then the benchmark is "Scored like for like" below, and a batch keeps this number per
+flight as `p95_logged_setpoint_m`.
 
 | scenario | p95 m, tuned → v22 | worst toward wall m | rms m | crashes | failsafes |
 |---|---|---|---|---|---|
@@ -1988,12 +1991,145 @@ until then.
   0.195 m (−51 / −52 / −52 %). This still scores tuned PX4 against its moving setpoint.
 - **Like for like, offset out and a fixed hold point for both**: 0.327 → 0.198 m, 0.325 →
   0.195 m, 0.329 → 0.195 m (−39 / −40 / −41 %).
-- **Proposed** (`docs/decisions.md`, 2026-11-09): the Gazebo scorers (a) remove the height
-  offset the estimator had on the ground before lift-off and (b) score both controllers
-  against the setpoint at the start of the hold, as `eval/partner_session.py` already does
-  for a partner's flights, so that a number means how far the drone was from where it was
-  asked to stay. (a) moves the headline up, (b) moves it down; together it lands at about
-  40 %. Until Zain decides, `eval.metrics` is unchanged and the as-scored numbers are the
-  benchmark.
+- **Decided 2026-11-10** (`docs/decisions.md`; proposed 2026-11-09): the Gazebo scorers
+  (a) remove the height offset the estimator had on the ground before lift-off and (b)
+  score both controllers against the setpoint at the start of the hold, as
+  `eval/partner_session.py` already does for a partner's flights, so that a number means
+  how far the drone was from where it was asked to stay. (a) moves the headline up, (b)
+  moves it down; together it lands at about 40 %. The next section is the benchmark scored
+  that way.
 - The tuned parameters are unchanged. `EKF2_HGT_REF` stays 0, as `eval/log_health.py`
   asks.
+
+## Scored like for like (Decided 2026-11-10)
+
+Zain's yes on 2026-11-10 made the like-for-like view of the section above the way every
+Gazebo hold is scored. This is the benchmark to quote from here on.
+
+**What the scorer does now** (`eval.ulog.gazebo_reference`, used by both runners; the
+metric itself, `eval.metrics`, is unchanged and still works on the TRUE position):
+
+1. **The height offset comes out.** EKF2's height minus Gazebo's true height while the
+   drone still sits on the ground (the mean from 3 s to 0.5 s before the truth lifts
+   0.2 m) is taken off the setpoint's height. A log without the truth or the estimate
+   topic is scored as before and says so (`ground_offset_m` empty).
+2. **A fixed hold point for both.** The reference is the setpoint in force at the start
+   of the scored window. Structure Hold's was fixed already; tuned PX4 is no longer scored
+   against the setpoint PX4 moves after an estimate reset. A surface pass keeps its moving
+   reference (the pass is the task) and loses the offset only.
+
+Each flight's metrics also carry `ground_offset_m`, `setpoint_moved_m` (how far PX4's
+setpoint went from that fixed point during the hold) and `p95_logged_setpoint_m` (the
+number the old scoring gave), and the batch table prints their means.
+
+**No flight was flown for this.** `python -m eval.baselines.run_baseline --rescore
+<batch.json ...>` scores a flown batch again from its logs. All 192 cloud flights of
+2026-11-09/10 were re-scored that way (the 184 of the section above, its three probe
+flights, the repeat of seed 2 and the four sample-session flights), then pooled again
+with `--pool`. Three checks on the re-score: every flight's crash, post-hold and failsafe
+verdict is the same as before; `p95_logged_setpoint_m` equals the old p95 on every flight
+(largest difference 0.000 m); and the new p95 equals the last column of
+`eval.height_split`'s read-out in the section above on the flights compared (tuned PX4
+calm seed 1: 0.650 m both ways).
+
+### The benchmark: tuned PX4 against v22 on barometer height, 8 seeds
+
+`tuned_v2_cloud` and `v22_cloud` (`px4_tuned_v2.params`, `EKF2_HGT_REF` 0), mean over 8
+seeds, worst seed in brackets:
+
+| scenario | p95 m, tuned → v22 | worst toward wall m | rms m | crashes | failsafes |
+|---|---|---|---|---|---|
+| wall1m_calm_0ms | 0.327 (0.738) → **0.198 (0.286), −39 %** | 0.161 (0.489) → 0.069 (0.224), −57 % | 0.180 (0.417) → 0.122 (0.154), −32 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_4ms | 0.325 (0.733) → **0.195 (0.293), −40 %** | 0.158 (0.476) → 0.076 (0.234), −52 % | 0.181 (0.411) → 0.121 (0.150), −33 % | 0/8 → 0/8 | 0/8 → 0/8 |
+| wall1m_wind_8ms | 0.329 (0.732) → **0.195 (0.287), −41 %** | 0.157 (0.439) → 0.096 (0.252), −39 % | 0.181 (0.409) → 0.119 (0.171), −34 % | 0/8 → 0/8 | 0/8 → 0/8 |
+
+| tuned PX4, p95 m | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.650 | 0.158 | 0.337 | 0.167 | 0.218 | 0.738 | 0.231 | 0.120 | 0.327 |
+| 4 m/s | 0.645 | 0.162 | 0.313 | 0.172 | 0.209 | 0.733 | 0.241 | 0.121 | 0.325 |
+| 8 m/s | 0.666 | 0.155 | 0.316 | 0.180 | 0.205 | 0.732 | 0.248 | 0.131 | 0.329 |
+
+| v22, p95 m | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | mean |
+|---|---|---|---|---|---|---|---|---|---|
+| calm 0 m/s | 0.201 | 0.174 | 0.286 | 0.168 | 0.162 | 0.262 | 0.204 | 0.127 | 0.198 |
+| 4 m/s | 0.182 | 0.174 | 0.293 | 0.166 | 0.163 | 0.248 | 0.208 | 0.128 | 0.195 |
+| 8 m/s | 0.150 | 0.165 | 0.287 | 0.171 | 0.169 | 0.280 | 0.206 | 0.135 | 0.195 |
+
+What the batch table adds, mean over 8 seeds (calm / 4 / 8 m/s):
+
+| | p95 against the setpoint as logged m | height offset on the ground m | setpoint moved, worst seed m |
+|---|---|---|---|
+| tuned PX4 | 0.494 / 0.514 / 0.529 | 0.165 / 0.230 / 0.241 | 1.46 / 1.45 / 1.43 |
+| v22 | 0.325 / 0.328 / 0.286 | 0.180 / 0.206 / 0.175 | 0.00 / 0.00 / 0.00 |
+
+Reading it:
+
+- **v22 holds to about 0.20 m, tuned PX4 to about 0.33 m: 39 to 41 % tighter**, and v22
+  goes 39 to 57 % less far toward the wall. No crash, no wall contact and no failsafe in
+  the scored hold for either.
+- The numbers no longer move with the wind case or with the height EKF2 happened to read
+  on the pad: tuned PX4 0.327 / 0.325 / 0.329 m, v22 0.198 / 0.195 / 0.195 m. As logged
+  the same flights read 0.49 to 0.53 m and 0.29 to 0.33 m, and the wind cases differed by
+  what offsets their flights drew.
+- Seeds 1 and 6 are still tuned PX4's bad seeds (0.65 and 0.74 m): the estimate jumps,
+  PX4 moves its setpoint 1.4 m and the drone follows. Scored against the moved setpoint
+  those read 0.9 and 1.1 m, because the drone was then also measured against a point it
+  was never asked to return to. On the other six seeds tuned PX4 holds 0.12 to 0.34 m.
+- Tuned PX4's worst move toward the wall is measured from the fixed point too, so it
+  reads lower than before (0.16 against 0.19 m mean). Structure Hold's does not change.
+- Per seed v22 is tighter on seeds 1, 3, 5, 6 and 7, level on 4, and a little looser on
+  seeds 2 and 8 (by 0.01 to 0.02 m), where tuned PX4 itself holds 0.12 to 0.16 m.
+
+### The other batches of 2026-11-09, scored the same way
+
+Mean p95 over 8 seeds, m (worst seed in brackets), change against the batch on its left:
+
+| Pair | scenario | first | second | change | worst toward wall, first → second |
+|---|---|---|---|---|---|
+| tuned PX4 → v22, `EKF2_HGT_REF` 1 (`*_hgt1_cloud`) | calm | 0.327 (0.734) | 0.195 (0.273) | −41 % | 0.161 → 0.069 |
+| | 4 m/s | 0.324 (0.733) | 0.195 (0.295) | −40 % | 0.157 → 0.075 |
+| | 8 m/s | 0.326 (0.732) | 0.203 (0.314) | −38 % | 0.159 → 0.097 |
+| tuned PX4 → v22 with the rangefinder (`v22_range_cloud`) | calm | 0.327 (0.738) | 0.204 (0.343) | −38 % | 0.161 → 0.060 |
+| | 4 m/s | 0.325 (0.733) | 0.202 (0.345) | −38 % | 0.158 → 0.066 |
+| | 8 m/s | 0.329 (0.732) | 0.196 (0.311) | −40 % | 0.157 → 0.091 |
+| tuned PX4 → v24 with the rangefinder (`v24_range_cloud`) | calm | 0.327 (0.738) | 0.179 (0.352) | −45 % | 0.161 → 0.049 |
+| | 4 m/s | 0.325 (0.733) | 0.181 (0.370) | −44 % | 0.158 → 0.047 |
+| | 8 m/s | 0.329 (0.732) | 0.185 (0.354) | −44 % | 0.157 → 0.056 |
+| v22 → v24, both with the rangefinder | calm | 0.204 (0.343) | 0.179 (0.352) | −12 % | 0.060 → 0.049 (−18 %) |
+| | 4 m/s | 0.202 (0.345) | 0.181 (0.370) | −11 % | 0.066 → 0.047 (−29 %) |
+| | 8 m/s | 0.196 (0.311) | 0.185 (0.354) | −5 % | 0.091 → 0.056 (−38 %) |
+| tuned PX4 → v22 with the rangefinder, datasheet wind (`*_wind12`) | 10 m/s | 0.331 (0.730) | 0.192 (0.276) | −42 % | 0.161 → 0.109 |
+| | 12 m/s | 0.336 (0.729) | 0.216 (0.302) | −36 % | 0.169 → 0.128 |
+
+- **The height setting no longer shows.** On `EKF2_HGT_REF` 1 tuned PX4 scores 0.327 /
+  0.324 / 0.326 m and v22 0.195 / 0.195 / 0.203 m, the same as on 0, as the section above
+  said they would.
+- **v24 against v22** is 5 to 12 % tighter in p95 and 18 to 38 % less far toward the
+  wall. The −13 to −32 % as logged was partly the offsets its flights drew. Seed 6 is
+  v24's loosest seed (0.35 to 0.37 m, against v22's 0.31 to 0.35 m with the rangefinder);
+  on the other seven it holds 0.12 to 0.19 m.
+- **Vision height** (`v22_vision_cloud`, 4 m/s, 8 seeds): 0.202 m against 0.201 m as
+  logged. Its offset on the ground is 0.001 m, so nothing moves.
+- **The repeated flight** (tuned PX4, 10 m/s, seed 2, flown twice): 0.164 and 0.168 m
+  now, where the as-logged numbers were 0.340 and 0.423 m.
+
+### What was not re-scored
+
+The re-score needs the flight logs, and the cloud container has only the batches above.
+Every other Gazebo table in this repository was scored against the setpoint as logged and
+keeps its numbers, labelled by its date:
+
+- Everything in this file above "What moved tuned PX4 from 0.43 to 0.51 m" (the Mac's
+  batches up to 2026-11-02). Those on vision height carry no height offset, but their
+  tuned-PX4 columns were scored against the moving setpoint, so the −54 to −55 % there is
+  on the old footing; like for like it would come down too (here −52 % with the offset
+  out became −40 % on a fixed hold point).
+- The evaluation kit's first run (`docs/eval-kit.md`), which is flown again with the next
+  release, the field-fault flights (`docs/field-faults.md`), the bridge holds
+  (`docs/bridge-holds.md`), the heading flights (`docs/heading-error.md`) and the RTK check
+  (`docs/rtk-truth.md`). Their crash and wall-contact counts do not depend on the reference.
+- Surface passes (`docs/surface-passes.md`): standoff and along-pass error come from
+  `eval/pass_score.py` on the true path against the pass's own line and are not touched;
+  only the 3-D p95 column would lose the height offset.
+
+Any of them flown again is scored the new way by the same commands.

@@ -153,14 +153,15 @@ into its own image and v22, both with `--rangefinder`, 8 seeds on calm, 4 and 8 
 
 | | v22 | v24 | change |
 | --- | --- | --- | --- |
-| mean p95, calm / 4 / 8 m/s (m), as scored | 0.340 / 0.314 / 0.377 | 0.274 / 0.273 / 0.257 | −19 / −13 / −32 % |
-| the same with the pre-take-off height offset out | 0.204 / 0.202 / 0.196 | 0.179 / 0.181 / 0.185 | −12 / −10 / −6 % |
+| mean p95, calm / 4 / 8 m/s (m), against the setpoint as logged | 0.340 / 0.314 / 0.377 | 0.274 / 0.273 / 0.257 | −19 / −13 / −32 % |
+| the same with the pre-take-off height offset out (how a Gazebo hold is scored since 2026-11-10) | 0.204 / 0.202 / 0.196 | 0.179 / 0.181 / 0.185 | −12 / −11 / −5 % |
 | worst toward the wall, mean (m) | 0.060 / 0.066 / 0.091 | 0.049 / 0.047 / 0.056 | −18 / −29 / −38 % |
 | closest to the wall (m) | 0.83 to 0.85 | 0.89 to 0.91 | further off |
 | mean lift, offset out (m) | −0.016 / −0.016 / −0.014 | +0.003 / +0.011 / +0.016 | inside the soft rule |
 | rate roughness | about 2.2 | 1.35 / 1.59 / 1.97 | smoother |
 | crashes, wall contacts | 0 / 24 | 0 / 24 | |
 | against tuned PX4, p95 as scored | −31 / −39 / −29 % | −44 / −47 / −51 % | |
+| against tuned PX4, p95 like for like (the scoring since 2026-11-10) | −38 / −38 / −40 % | −45 / −44 / −44 % | |
 
 Gazebo confirms the direction the mock gave: v24 is tighter than v22 on mean p95 and on the
 move toward the wall in all three scenarios, with no crash, so it meets the plan's release

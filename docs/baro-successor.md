@@ -3,7 +3,8 @@
 v22, the released policy, trained and was gated with the estimate's height coming from the
 vision fix. The benchmark and the safety manual fly on barometer height (`EKF2_HGT_REF` 0,
 Decided 2026-11-01). The cloud's 8-seed re-fly on that set-up scored v22 at 0.29 to 0.33 m
-p95 against 0.19 to 0.20 m on vision height, and the client-needs review asked for a
+p95 (against the setpoint as logged, the scoring until 2026-11-10) against 0.19 to 0.20 m
+on vision height, and the client-needs review asked for a
 candidate trained on the barometer to win that back. This page is that candidate: whether it
 is still needed, what already covers it, the recipe, the check and the server queue.
 

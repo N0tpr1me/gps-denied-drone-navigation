@@ -142,6 +142,9 @@ What it says:
   `EKF2_HGT_REF` moved to 0 and is being flown again, so the two are not yet comparable.
   Tuned PX4 itself does here what it does at the flat wall on current main (0.49 to 0.53 m,
   `experiments/LOG.md` 2026-11-09 17:35): the deck and the wake cost it nothing measurable.
+  (All numbers on this page were scored against the setpoint as logged, the way before
+  2026-11-10; like for like the flat wall reads 0.33 m for tuned PX4 and 0.20 m for v22,
+  `docs/baseline.md`, and these flights' logs were not at hand to score again.)
   The gain comes from tuned PX4's two bad seeds, 1 and 6 (0.9 to 1.1 m in every scenario), where
   v22 holds 0.27 to 0.53 m. Over the other six seeds the two are level (deck corner 0.32
   against 0.35 m for v22, deck open 0.32 against 0.29 m, pier wake 0.35 against 0.39 m), the
