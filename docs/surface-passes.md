@@ -358,14 +358,76 @@ ring is 14 % above v22's where the rule allows 5 % (0.0038 against 0.0034, both 
 0.1 wobble threshold). As the rule is written that is "does not beat v22", so it does not go
 on to the 60 s hold benchmark in Gazebo as a release candidate; whether a ring that small
 should count is Zain's call (`docs/decisions.md` "Ideas parked"). The second seed (`pass_s1`,
-nearly as tight in the mock at half the roughness) has not flown.
+nearly as tight in the mock at half the roughness) has not flown. Zain chose to fly pass_s0 on
+the hold benchmark anyway (2026-11-10, a decision card): next section.
+
+### The pass-trained candidate on the 60 s hold benchmark (2026-11-10)
+
+The plain 60 s hold of `docs/baseline.md` (`wall1m_calm_0ms`, `wall1m_wind_4ms`,
+`wall1m_wind_8ms`, seeds 1 to 8, `vio_at_engage`, no rangefinder, `px4_tuned_v2.params`),
+flown in the cloud one flight at a time, every 10 s stretch at 0.98 real time or above.
+pass_s0 flew on the image of the pass flights above (`structure-hold/px4-sitl:pass_s0`) and
+v22 was flown again the same day on the same module build (`structure-hold/px4-sitl:v1.17.0`,
+only the compiled-in policy differs), so the two are paired seed by seed. Scored like for
+like (the Decided row of 2026-11-10: height offset out, fixed hold point; `run_baseline
+--rescore`), tuned PX4 from `docs/baseline.md` "Scored like for like":
+
+| Scenario | tuned PX4 | v22 (re-flown) | pass_s0 | pass_s0 vs v22 | tighter, paired | worst toward wall m, v22 → pass_s0 | roughness rad/s^2, v22 → pass_s0 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Calm | 0.327 | 0.198 | **0.180** | -9 % | 6 of 8 | 0.068 (0.225) → 0.064 (0.142) | 2.21 → 1.78 |
+| 4 m/s | 0.325 | 0.196 | **0.182** | -7 % | 7 of 8 | 0.074 (0.234) → 0.065 (0.127) | 2.27 → 1.75 |
+| 8 m/s | 0.329 | 0.208 | **0.177** | -15 % | 7 of 8 | 0.102 (0.253) → 0.081 (0.122) | 2.28 → 1.61 |
+
+Mean p95 over 8 seeds in m (mean and, in brackets, worst for toward the wall). No crash and
+no wall contact in 48 flights; closest to the wall 0.86 m for pass_s0, 0.75 m for v22. The
+re-flown v22 matches its 2026-11-09 batch (0.198 / 0.195 / 0.195 m).
+
+| p95 m, like for like | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Calm, v22 | 0.198 | 0.175 | 0.273 | 0.173 | 0.159 | 0.268 | 0.207 | 0.132 |
+| Calm, pass_s0 | 0.100 | 0.136 | 0.219 | 0.136 | 0.163 | 0.384 | 0.198 | 0.104 |
+| 4 m/s, v22 | 0.184 | 0.175 | 0.299 | 0.171 | 0.164 | 0.241 | 0.207 | 0.123 |
+| 4 m/s, pass_s0 | 0.097 | 0.130 | 0.230 | 0.140 | 0.162 | 0.383 | 0.197 | 0.113 |
+| 8 m/s, v22 | 0.160 | 0.173 | 0.286 | 0.167 | 0.170 | 0.360 | 0.213 | 0.134 |
+| 8 m/s, pass_s0 | 0.099 | 0.133 | 0.224 | 0.142 | 0.158 | 0.364 | 0.193 | 0.104 |
+
+- **Tighter on 20 of 24 paired flights, by 7 to 15 % on the mean.** Horizontally it is
+  tighter on 23 of 24 (0.13 against 0.18 m), and its rate commands are smoother on every
+  scenario, as on the passes.
+- **The seed it loses is the VIO jump (seed 6), and it loses it in height.** When the jump
+  arrives EKF2's height drops 0.2 to 0.25 m below the truth. pass_s0 stays on its estimate
+  (its estimated height stays within 0.01 m of the hold point), so the drone sits that far
+  above the true hold point for the rest of the hold; v22 on the same flights stays near the
+  true height and drifts off its own estimate instead. Horizontally pass_s0 is the tighter on
+  that seed too (0.15 against 0.24 to 0.26 m). Without seed 6 the margin is 19 to 20 %.
+- Seed 3 is awkward for both after the hold, as on 2026-11-09 (the landing next to the wall):
+  pass_s0 timed out waiting for the disarm on 2 of 3 flights, v22 had a PX4 failsafe in the
+  landing on 2 of 3 and left the hold 1.7 s early at 8 m/s. The scored hold is not affected.
+- As logged (the old scorer, height offset in), both read about 0.3 m (pass_s0 0.303 / 0.311 /
+  0.277, v22 0.348 / 0.315 / 0.284): the offset of each flight swamps the difference.
+
+What it decides: a 7 to 15 % margin on one training seed is inside seed luck (CLAUDE.md,
+"Releasing a policy"; `docs/gazebo_check.md` "Seed repeatability"), and pass_s0 still fails
+the release check's ring rule. So the recipe is being trained on two more seeds before any
+release question. Done on 2026-11-26 (`docs/gazebo_check.md` "The same recipe on two more
+seeds"): seeds 1 and 2 hold 23 and 21 % tighter than v22 in the release check, as seed 0 did,
+and all three fail only the ring rule (6 to 21 % above v22's ring). The mock gain and the ring
+are both the recipe's; whether the ring counts is Zain's call. Seeds 1 and 2 have not flown
+in Gazebo. **v22 stays the compiled-in
+policy** (and v24, decided 2026-11-10, for drones with a forward rangefinder); a release of a
+pass-trained policy is Zain's call. Flights: `runs/20261110-093928`, `-122418` (pass_s0) and
+`-131622`, `-125042` (v22), pooled and re-scored copies kept in
+`/mnt/project-files/surface-passes/hold/`.
 
 ## Not done yet
 
-- **Releasing a pass-trained policy.** pass_s0 flew these passes a little tighter than v22
-  (above) but fails the release check's ring rule by a small margin, so it has not flown the
-  hold benchmark. A release needs the check passed (or the rule changed by Zain), the hold
-  benchmark and Zain's yes.
+- **Releasing a pass-trained policy.** pass_s0 flew the passes and the 60 s hold a little
+  tighter than v22 (above, 7 to 15 % on the hold) but fails the release check's ring rule by
+  a small margin. Its other two seeds fail the same rule, so the ring comes with the recipe.
+  A release needs the check passed (or the rule changed by Zain) and Zain's yes. The same
+  recipe on v24, the release for drones with a rangefinder, is ready to run on the server:
+  `training/queues/surface_passes_v24.yaml` (three seeds, each checked against v24 by
+  `eval/configs/gazebo_check_pass_v24.yaml`), not started.
 - **Guards in Gazebo.** The Gazebo pass flights have no rangefinder and no lidar, so they
   score the pass, not the wall guard or the keep-out on it; those are SIH only.
 - **Faster, longer, up the wall.** Gazebo flew 5 m along at 0.5 m/s. 1 m/s, a pass up a pier

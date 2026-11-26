@@ -287,6 +287,24 @@ class RangeSensor:
     average. Two agreeing readings pass the spike gate, as they do in the module, so the
     input then says the wall is that much further away than it is. Off by default; its own
     generator.
+
+    A longer step needs the estimate's word (``long_step_check``, on as in the module): on
+    glass, a wet or mirror-like face or water the beam reads what is behind, too long and
+    reading after reading, and the rule above took that for a real step. So a step to a
+    longer distance is accepted only when the position estimate moved away from the wall by
+    about as much (within the gate) since the last accepted reading; until then the input is
+    unusable. A step to a shorter distance still passes on the sensor's word (it is the safe
+    side), the distance it replaced is kept so that a longer step back onto it passes, and
+    is forgotten after ``RANGE_STEADY_READINGS`` readings in a row at the new one
+    (``docs/wall-range.md`` "Readings that are too long"). An engage starts it afresh: the
+    first step after one passes either way.
+
+    ``latch_reference`` takes the input's reference the way the module does: the hold
+    point's wall distance as the first accepted reading after an engage measures it (the
+    second that agrees, so a stray return is not latched), on the estimate. Off, the
+    default and what v23 to v25 trained on, the reference is the hold point's true distance.
+    The two differ when the beam is not on the wall at the engage (glass): the module
+    latches what it read.
     """
 
     present_prob: float = 0.0
@@ -307,6 +325,8 @@ class RangeSensor:
     glass_extra_m: tuple[float, float] = (0.5, 3.0)
     glass_frac: tuple[float, float] = (0.2, 0.8)
     glass_dwell_s: float = 0.5
+    long_step_check: bool = True  # False is the gate as it was before 2026-11-26
+    latch_reference: bool = False
 
     def __post_init__(self) -> None:
         for name in ("scale_error", "dropout_s", "glass_extra_m", "glass_frac"):
@@ -329,6 +349,8 @@ class RangeSensor:
             raise ValueError("range dropout_s must be positive")
         if self.spike_gate_m < 0:
             raise ValueError("range spike_gate_m must be >= 0")
+        if self.latch_reference and self.spike_gate_m <= 0:
+            raise ValueError("range latch_reference needs the spike gate (spike_gate_m > 0)")
         if not 0 < self.max_off_axis_deg < 90:
             raise ValueError("range max_off_axis_deg must be in (0, 90)")
 

@@ -204,3 +204,19 @@ def test_pass_block_is_checked_against_the_module_limits():
             Scenario.from_dict({"name": "x", "pass": {"length_m": 5.0, **bad}})
     with pytest.raises(TypeError):
         Scenario.from_dict({"name": "x", "pass": {"lenght_m": 5.0}})
+
+
+@pytest.mark.parametrize("name, up", [("wall1m_draught_up_4ms", 2.0),
+                                      ("wall1m_draught_down_4ms", -2.0)])
+def test_draught_scenarios_are_the_4ms_hold_with_a_vertical_wind(name, up):
+    # docs/environment-factors.md: the same draws as wall1m_wind_4ms, plus the vertical wind,
+    # which sample_params draws last so the horizontal wind, gusts and turbulence stay put.
+    sc, base = load_scenario(name), load_scenario("wall1m_wind_4ms")
+    assert replace(sc, name=base.name, disturbance=base.disturbance) == base
+    p, q = sample_scenario(sc), sample_scenario(base)
+    np.testing.assert_allclose(p.mean_wind[0], (4.0, 0.0, up), atol=1e-12)
+    for f in p.__dataclass_fields__:
+        if f != "mean_wind":
+            np.testing.assert_array_equal(np.asarray(getattr(p, f)), np.asarray(getattr(q, f)))
+    f_up = disturbance_force(p, 0.0, np.array([[sc.spawn.x, 0.0, 2.5]]), np.zeros((1, 3)))
+    assert np.sign(f_up[0, 2]) == np.sign(up)

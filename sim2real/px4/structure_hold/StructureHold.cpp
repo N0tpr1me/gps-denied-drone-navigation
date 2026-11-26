@@ -898,7 +898,8 @@ void StructureHold::applyWallGuard(const hrt_abstime now, const Vector3f &pos, c
 	const float body_x[3] = {r(0, 0), r(1, 0), r(2, 0)};
 	const bool shifted_before = _wall_guard.totalShift() > 0.f;
 	_wall_out = _wall_guard.apply(_range, now, pos_ned, normal, body_x, hold);
-	_range_ref.update(_wall_out, _range.timestamp_us);  // the wall-range input (WallGuard.hpp)
+	// the wall-range input (WallGuard.hpp); a longer step in range needs the estimate to have moved
+	_range_ref.update(_wall_out, _range.timestamp_us, pos_ned[0] * normal[0] + pos_ned[1] * normal[1]);
 
 	if (_wall_out.shift_m > 0.f) {
 		_setpoint.pos = Vector3f(hold);

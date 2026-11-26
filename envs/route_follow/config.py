@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from envs.ambient import AmbientConfig
 from envs.disturbance import DisturbanceConfig
 from envs.estimate import EstimateCorruptionConfig
 from envs.estimate.ekf import FusionConfig
@@ -251,6 +252,10 @@ class RouteFollowConfig:
     disturbance: DisturbanceConfig = field(default_factory=tunnel_air)
     estimate: EstimateCorruptionConfig = field(default_factory=tunnel_estimate)
     fusion: FusionConfig = field(default_factory=FusionConfig)
+    # The air, the battery, rain and the rotors near the walls (envs/ambient, off by
+    # default): in a tunnel the nearest surface is a wall, the floor or the roof, so the
+    # ground, ceiling and wall terms act on whichever is nearest (env.py, _ambient_force).
+    ambient: AmbientConfig = field(default_factory=AmbientConfig)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rate_lag_s", _pair(self.rate_lag_s, "rate_lag_s"))
@@ -289,6 +294,7 @@ class RouteFollowConfig:
             "rate_pid": RatePidGains.from_dict,
             "actuation": Actuation.from_dict,
             "fusion": FusionConfig.from_dict,
+            "ambient": AmbientConfig.from_dict,
         }
         for key, build in nested.items():
             if key in d:
