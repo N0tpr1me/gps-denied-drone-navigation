@@ -2,12 +2,22 @@
 
 Item 4 of the GPU server plan for client needs: does one policy hold on drones of very
 different sizes, after an airframe fit (`docs/airframe-fit.md`) and the drone's own PX4
-autotune, without a retrain? In the mock, the released policy v22 already does on a 300 g
-quad and on the x500 with up to a 35 % payload: 42 to 60 % tighter than the cascaded PD with
-no crashes (cloud CPU, 2026-11-09). It breaks at a 40 % payload, where the x500's hover sits
-at the module's 0.9 thrust clamp. A 25 % payload hover flown in Gazebo in the cloud confirmed
-the payload model (thrust 0.835 against 0.836 predicted). The GPU server trains v27 on a wide airframe spread and
-flies the payloads in Gazebo against tuned PX4 (`training/queues/airframe_sizes.yaml`).
+autotune, without a retrain? In the mock (cloud CPU, 2026-11-10, against the cascaded PD) the
+released v22 and v24 hold a 300 g quad, the x500 with up to a 35 % payload, a 3 kg quad up to
+its 6.3 kg take-off limit and a 16 kg heavy lifter up to 35 kg, with next to no crashes.
+Weight is not what limits it. Two things are:
+
+- **Thrust headroom.** The module clamps thrust at 0.9 normalised, so the drone must hover at
+  or below 0.88 (thrust/weight 1.25 or more). The x500 breaks at a 40 % payload.
+- **How fast the drone answers.** v22 holds while the rotors answer within about 40 ms (a
+  roll-rate step reaching 63 % in 0.12 s), v24 to about 60 ms (0.17 s). At 120 ms (0.31 s),
+  which is what a 16 kg drone on 33 inch props is assumed to have here, nothing holds, the
+  PD included. That drone needs a policy trained on slow rotors: v27 heavy, below.
+
+A 25 % payload hover flown in Gazebo in the cloud confirmed the payload model (thrust 0.835
+against 0.836 predicted). The GPU server trains v27 on a wide airframe spread and v27 heavy on
+slow rotors, and the payloads fly in Gazebo against tuned PX4
+(`training/queues/airframe_sizes.yaml`).
 
 ## The airframes
 
@@ -22,6 +32,10 @@ differs.
 | x500 + 35 % payload | 2.79 kg | 1.25 | 0.88 | same gains | 19 ms | 0.74 | mass x1.35, inertia +10 %, hover estimate -9 % |
 | x500 + 50 % payload | 3.10 kg | 1.13 | 0.93 | same gains | 19 ms | 0.67 | mass x1.5, inertia +15 %, hover estimate -14 % |
 | `small_300g` | 0.285 kg | 2.60 | 0.55 | the x500's loop gain | 12 ms | 1.58 | ModalAI Starling 2 datasheet and forum (below); the rest scaled |
+| `mid_3kg` | 3.0 kg | 3.00 | 0.50 | x500's loop gain x 0.5 | 38 ms | 1.20 | Holybro X650 kit page (below); the rest scaled |
+| `mid_3kg` at 6.3 kg | 6.3 kg | 1.43 | 0.81 | same gains | 38 ms | 0.57 | mass x2.1, max thrust unchanged, inertia +30 %, hover estimate -1 % |
+| `heavy_16kg` | 16.0 kg | 4.29 | 0.39 | x500's loop gain x 0.16 | 120 ms (assumed) | 1.07 | Freefly Alta X specs and performance pages (below); the rest scaled |
+| Alta X at 35.5 kg | 35.5 kg | 1.93 | 0.67 | same gains | as scored | 0.48 | mass x2.22, max thrust unchanged, inertia +30 % |
 
 **The 300 g class.** ModalAI's Starling 2 (the VOXL 2 Mini size, a common inspection
 development drone) is published at 285 g take-off weight, 230 mm motor to motor and 120 mm
@@ -32,6 +46,33 @@ rest is an assumption, stated in `airframes.py`: inertia scaled from the x500 by
 length squared, rotor lag 8 ms up and 16 ms down, the tracking camera 0.02 m from the IMU,
 and drag scaled by frontal area (motor-to-motor diagonal squared), which leaves the wind
 pushing 1.6 times as hard per kilogram as on the x500.
+
+**The 3 kg class.** Holybro's X650 development kit (a common PX4 development frame) is
+published at 650 mm wheelbase, 15 inch props on MN4014 KV330 motors, 2.0 kg without a
+battery, a 6S battery of 0.75 to 1.2 kg, and a take-off limit of 6.3 kg "at 70 % throttle"
+([X650 overview](https://docs.holybro.com/drone-development-kit/x650-development-kit/overview)).
+The preset takes a 1.0 kg battery (3.0 kg) and reads the limit as 70 % of full thrust: 9.0 kg
+of thrust, thrust/weight 3.0. Assumed: rotor lag 25 ms up and 50 ms down, the camera 0.08 m
+below the IMU, inertia and drag scaled as for the 300 g class.
+
+**The 16 kg class.** No 16 kg drone with a full public spec sheet was found, so the preset is
+the Freefly Alta X's airframe at 16 kg: 1415 mm unfolded diameter without props, 840 mm (33
+inch) props
+([technical specs](https://docs.freeflysystems.com/products/products/alta-x/untitled-3/technical-specs)),
+thrust/weight 3.5 at its 19.63 kg no-payload weight
+([performance specs](https://docs.freeflysystems.com/products/products/alta-x/untitled-3/performance-specs)),
+which makes 68.7 kg of thrust and thrust/weight 4.3 at 16 kg. The Alta X itself weighs
+10.86 kg empty, 19.63 kg with its standard battery pair and up to 35.5 kg loaded
+(thrust/weight 1.9); the 35.5 kg cell scores that. Freefly publishes no rotor lag. The preset
+assumes 80 ms up and 160 ms down for the 33 inch props, and since the hold turns on that
+number the 16 kg drone is scored at 40, 60 and 120 ms.
+
+**Slow rotors slow the rate loop.** A rate loop cannot outrun its motors, and PX4's autotune
+fits the lag it identifies. So where the rotor lag is above the x500's 19 ms, each axis's loop
+gain is the x500's times 19 ms over the lag. A roll-rate step reaches 63 % in 0.06 s on the
+x500 and the 300 g class, 0.11 s on the 3 kg class, and 0.12, 0.17 and 0.31 s on the 16 kg
+drone at 40, 60 and 120 ms (`test_slow_rotors_slow_the_rate_loop_in_proportion`).
+`airframe_rand.rate_loop_follows_lag` applies the same rule to a rotor lag drawn per episode.
 
 **Why the rate loop keeps the x500's gain.** The module sends body rates to the drone's own
 PX4 rate controller, and a partner tunes that with PX4's autotune, which aims at the same
@@ -86,15 +127,22 @@ What it says:
   (thrust/weight 1.25 or more)**. That is a property of the 0.9 clamp, not of the policy;
   lifting the clamp is a module change with its own safety review, not part of this work.
 
-## v27: the wide-spread candidate
+## v27 and v27 heavy: the training candidates
 
 `training/configs/structure_hold_ppo_v27_airframes.yaml` continues v22 (same 21 inputs, same
 reward and estimate, so the module header could take it unchanged) on a much wider spread:
-thrust/weight x0.75 to x1.6 (1.27 to 2.7), mass x0.7 to x1.6, inertia x0.6 to x1.6, rotor lag
+thrust/weight x0.75 to x1.8 (1.27 to 3.0), mass x0.7 to x1.6, inertia x0.6 to x1.6, rotor lag
 8 to 40 ms, drag x0.8 to x2.0 (wind push per kilogram 0.5 to 2.9 times the x500's), hover
-thrust error up to 20 %. It goes on only if it beats v22 on the 300 g and payload cells
-without losing on the x500 (`eval/configs/gazebo_check_v27.yaml`, the usual release check);
-since v22 already holds them, the bar is a clear gain, not a pass.
+thrust error up to 20 %. That covers the 300 g and 3 kg classes and the payloads. Since v22
+already holds them, its bar is a clear gain there without losing on the x500
+(`eval/configs/gazebo_check_v27.yaml`, the usual release check), not a pass.
+
+`training/configs/structure_hold_ppo_v27_heavy.yaml` is the same recipe with slow rotors: lag
+8 to 150 ms, each episode's rate loop as slow as a tune on those rotors would be
+(`rate_loop_follows_lag`), thrust/weight up to x2.6 (4.4). It is the candidate for the 16 kg
+drone at a 60 to 120 ms lag, where v22 and v24 lose it. Its bar: hold those two cells with
+under 1 % crashes. Its release check tells what the slow rotors cost the x500; if they cost
+too much, a heavy lifter gets its own policy rather than the shared one.
 
 ## Payloads in Gazebo
 
@@ -105,6 +153,11 @@ the model keeps its name. PX4's hover thrust estimator learns the new hover in f
 a real drone. `wall1m_calm_0ms_payload{25,35,50}` and `wall1m_wind_8ms_payload{25,35,50}` are
 the benchmark scenarios with 0.52, 0.72 and 1.03 kg.
 
+The 300 g, 3 kg and 16 kg drones have no Gazebo model: the SITL image flies PX4's x500
+(airframe 4001) only. Each needs its own model, PX4 airframe file and tuned-PX4 baseline
+(an autotune in simulation) before a benchmark flight means anything; that is a job of its
+own, not started.
+
 ## The server queue
 
 `training/queues/airframe_sizes.yaml`, after `server_week1`'s setup, two GPUs at most, every
@@ -113,19 +166,30 @@ job under 1 h, nothing that needs Zain's yes:
 | Job | Lane | Hours | What |
 | --- | --- | --- | --- |
 | `v27_s0`, `v27_s1` | GPU 0, 1 | 0.9 each | train v27, two seeds |
-| `sizes_score` | GPU | 0.6 | `airframe_sizes.yaml` with v22, both v27 seeds and the PD |
-| `sizes_check_s0`, `_s1` | GPU 0, 1 | 0.75 each | the x500 release check, each v27 against v22 |
+| `v27h_s0`, `v27h_s1` | GPU 0, 1 | 0.9 each | train v27 heavy, two seeds |
+| `sizes_score` | GPU | 0.9 | `airframe_sizes.yaml`: v22, v24, the four candidates and the PD on the x500, its payloads and the 300 g class |
+| `sizes_score_big` | GPU | 0.75 | `airframe_sizes_big.yaml`: the same on the 3 kg and 16 kg drones |
+| `sizes_check_s0`, `_s1`, `_h0`, `_h1` | GPU 0, 1 | 0.75 each | the x500 release check, each candidate against v22 |
 | `gz_payload_image` | CPU | 0.2 | rebuild the SITL image with `add_payload.py` |
 | `gz_payload_tuned`, `gz_payload_v22` | CPU | 0.5 each | 48 flights each: tuned PX4 and v22 with the three payloads, calm and 8 m/s, 8 seeds |
 | `gz_payload_v27` | CPU | 0.6 | off: only if a v27 passes both checks |
 
-About 2.2 h of wall clock and 3.9 GPU-hours. The Gazebo rows compare against the same
-scenarios without a payload (`server_week1`'s `gz_tuned_baseline` and `gz_v22_baseline`).
+About 4.2 h of wall clock on two GPUs and 8.2 GPU-hours (about 8 h on one). The Gazebo rows
+compare against the same scenarios without a payload (`server_week1`'s `gz_tuned_baseline`
+and `gz_v22_baseline`); Gazebo batches fly in the cloud, not on the server (`docs/gpu-server.md`).
 
 ## Limits
 
-- The 300 g class is a model built from published figures and scaling, not a fit; a
-  partner's drone replaces it with `eval/fit_airframe.py` on its own autotune log.
+- The 300 g, 3 kg and 16 kg classes are models built from published figures and scaling, not
+  fits; a partner's drone replaces them with `eval/fit_airframe.py` on its own autotune log.
+- The rotor lag of the 3 kg and 16 kg drones is assumed, and the rule that slows the rate
+  loop with it is a rule of thumb, not an autotune. The 16 kg result hangs on both: a real
+  heavy lifter's own autotune log settles which of the three scored cells it is.
+- The cascaded PD keeps its x500 hand gains on every airframe, so on slow rotors it is a
+  loose yardstick. The 120 ms drone can be held: the same PD with gains about half as stiff
+  (position 1.0, velocity 1.6, tilt 1.5) held it at 0.49 m p95 with no crash in a quick
+  64-episode look (not a logged run). The released policies are simply too quick for it.
 - The mock carries a payload as mass, max thrust and a little inertia; it ignores the shift
   of the centre of mass and the extra drag of a hanging load. Gazebo carries the first.
-- Nothing here has flown a real drone, and no Gazebo model of the 300 g class exists.
+- The 16 kg drone is 2.3 m across its props and holds at 2 to 3 m; the others at 1 to 2 m.
+- Nothing here has flown a real drone, and only the x500 has a Gazebo model.

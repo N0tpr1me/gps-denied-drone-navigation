@@ -184,6 +184,6 @@ def test_policies_by_name_join_the_controllers(tmp_path):
     assert out.returncode == 0, out.stdout + out.stderr
     (run_dir,) = [p for p in tmp_path.iterdir() if p.is_dir()]
     report = json.loads((run_dir / "report.json").read_text())
-    assert [c["name"] for c in report["controllers"]] == ["v22", "v19", "pd"]
+    assert [c["name"] for c in report["controllers"]] == ["v22", "v24", "v19", "pd"]
     cells = {c["name"]: c for c in report["cells"]}
     assert {"x500", "x500_payload50", "small_300g"} <= set(cells)

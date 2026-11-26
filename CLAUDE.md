@@ -74,7 +74,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | `envs/ambient/` | The air and the power (NumPy only; `ambient:` in an env config, off by default): air density from temperature, altitude and humidity, battery level and sag, rain, ground, ceiling and wall effect on the rotors, wind on the barometer's port. The list of every environmental factor, where each one lives and what is still missing is `docs/environment-factors.md` |
 | `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning), the EKF2-like fusion (`ekf.py`; barometer pressure steps, `baro_step_*`), poor seeing per episode (`degrade_*`: flicker, glare, blank or wet walls, smoke; severities assumed) and the heading error a compass near steel puts in the attitude (`heading.py`, `heading_error:` in an env config, off by default; `docs/heading-error.md`) |
 | `envs/sims/` | Simulator backends behind one seam (thrust, body torque, external force in; `QuadState` out), PX4-shaped rate PID |
-| `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`, `small_300g` the 300 g class; `docs/airframe-sizes.md`), PD yardstick, fallback, surface passes (`passes.py`: the hold point moving 5 m along or up the wall, `surface_pass`, off by default; `docs/surface-passes.md`) |
+| `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`, and other sizes built from published specs: `small_300g`, `mid_3kg`, `heavy_16kg`; `docs/airframe-sizes.md`), PD yardstick, fallback, surface passes (`passes.py`: the hold point moving 5 m along or up the wall, `surface_pass`, off by default; `docs/surface-passes.md`) |
 | `envs/route_follow/` | Route Follow (second capability): random corridor and tunnel routes, plus arched drifts, narrowed stretches and side branches (`routes.py`), walls, target and rangefinder beams on tensors (`geometry.py`), the env, the PD yardsticks (estimate only, and with range centring) |
 | `envs/frames.py` | The only place ENU/FLU <-> NED/FRD conversions live; also latitude, longitude and altitude to ENU metres (`geodetic_to_enu`, WGS84) |
 | `training/` | `launch.py` (`--gpu N` pins a card, `--set params.KEY=VALUE` overrides one value; a numeric path segment steps into a list, `params.controllers.1.policy`), `queue.py` (runs a `queues/*.yaml` job list, `server_week1.yaml` first, then `server_week2.yaml`, `heading_error.yaml`, `route_gazebo.yaml`, `baro_successor.yaml`: every free GPU busy, SITL batches on the other cores, chains of sub-1 h parts; `docs/gpu-server-plan.md`), `isaac_parity.sh` (the Isaac Lab first hour as one command), `train_ppo.py`, `train_route_ppo.py` (Route Follow), `eval_policy.py`, configs, released `policies/` (README lists each version) |
@@ -274,6 +274,15 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   counted, not the policy; and the seed-repeatability retrains of v22's recipe, which
   trained on the barometer, came out 6 to 10 % tighter in the check, at the edge of seed
   luck. The successor worth a Gazebo re-fly is v24; the queue's v24 arm is switched off.
+- Other drone sizes (2026-11-10, `docs/airframe-sizes.md`, mock only, against the PD): v22
+  and v24 hold a 300 g, a 3 kg and a 16 kg drone and the x500 with up to a 35 % payload
+  without a retrain, because the module asks for thrust as a share of weight and for body
+  rates from the drone's own tuned rate loop. Two things limit it, neither of them weight:
+  thrust headroom (hover at or below 0.88 normalised, the module's 0.9 clamp) and how fast
+  the drone answers (rotor lag up to about 40 ms for v22, 60 ms for v24; at 120 ms, assumed
+  for a 16 kg drone on 33 inch props, nothing holds, the PD included). `v27` (wide airframe
+  spread) and `v27 heavy` (rotor lag to 150 ms, `airframe_rand.rate_loop_follows_lag`) are
+  server training recipes, not trained yet. No Gazebo model of the other sizes exists.
 - Next: finish fitting `envs/estimate` to real VIO error (`docs/vio-fit.md`: first fit on
   12 EuRoC flights done; an own OpenVINS/Basalt run on EuRoC, UZH-FPV and TUM-VI needs those
   hosts allowed in the cloud environment), the bench test on a partner's flight controller, Isaac Lab parity on the GPU
