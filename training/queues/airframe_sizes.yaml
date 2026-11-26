@@ -1,0 +1,150 @@
+# GPU plan item 4, bring your own drone (docs/airframe-sizes.md): train v27 on a wide airframe
+# spread and v27 heavy on slow rotors as well, score them, v22 and v24 on the x500, the x500
+# with a payload, a 300 g, a 3 kg and a 16 kg quad in the mock, and fly the payloads in Gazebo
+# against tuned PX4. Runs after server_week1's setup (the SITL
+# image and the env must exist); every job is under 1 h and uses at most one GPU, two GPUs
+# at once at most (--gpus 2).
+#
+#   python -m training.queue training/queues/airframe_sizes.yaml --dry-run --gpus 2
+#   python -m training.queue training/queues/airframe_sizes.yaml --smoke --device cpu
+#   # on the server, inside Docker (docs/gpu-server.md "Runs in Docker"); the gz_* jobs fly
+#   # in the cloud (Gazebo benchmarks run there, decided 2026-11-09), so the server runs the rest:
+#   training/docker/run.sh python -m training.queue training/queues/airframe_sizes.yaml \
+#       --max-gpus 2 --only \
+#       v27_s0,v27_s1,v27h_s0,v27h_s1,sizes_score,sizes_score_big,sizes_check_s0,sizes_check_s1,sizes_check_h0,sizes_check_h1
+name: airframe_sizes
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- GPU: train, two seeds
+  # PPO moves more between seeds than between recipes (server_week1 route_pipes), so the
+  # recipe runs twice, one card each, and the score picks.
+  - id: v27_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_airframes.yaml
+    hours: 0.9
+    why: "v22 continued on thrust/weight 1.27 to 3.0, mass x0.7 to 1.6, inertia x0.6 to 1.6, rotor lag 8 to 40 ms, drag x0.8 to 2"
+
+  - id: v27_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_airframes.yaml
+    set: {seed: 1}
+    hours: 0.9
+    why: "v27_s0, seed 1"
+
+  # The heavy lifter: the same recipe with rotors as slow as 150 ms and the rate loop slowed
+  # to match. v22 loses a 16 kg drone from a 60 ms rotor lag; this is the candidate for it.
+  - id: v27h_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_heavy.yaml
+    hours: 0.9
+    why: "v27 with rotor lag 8 to 150 ms, the rate loop following it, thrust/weight to 4.4: the 16 kg class"
+
+  - id: v27h_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_v27_heavy.yaml
+    set: {seed: 1}
+    hours: 0.9
+    why: "v27h_s0, seed 1"
+
+  # ---------------------------------------------------------------- GPU: the two size scores
+  - id: sizes_score
+    gpu: true
+    launch: eval/configs/airframe_sizes.yaml
+    set:
+      params.policies.v27_s0: "{run:v27_s0}/policy.onnx"
+      params.policies.v27_s1: "{run:v27_s1}/policy.onnx"
+      params.policies.v27h_s0: "{run:v27h_s0}/policy.onnx"
+      params.policies.v27h_s1: "{run:v27h_s1}/policy.onnx"
+    after: [v27_s0, v27_s1, v27h_s0, v27h_s1]
+    hours: 0.9
+    why: "v22, v24, the four candidates and the PD on the x500, its payloads and the 300 g class (8 cells); go: a v27 beats v22 on the 300 g and payload cells and loses no more than 0.02 m p95 on the x500"
+
+  - id: sizes_score_big
+    gpu: true
+    launch: eval/configs/airframe_sizes_big.yaml
+    set:
+      params.policies.v27_s0: "{run:v27_s0}/policy.onnx"
+      params.policies.v27_s1: "{run:v27_s1}/policy.onnx"
+      params.policies.v27h_s0: "{run:v27h_s0}/policy.onnx"
+      params.policies.v27h_s1: "{run:v27h_s1}/policy.onnx"
+    after: [v27_s0, v27_s1, v27h_s0, v27h_s1]
+    hours: 0.75
+    why: "the same seven controllers on the 3 kg and 16 kg drones (6 cells); go: a v27h holds the 16 kg drone at a 60 and a 120 ms rotor lag with under 1 % crashes, where v22 and v24 lose it"
+
+  # The x500 must not pay for the spread: the release check against v22, one seed per card.
+  - id: sizes_check_s0
+    gpu: true
+    launch: eval/configs/gazebo_check_v27.yaml
+    set: {params.candidates.v27_s0: "{run:v27_s0}/policy.onnx"}
+    after: [sizes_score, sizes_score_big]
+    hours: 0.75
+    why: "gazebo_check on the x500, v27_s0 against v22: a v27 goes to Gazebo only if it passes here and in sizes_score"
+
+  - id: sizes_check_s1
+    gpu: true
+    launch: eval/configs/gazebo_check_v27.yaml
+    set: {params.candidates.v27_s1: "{run:v27_s1}/policy.onnx"}
+    after: [sizes_score, sizes_score_big]
+    hours: 0.75
+    why: "gazebo_check on the x500, v27_s1 against v22"
+
+  - id: sizes_check_h0
+    gpu: true
+    launch: eval/configs/gazebo_check_v27.yaml
+    set: {params.candidates.v27h_s0: "{run:v27h_s0}/policy.onnx"}
+    after: [sizes_score, sizes_score_big]
+    hours: 0.75
+    why: "gazebo_check on the x500, v27h_s0 against v22: what the slow rotors cost the x500, if anything"
+
+  - id: sizes_check_h1
+    gpu: true
+    launch: eval/configs/gazebo_check_v27.yaml
+    set: {params.candidates.v27h_s1: "{run:v27h_s1}/policy.onnx"}
+    after: [sizes_score, sizes_score_big]
+    hours: 0.75
+    why: "gazebo_check on the x500, v27h_s1 against v22"
+
+  # ---------------------------------------------------------------- CPU: payloads in Gazebo
+  - id: gz_payload_image
+    cmd: sim2real/docker/run.sh build
+    smoke_cmd: bash -n sim2real/docker/entrypoint.sh && python3 sim2real/docker/add_payload.py --help > /dev/null
+    hours: 0.2
+    why: "rebuild the SITL image so it carries add_payload.py (cached up to the PX4 build, a few minutes)"
+
+  - id: gz_payload_tuned
+    cmd: >
+      python -m eval.baselines.run_baseline --label tuned_v2_payload --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_calm_0ms_payload25 wall1m_wind_8ms_payload25
+      wall1m_calm_0ms_payload35 wall1m_wind_8ms_payload35
+      wall1m_calm_0ms_payload50 wall1m_wind_8ms_payload50
+      -- --profile vio_at_hover
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_payload_image]
+    hours: 0.5
+    why: "tuned PX4 with 0.52, 0.72 and 1.03 kg under the x500, calm and 8 m/s, 48 flights (crashes allowed: that is the result)"
+
+  - id: gz_payload_v22
+    cmd: >
+      python -m eval.baselines.run_baseline --runner hold --label v22_payload --jobs auto
+      --params eval/baselines/px4_tuned_v2.params --seeds 1 2 3 4 5 6 7 8
+      --scenarios wall1m_calm_0ms_payload25 wall1m_wind_8ms_payload25
+      wall1m_calm_0ms_payload35 wall1m_wind_8ms_payload35
+      wall1m_calm_0ms_payload50 wall1m_wind_8ms_payload50
+      -- --profile vio_at_engage
+    smoke_cmd: python -m eval.baselines.run_baseline --help > /dev/null
+    after: [gz_payload_tuned]
+    hours: 0.5
+    why: "v22, same 48 flights, vs gz_payload_tuned and against its own no-payload rows (server_week1 gz_v22_baseline); +50 % is expected to sink at the module's 0.9 thrust clamp"
+
+  - id: gz_payload_v27
+    cmd: >
+      echo "fly the chosen v27 with the payloads: export its header, build an image, then
+      gz_payload_v22's command with --label v27_payload --image <its tag> (as server_week1 gz_v24_image / gz_v24_refly)"
+    smoke_cmd: "true"
+    after: [gz_payload_v22, sizes_check_s0, sizes_check_s1]
+    hours: 0.6
+    enabled: false
+    why: "only if a v27 passes sizes_score and its sizes_check"

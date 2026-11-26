@@ -2,8 +2,10 @@
 
 A scenario is one YAML file (``sim2real/gazebo/scenarios/*.yaml``) with the world, the spawn
 pose, the wall, an optional second surface (the deck over the drone in ``bridge_deck``;
-docs/bridge-holds.md), the ``envs.disturbance`` config, the seed, the hover to fly, and
-optionally a surface pass flown in it (``pass``; docs/surface-passes.md "In Gazebo"). The
+docs/bridge-holds.md), the ``envs.disturbance`` config, the seed, the hover to fly,
+optionally a surface pass flown in it (``pass``; docs/surface-passes.md "In Gazebo") and
+optionally a payload fixed under the x500 (``payload: {mass_kg, offset_down_m}``; the SITL
+image adds it to the model before PX4 spawns it, ``sim2real/docker/add_payload.py``). The
 world defaults to ``wall_slab``, so every scenario written before the others flies where it
 did. ``sample_scenario``
 draws the episode's disturbance exactly as ``envs/structure_hold`` does (same
@@ -48,6 +50,19 @@ class Spawn:
 class Hover:
     altitude: float = 2.5  # m above the spawn point
     hover_s: float = 30.0
+
+
+@dataclass(frozen=True)
+class Payload:
+    """A rigid payload fixed under the vehicle's base_link: a 0.10 x 0.10 x 0.05 m box of
+    ``mass_kg`` whose centre sits ``offset_down_m`` below it. Mass 0 means none."""
+
+    mass_kg: float = 0.0
+    offset_down_m: float = 0.05
+
+    def __post_init__(self) -> None:
+        if self.mass_kg < 0 or self.offset_down_m < 0:
+            raise ValueError("payload mass_kg and offset_down_m must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -107,6 +122,7 @@ class Scenario:
     surface2_across: tuple[float, float, float] | None = None
     # A surface pass flown in the hover (the YAML key is ``pass``); None: a plain hold.
     surface_pass: SurfacePass | None = None
+    payload: Payload = field(default_factory=Payload)
 
     @property
     def wall_clearance(self) -> float:
@@ -119,7 +135,7 @@ class Scenario:
         d = dict(d)
         known = {
             "name", "seed", "spawn", "wall", "disturbance", "wind_heading_deg", "hover",
-            "world", "surface2", "pass",
+            "world", "surface2", "pass", "payload",
         }
         unknown = set(d) - known
         if unknown:
@@ -163,6 +179,7 @@ class Scenario:
             surface2_normal_toward=s2_normal,
             surface2_across=s2_across,
             surface_pass=SurfacePass(**d["pass"]) if d.get("pass") else None,
+            payload=Payload(**(d.get("payload") or {})),
         )
 
 
@@ -202,3 +219,12 @@ def sample_scenario(sc: Scenario) -> DisturbanceParams:
                       surface2_across=sc.surface2_across)
     return sample_params(cfg, 1, sc.seed, wall_point=sc.wall_point, wall_normal=normal,
                          **second)
+
+
+def payload_environment(sc: Scenario) -> dict[str, str]:
+    """The SITL image's environment for the scenario's payload (``sim2real/docker/
+    entrypoint.sh`` hands it to ``add_payload.py``); empty without one."""
+    if sc.payload.mass_kg <= 0:
+        return {}
+    return {"STRUCTURE_HOLD_PAYLOAD_KG": repr(float(sc.payload.mass_kg)),
+            "STRUCTURE_HOLD_PAYLOAD_OFFSET_M": repr(float(sc.payload.offset_down_m))}

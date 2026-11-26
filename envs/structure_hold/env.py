@@ -97,7 +97,7 @@ from envs.sims.torch_quad import (
     quat_rotate,
     quat_rotate_inverse,
 )
-from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.config import RATE_LOOP_LAG_FLOOR_S, StructureHoldConfig
 from envs.structure_hold.passes import PassPaths
 
 OBS = {
@@ -675,6 +675,10 @@ class StructureHoldEnv:
             self.max_thrust_act[env_ids] = t(q.max_thrust * mass * tw)
             self.mass_scale[env_ids] = t(mass)
             self.inertia_scale[env_ids] = t(inertia)
+            if ar.rate_loop_follows_lag:
+                floor = RATE_LOOP_LAG_FLOOR_S
+                self.rate_pid.set_gain_scale(
+                    env_ids, max(q.motor_tau, floor) / np.maximum(tau, floor))
         wy = cfg.wall_yaw_torque
         if wy.active:
             peak = rng.uniform(*wy.peak_nm, size=n)
