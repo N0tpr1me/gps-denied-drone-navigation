@@ -175,6 +175,15 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   released: its Gazebo re-fly with `--rangefinder` (cloud, 2026-11-09) came out tighter than
   v22 (mean p95 0.18 against 0.20 m, -5 to -12 %, 18 to 38 % less toward the wall, 0
   crashes), and the release is Zain's decision.
+- Long range readings (2026-11-26, Proposed, `docs/wall-range.md` "Readings that are too
+  long"): glass, a wet or mirror-like face and water make the rangefinder read too far, and
+  v24 flew at the wall in the mock (59 % of episodes). `RangeReference` and the mock's gate
+  (`range.long_step_check`, on by default) now take a step to a longer distance only when
+  the position estimate moved away from the wall by as much; the wall guard's gate is
+  unchanged. Mock, reference latched at engage as the module does (`range.latch_reference`):
+  no glass episode touches the wall (112 of 768 without the check); a beam already through
+  the glass at the engage still makes v24 back away. Such faces stay outside the envelope
+  (safety manual F15, F54).
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.
