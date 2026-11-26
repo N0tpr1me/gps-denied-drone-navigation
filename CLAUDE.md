@@ -180,7 +180,10 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   v24 flew at the wall in the mock (59 % of episodes). `RangeReference` and the mock's gate
   (`range.long_step_check`, on by default) now take a step to a longer distance only when
   the position estimate moved away from the wall by as much; the wall guard's gate is
-  unchanged. Such faces stay outside the envelope (safety manual F15, F54).
+  unchanged. Mock, reference latched at engage as the module does (`range.latch_reference`):
+  no glass episode touches the wall (112 of 768 without the check); a beam already through
+  the glass at the engage still makes v24 back away. Such faces stay outside the envelope
+  (safety manual F15, F54).
 - Gate 1 (sim): passed on the x500 through the EKF2-like fusion, nominal and stress
   (dropout cell capped at 3 s; 3 to 5 s is a known estimator limit, the 5 s watchdog
   `SH_WD_EST_TO` takes over). Interviews, the other half of Gate 1, are still open.

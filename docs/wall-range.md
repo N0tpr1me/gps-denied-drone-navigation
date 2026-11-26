@@ -172,13 +172,29 @@ surface pass (a part that stands proud is a shorter step and is followed out and
 The policy then flies like v22, which is the price of not trusting a longer reading alone.
 
 **Mock** (`eval/configs/environment_factors.yaml`, the three seeds x 256 episodes of that
-doc's table, v24, mean p95 on true position and crashes; run `GLASSRUN`):
+doc's table, v24, mean p95 on true position and crashes; runs `20261126-151425` (with the check) and `-151445` (without), the reference
+latched from the reading at the engage as the module does, `range.latch_reference`):
 
-| Cell | Before the check | With the check | v22 (does not read the range) |
-| --- | --- | --- | --- |
-GLASSTABLE
+| Cell | 2026-11-10 (reference = true standoff, no check) | Latched, no check | Latched, with the check | v22 (does not read the range) |
+| --- | --- | --- | --- | --- |
+| nominal | 0.153 m, 0.1 % | 0.152 m, 0.0 % | 0.152 m, 0.0 % | 0.175 m, 0.0 % |
+| glass or water (0.5 to 3 m too far, 20 to 80 % of the time) | 0.816 m, 58.7 % | 1.167 m, 26.0 % (112 of 768 touched the wall) | 0.871 m, 2.9 % (none touched the wall) | 0.175 m, 0.0 % |
+| losing the wall (dropouts 0.5 Hz, 5 % stray returns) | 0.155 m, 0.1 % | | 0.154 m, 0.0 % | 0.175 m, 0.0 % |
+| rain 10 to 50 mm/h | 0.182 m, 0.1 % | | 0.180 m, 0.0 % | 0.212 m, 0.0 % |
+| a field day (everything at once, moderate, glass in 20 % of episodes) | 0.354 m, 11.2 % | | 0.378 m, 1.0 % | 0.270 m, 0.0 % |
 
-GLASSTEXT
+With the check v24 no longer flies at glass: no episode touched the wall, against 112 of 768
+without it. What is left is the other direction. In 21 of the 22 glass episodes counted as
+crashes the drone was more than 3 m from the hold point because it had backed away (one
+touched the ground); in the field day all 8 were that. These are the episodes where the
+beam was already through the glass at the engage: the reference is latched too far, the
+real wall then reads as too close, and the policy backs off by that much. That is also why
+v24's p95 on glass stays at 0.87 m and why it is looser than v22 on the field day. In the
+module the hold-error trip (`SH_WD_POS_ERR`, 2 m) hands back before 3 m (the mock has no watchdog). Without
+the latch, the mock's reference was the true standoff and this case did not show; the
+2026-11-10 column is that. Where nothing is glass the check changes nothing (nominal,
+losing the wall, rain). Near glass or water v22 is still the better policy, and the face
+stays outside the envelope.
 
 **Flown holds.** The 24 Gazebo holds v24's release rests on (calm, 4 and 8 m/s, seeds 1 to
 8, `docs/baseline.md`) were replayed from their logs through the gate before and after:
@@ -186,10 +202,10 @@ of 126,054 logged wall distances neither gate held one back, so the check would 
 changed a tick of those flights and the benchmark numbers stand. Gazebo's rangefinder has
 no long readings; the check has not flown.
 
-**Not covered.** A beam that is already through the glass at the engage: the reference is
-then latched too far, the real wall reads as too close when it shows, and the policy is
-expected to back away from the face by up to that much (not tested; the mock's reference is
-the true standoff, not the reading at engage). The wall guard, Structure Hover and
+**Not covered.** A beam already through the glass at the engage is in the mock now (the
+latched reference, above) but not in the module's own tests beyond `test_wall_guard.cpp`;
+nothing stops the latch from taking a long reading, so the hold backs away until the wall
+shows, by up to the extra distance. The wall guard, Structure Hover and
 Structure Land on the same sensor (F15). Both stay in the safety manual's do-not-use list:
 glass, wet or mirror-like faces and water are outside the envelope with or without the
 check. The glass numbers are assumed, not measured on a sensor.
