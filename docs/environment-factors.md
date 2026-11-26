@@ -33,7 +33,7 @@ the row says so. A partner's flight logs are what turn the guesses into numbers
 | Shelter close to the wall | Less wind near the surface | yes | yes | `wall_floor`, `wall_decay` |
 | Flow turned by the wall, the bubble in its lee, wake turbulence, vortex shedding | The air next to a facade is not the free wind | yes | yes | Off by default; `docs/near-wall-flow.md`, `*_flow` scenarios |
 | A deck overhead, a pier's wake | A second surface's shelter and the vortices off its edges | yes | yes | `docs/bridge-holds.md`, `bridge_deck` and `bridge_pier` worlds |
-| Up and down draughts (a shaft, a stairwell, ventilation, the updraught on a sunlit or windward face) | A steady vertical wind: the drone has to climb or sink through it, and it eats thrust headroom | **new** | partly | `disturbance.mean_vertical`. Gazebo's plugin takes a vertical mean wind already; no scenario flies one yet |
+| Up and down draughts (a shaft, a stairwell, ventilation, the updraught on a sunlit or windward face) | A steady vertical wind: the drone has to climb or sink through it, and it eats thrust headroom | **new** | partly | `disturbance.mean_vertical`, Structure Hold and Route Follow. Gazebo: the wind plugin takes the vertical mean wind as it is; `wall1m_draught_up_4ms` and `wall1m_draught_down_4ms` (the 4 m/s benchmark hold plus 2 m/s up or down) are ready, not flown yet |
 | Draught along a tunnel | Wind that follows the route | yes | yes | Route Follow only: `envs/route_follow` (`_draft_force`), the four Gazebo routes |
 | A passing vehicle or train | A gust and a pressure pulse | partly | partly | The gust is a gust; the pressure pulse is the barometer row below (mock only) |
 | Wind that changes along the surface (speed-up round a corner, a jet through a gap, wind rising with height) | The wind at one end of a pass is not the wind at the other | no | no | Every wind term depends on time and distance from the surface only. Matters for the 5 m passes more than for a hold. Needs a flow field, not a formula: parked |
@@ -244,9 +244,8 @@ What the table says, row group by row group:
    guard reads the same sensor so it does not catch it. Before v24 flies near any face the
    rangefinder may see through or bounce off, either the module refuses a range that steps
    by more than the gate while the position estimate did not move (v24 then flies like v22),
-   or a policy is trained with glass in the mix
-   (`training/configs/structure_hold_ppo_v24_field.yaml`, below). Until one of them is
-   shown to work, v24's release notes and the safety manual need the stronger wording.
+   or a policy is trained with glass in the mix. Training was tried and is not enough (59 %
+   to 47 %, below), so it has to be the module's check.
    Done 2026-11-26: the module and the mock take a longer range step only when the estimate
    moved by as much (`docs/wall-range.md` "Readings that are too long"); on glass v24 no
    longer touches the wall (2.9 % of episodes back off more than 3 m), and the safety
@@ -254,38 +253,98 @@ What the table says, row group by row group:
 2. **Height where the pressure moves.** In a tunnel with trains, a plant room, a building
    with doors and ventilation, the barometer is the weak sensor. The envelope already allows
    a downward rangefinder as the height reference (`EKF2_HGT_REF` 2); this result is the
-   reason to prefer it there. The mock does not model that height source yet, so the gain is
-   not measured.
-3. **Training.** Gyro bias, vibration, poor seeing and glass are things training can teach.
-   Air, battery, draughts and rotor effects are not worth training time on this airframe.
+   reason to prefer it there. In tunnels it is not about tightness but crashes (Route
+   Follow, below). The mock does not model that height source yet, so the gain is not
+   measured.
+3. **Training.** Air, battery, draughts and rotor effects are not worth training time on
+   this airframe. One try with everything on (below) taught a drifting IMU and not glass.
 
 ## The field-conditions candidate
 
 `training/configs/structure_hold_ppo_v24_field.yaml` continues v24 with every new factor on
 at moderate strength (glass on one rangefinder in five, poor seeing in half the episodes, a
-drifting IMU, pressure steps, draughts, air and battery inside what the x500 can hover).
-Its first seed is training in the cloud as this page is written; the result goes here.
+drifting IMU, pressure steps, draughts, air and battery inside what the x500 can hover). One
+seed trained in the cloud (run `20261110-125032`, 1000 iterations, iteration 400 selected)
+and was scored on the same 768 episodes a row as above (runs `20261126-150639`, `-150658`,
+`-150718`). Mock, against v24 and the PD:
+
+| Factor | v24 p95 (m) | v24 crash | field_s0 p95 (m) | field_s0 crash |
+| --- | --- | --- | --- | --- |
+| nominal | 0.153 | 0.1% | 0.154 | 0.0% |
+| IMU drift | 0.185 (+21%) | 0.1% | 0.167 (+9%) | 0.0% |
+| vibration | 0.209 (+37%) | 0.1% | 0.200 (+30%) | 0.0% |
+| poor seeing | 0.180 (+18%) | 0.1% | 0.190 (+24%) | 0.0% |
+| bad seeing | 0.301 (+96%) | 0.0% | 0.319 (+107%) | 0.0% |
+| rangefinder on glass or water | 0.816 (+433%) | 58.7% | 0.800 (+421%) | 47.3% |
+| a field day | 0.354 (+132%) | 11.2% | 0.353 (+130%) | 7.9% |
+
+Every other row is within 5 % of v24's (air, battery, rain, draughts, rotors, deck, the
+barometer rows). What it shows:
+
+- **Training does not fix glass.** One rangefinder in five on glass during training took
+  the crash rate from 59 % to 47 %, nowhere near safe. From the policy's seat a beam that
+  reads long through glass looks the same as a position estimate that has drifted, which is
+  exactly what the range input is there to correct; only a check across the two sensors (the
+  range stepped, the estimate did not) can tell them apart. That check belongs in the module
+  and the mock's range input (`RangeReference`), and it is still not built.
+- **A drifting IMU is teachable**: the gyro-bias cost halves (21 % to 9 %), vibration a little.
+- Nothing else moved, and poor seeing got slightly worse. Not a release candidate; the
+  candidate's ONNX stays out of the repo.
+
+## Route Follow
+
+Since 2026-11-26 Route Follow takes the same `ambient:` block (`envs/route_follow/env.py`).
+In a tunnel the nearest surface can be a wall, the floor or the roof, so the floor's cushion,
+the roof's pull and the wall's pull act on whichever is nearest, split by which way it faces
+(the clearance's gradient), and the downwash coming back grows as it comes closer. The
+draught along the route, the pressure steps, the barometer's port, poor seeing and vertical
+draughts all work there through the shared estimate, fusion and wind models.
+
+`eval/configs/route_follow_environment.yaml` scores v2 (mock only, not released) and the two
+PD yardsticks on the corridor and tunnel mix with one factor on at a time (run
+`20261126-151136`, 256 routes a row, 30 s, rangefinders on 70 % of the beams, barometer
+height). Cross-track p95 and crash rate; mock against the PD yardsticks, not Gazebo:
+
+| Condition | v2 p95 (m) | v2 crash | PD p95 (m) | PD crash | PD centring p95 (m) | PD centring crash |
+| --- | --- | --- | --- | --- | --- | --- |
+| nominal | 0.21 | 0% | 0.32 | 4% | 0.32 | 4% |
+| hot and high | 0.22 | 0% | 0.32 | 5% | 0.32 | 3% |
+| low battery | 0.21 | 1% | 0.34 | 8% | 0.31 | 5% |
+| up and down draughts to 2 m/s | 0.22 | 0% | 0.34 | 4% | 0.32 | 3% |
+| pressure steps 0.2-1 m, one per 20 s | 0.47 | 13% | 0.60 | 29% | 0.47 | 19% |
+| the draft on the barometer's port | 0.22 | 1% | 0.33 | 6% | 0.32 | 3% |
+| rotors feeling the nearest surface | 0.21 | 1% | 0.32 | 8% | 0.34 | 5% |
+| narrow pipes (0.8-1.1 m radius) | 0.22 | 7% | 0.25 | 26% | 0.26 | 39% |
+| the same pipes, rotors feeling the walls | 0.23 | 12% | 0.26 | 28% | 0.26 | 41% |
+| poor seeing | 0.33 | 1% | 0.45 | 8% | 0.41 | 8% |
+| a field day | 0.32 | 1% | 0.45 | 9% | 0.41 | 9% |
+
+**Pressure steps are the one that bites in a tunnel**: v2 goes from no crashes to 13 %, the
+PD from 4 % to 29 %, every one of them a contact with the tunnel. Holding next to a wall, a
+height that steps 1 m costs tightness; in a tunnel 1 to 2 m from floor to roof it costs the
+drone. The PD
+that also centres on its rangefinders (up and down included) loses less (19 %), which is the
+same lesson as for Structure Hold: where the pressure moves, take the height from a
+rangefinder, not the barometer. In narrow pipes the rotor effects add about 5 points of
+crashes for v2 (7 % to 12 %, 256 routes each, so within about two standard errors) and next
+to nothing for the PDs. Air, battery and draughts do nothing measurable.
 
 ## Not done, and why
 
-- **Gazebo has none of the new factors.** The benchmark against tuned PX4 is flown in
-  Gazebo, so none of the numbers above is a benchmark number. The cheap ones to carry over
-  are the vertical draught (the wind plugin already takes it: a scenario file) and the
-  pressure steps and glass (the estimate bridge scripts sensors already). Air density,
-  battery and rotor effects need the motor model or the wind plugin extended. Worth doing
-  for whichever factors the table above shows the hold is sensitive to.
-- **Nothing was trained on them.** v22 and v24 never saw these conditions; the table is how
-  they cope untrained. A training config with the randomisation on is the next step for the
-  factors that hurt, and it is a server job.
-- **Route Follow** has the draught along the tunnel and the estimate faults, but not the
-  `ambient` block or the barometer steps. Tunnels are where pressure steps and recirculating
-  downwash are worst, so it should get them when Route Follow next moves.
+- **Gazebo has almost none of the new factors.** The benchmark against tuned PX4 is flown
+  in Gazebo, so none of the numbers above is a benchmark number. The vertical draught is
+  ready (two scenarios, not flown); the pressure steps and glass would go in the estimate
+  bridge, which scripts sensors already. Air density, battery and rotor effects need the
+  motor model or the wind plugin extended. Worth doing for the factors the tables show the
+  hold is sensitive to: pressure steps first, then glass once the module has its check.
+- **Training** on the factors was tried once (above): it helps a drifting IMU, not glass.
 - **Severities are assumed** for the poor-seeing rows, the rotor effects near a wall and
   rain. The tools to measure them exist: rendered flights through Basalt
   (`docs/vio-render.md`) for textures, glare and smoke; a partner's fan rig and flight logs
   for the wall effect.
 - **Still missing outright:** wind that varies along the surface, a moving structure,
-  icing, one bad motor. Each is a row above with the reason.
+  icing, one bad motor. Each is a row above with the reason. Route Follow has no IMU bias,
+  glass or vibration options (its env has no `sensor_noise` block).
 
 ## Running it
 
@@ -301,6 +360,12 @@ python -m training.launch --config eval/configs/environment_factors.yaml --devic
     --set "params.only=[vibration,seeing_poor,seeing_bad,range_glass,range_lost,field_day]"
 # one table from the three run folders
 python -m eval.environment_factors collect runs/<a> runs/<b> runs/<c> --out runs/factors.md
+```
+
+Route Follow, one run under an hour:
+
+```
+python -m training.launch --config eval/configs/route_follow_environment.yaml --device cpu
 ```
 
 To fly any config with a factor on, add its block to the env config, for example
