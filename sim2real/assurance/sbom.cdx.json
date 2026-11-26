@@ -7,7 +7,7 @@
       "type": "firmware",
       "bom-ref": "structure-hold",
       "name": "Structure Hold",
-      "version": "structure_hold_v22 on PX4 v1.17.0",
+      "version": "structure_hold_v24 on PX4 v1.17.0",
       "supplier": {
         "name": "Zain Ali"
       },
@@ -65,7 +65,7 @@
     {
       "type": "machine-learning-model",
       "bom-ref": "structure-hold-policy",
-      "name": "structure_hold_v22",
+      "name": "structure_hold_v24",
       "supplier": {
         "name": "Zain Ali"
       },
@@ -76,7 +76,7 @@
           }
         }
       ],
-      "description": "64x64 MLP weights compiled in as PolicyWeights.hpp, generated from training/policies/structure_hold_v22.onnx. Trained by us with PPO on our own simulator only; no third-party or pre-trained weights, no recorded data.",
+      "description": "64x64 MLP weights compiled in as PolicyWeights.hpp, generated from training/policies/structure_hold_v24.onnx. Trained by us with PPO on our own simulator only; no third-party or pre-trained weights, no recorded data.",
       "properties": [
         {
           "name": "dronenav:role",

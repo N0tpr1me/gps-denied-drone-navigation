@@ -218,10 +218,10 @@ against -47 %, stress 13/13) and a little without one (check ratio 0.95; Gate 1 
 0.195 against v22's 0.190 m, a tie). Its one miss was the check's lift rule: it sits about
 1.5 cm above the hold point where v22 sits 1.7 cm below; since 2026-11-03 lift is a soft
 rule (under 0.05 m passes, `docs/gazebo_check.md`), so it passes the check both ways on the
-recorded numbers. It is still not released: the module
-header stays v22's (`HAS_WALL_RANGE` false), and v24 needs a Gazebo re-fly with
-`--rangefinder` on the GPU server, beating v22 there, before it can be. To fly it, generate
-the header from it (`sim2real/px4/README.md`); the module then reads the range on its own.
+recorded numbers. At that point it was not released: the module header stayed v22's
+(`HAS_WALL_RANGE` false) until a Gazebo re-fly with `--rangefinder` beat v22 (it did, and
+v24 was released on 2026-11-10; the end of this section). The module reads the range on
+its own whenever its header is generated from a wall-range policy (`sim2real/px4/README.md`).
 The numbers above are on vision height, which `gz_x500_sitl` fused until 2026-11-03; the
 check now runs on barometer height (`docs/gazebo_check.md` "Policies judged"), where the
 server's `v24_check_range` job re-scores v24 against v22 before the Gazebo re-fly.
@@ -247,7 +247,21 @@ move toward the wall in all three scenarios, with no crash, so it meets the plan
 check. The size is smaller than the mock's ratio of 0.77: with the height offset out it is
 0.88 to 0.94 in p95, close to what two flights of the same seed can differ by; the gain
 toward the wall and the smoother commands are the clearer part. v24 needs a forward
-rangefinder to be worth it (without one it ties v22 in the mock). **Not released: that is
-Zain's decision, asked 2026-11-09.** If he says yes, the release steps are the ones in
-CLAUDE.md ("Releasing a policy"): both module headers, the parts list,
-`training/policies/README.md`, the decision row, then the evaluation kit re-flown with it.
+rangefinder to be worth it (without one it ties v22 in the mock).
+
+**Released.** Zain chose "Release v24" on a decision card on 2026-11-10 (decision row
+2026-11-10). The module took it on 2026-11-26, after the long-step check for glass and water
+(above, "Readings that are too long"), which the release waited for. v24 is the released
+policy for a drone with a forward rangefinder: the module's `PolicyWeights.hpp` and the test
+vectors are generated from it and the parts list names it; the evaluation kit is flown again
+with it next (`docs/eval-kit.md`). v22 stays in `training/policies/` as the fallback for a
+drone without a forward rangefinder: export the header from `structure_hold_v22.onnx` for
+that build (`sim2real/px4/README.md`). What is known and accepted with the release is in the
+decision row: the p95 gain over v22 is small (5 to 12 %, scored like for like), the gain
+toward the wall (18 to 38 % less) and the smoother commands are the clear part, and seed 6
+is v24's loosest seed. Surface passes:
+v24 was scored on them in the mock on 2026-11-26 (`eval/configs/gate1_x500_ekf_pass.yaml`,
+rangefinder on, reference latched at the engage, held-out seeds 9001 to 9003, run
+`20261126-200259`): PASS 7/7 against the PD, pooled p95 0.15 against 0.38 m, crash 0.0 %
+against 3.7 %, and 12 to 21 % tighter than v22 in every cell (0.13 to 0.18 m against 0.16
+to 0.21 m). It has not flown a pass in Gazebo.
