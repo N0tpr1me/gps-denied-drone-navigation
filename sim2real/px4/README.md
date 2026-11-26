@@ -300,7 +300,10 @@ range after an engage (the vehicle's own distance, since the hold point is where
 and moves it back with each wall-guard shift; the input is that reference minus
 `range × cos(body x, normal)`, positive toward the wall, clipped at `RANGE_OBS_CLIP_M`, and
 zero with the flag off whenever the guard has no usable sample. The guard does not need to
-be on (`SH_WALL_MIN 0` still measures). See `docs/wall-range.md`.
+be on (`SH_WALL_MIN 0` still measures). A step to a longer distance counts only when the
+position estimate moved away from the wall by as much (since 2026-11-26: glass, wet faces
+and water read too far, and the policy would fly at the wall to close the gap). See
+`docs/wall-range.md`.
 
 `RATE_HZ` in the generated header is the tick the policy trained at (v9, v10, v19 and v22: 83 Hz, the
 12 ms tick the module's 10 ms `CONTROL_INTERVAL` gives on Gazebo's 4 ms gyro). It is
