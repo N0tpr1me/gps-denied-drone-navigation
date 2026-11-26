@@ -93,39 +93,63 @@ share of weight. A policy trained on the x500 flies the others through that mapp
 (`eval.gate1.ModuleThrustScale`), capped as the module caps it: at most the x500's 1.69
 times weight, and never above a normalised 0.9.
 
-## v22 in the mock (cloud CPU, 2026-11-09)
+## v22 and v24 in the mock (cloud CPU)
 
-`eval/configs/airframe_sizes.yaml`: v22 against the cascaded PD on the same episodes, 3 seeds
-x 512 episodes per cell, wind 0 to 8 m/s drawn per episode (Gate 1's gust schedule and
-estimate), hold 1 to 2 m. Runs `20261109-160318_airframe_sizes_s7101_e3e006e` and
-`20261109-164704_airframe_sizes_s7101_aeae6b1` (the payload cells with the hover estimate's
-cap; an earlier run without the cap, `20261109-161617`, gave the same edge; `experiments/LOG.md`).
-p95 is the 95th-percentile hold error on the true position.
+Both configs score v22 and v24 against the cascaded PD on the same episodes, 3 seeds x 512
+episodes per cell, wind 0 to 8 m/s drawn per episode (Gate 1's gust schedule and estimate),
+the forward rangefinder on (v24 reads it), hold 1 to 2 m (2 to 3 m on the 16 kg drone). p95 is
+the 95th-percentile hold error on the true position; the verdict is judged on v22, the
+released policy when the configs were written.
 
-| Cell | v22 p95 | PD p95 | v22 vs PD | v22 crash | PD crash |
-| --- | --- | --- | --- | --- | --- |
-| x500 | 0.180 m | 0.320 m | -44 % | 0.0 % | 1.1 % |
-| x500 + 25 % payload | 0.177 m | 0.352 m | -50 % | 0.0 % | 1.1 % |
-| x500 + 35 % payload | 0.187 m | 0.461 m | -60 % | 0.0 % | 1.1 % |
-| x500 + 40 % payload | 0.662 m | 0.854 m | -23 % | 5.8 % | 2.8 % |
-| x500 + 50 % payload | 1.56 m | 1.54 m | (both sink) | 100 % | 100 % |
-| 300 g class | 0.218 m | 0.379 m | -42 % | 0.0 % | 0.7 % |
-| 300 g class, 8 m/s | 0.259 m | 0.481 m | -46 % | 0.0 % | 0.8 % |
-| 300 g class, hover thrust error +/-15 % | 0.223 m | 0.470 m | -53 % | 0.0 % | 0.7 % |
+**The x500, payloads and the 300 g class** (`eval/configs/airframe_sizes.yaml`, run
+`20261126-200150_airframe_sizes_s7101_552295e`; v22's numbers match the 2026-11-09 runs
+`20261109-160318` and `20261109-164704` to the millimetre):
+
+| Cell | v22 p95 | v24 p95 | PD p95 | v22 vs PD | v24 vs PD | Crash v22 / v24 / PD |
+| --- | --- | --- | --- | --- | --- | --- |
+| x500 | 0.180 m | 0.155 m | 0.320 m | -44 % | -52 % | 0.0 / 0.0 / 1.1 % |
+| x500 + 25 % payload | 0.177 m | 0.154 m | 0.352 m | -50 % | -56 % | 0.0 / 0.0 / 1.1 % |
+| x500 + 35 % payload | 0.187 m | 0.160 m | 0.461 m | -60 % | -65 % | 0.0 / 0.0 / 1.1 % |
+| x500 + 40 % payload | 0.662 m | 0.543 m | 0.854 m | -23 % | -36 % | 5.8 / 4.5 / 2.8 % |
+| x500 + 50 % payload | 1.58 m | 1.56 m | 1.57 m | (all sink) | (all sink) | 100 / 100 / 100 % |
+| 300 g class | 0.218 m | 0.188 m | 0.379 m | -42 % | -50 % | 0.0 / 0.0 / 0.7 % |
+| 300 g class, 8 m/s | 0.259 m | 0.233 m | 0.481 m | -46 % | -52 % | 0.0 / 0.0 / 0.8 % |
+| 300 g class, hover thrust error +/-15 % | 0.223 m | 0.189 m | 0.470 m | -53 % | -60 % | 0.0 / 0.0 / 0.7 % |
+
+**The 3 kg and 16 kg classes** (`eval/configs/airframe_sizes_big.yaml`, run
+`20261110-123321_airframe_sizes_big_s7101_cd43264`):
+
+| Cell | v22 p95 | v24 p95 | PD p95 | v22 vs PD | v24 vs PD | Crash v22 / v24 / PD |
+| --- | --- | --- | --- | --- | --- | --- |
+| 3 kg class | 0.216 m | 0.192 m | 0.331 m | -35 % | -42 % | 0.0 / 0.0 / 2.0 % |
+| 3 kg class at its 6.3 kg limit | 0.220 m | 0.184 m | 0.306 m | -28 % | -40 % | 0.1 / 0.0 / 2.2 % |
+| 16 kg, rotor lag 40 ms | 0.264 m | 0.244 m | 0.363 m | -27 % | -33 % | 0.1 / 0.0 / 0.6 % |
+| Alta X at 35.5 kg, rotor lag 40 ms | 0.253 m | 0.227 m | 0.323 m | -22 % | -30 % | 0.1 / 0.3 / 0.6 % |
+| 16 kg, rotor lag 60 ms | 0.329 m | 0.263 m | 0.355 m | -7 % | -26 % | 3.0 / 0.3 / 0.6 % |
+| 16 kg, rotor lag 120 ms (the preset) | 1.69 m | 1.86 m | 1.52 m | (all crash) | (all crash) | 100 / 100 / 100 % |
 
 What it says:
 
-- **Size is not the problem.** v22 never trained on anything like a 300 g quad, and holds it
-  4 cm looser than the x500 (0.218 against 0.180 m), mostly from the harder wind per
-  kilogram (0.259 m at 8 m/s); the PD loses 6 cm there.
-- **Payload is limited by thrust headroom, not by the policy.** Up to 35 % v22's hold does
-  not move (0.18 to 0.19 m), while the low hover estimate costs the PD 3 to 14 cm. At 40 %
-  the x500's hover command (0.89) sits just under the module's 0.9 clamp, so there is no
-  thrust left to climb out of a gust: both sag and crash more (v22 5.8 %). At 50 % the hover
-  needs 0.93: neither can hover and both sink. The Gazebo x500 has a low thrust/weight (1.69); a real X500 V2 or a partner's
-  drone has more. The rule for the datasheet: **hover thrust at or below 0.88 normalised
+- **Size is not the problem.** Neither policy trained on anything but the x500, and both hold
+  the 300 g quad, the 3 kg quad and the 16 kg drone with next to no crashes, 22 to 53 %
+  (v22) and 30 to 60 % (v24) tighter than the PD. Each is a few centimetres looser than on
+  the x500, mostly from the wind: harder per kilogram on the 300 g quad (0.259 m for v22 at
+  8 m/s), and on the bigger drones from the slower rate loop their slower rotors allow.
+- **Payload is limited by thrust headroom, not by the policy.** Up to 35 % the hold does not
+  move (v22 0.18 to 0.19 m, v24 0.15 to 0.16 m), while the low hover estimate costs the PD 3
+  to 14 cm. At 40 % the x500's hover command (0.89) sits just under the module's 0.9 clamp,
+  so there is no thrust left to climb out of a gust: all three sag and crash more. At 50 %
+  the hover needs 0.93 and nothing can hover. The 3 kg class at 6.3 kg hovers at 0.81 and
+  holds. The rule for the datasheet: **hover thrust at or below 0.88 normalised
   (thrust/weight 1.25 or more)**. That is a property of the 0.9 clamp, not of the policy;
   lifting the clamp is a module change with its own safety review, not part of this work.
+- **Slow rotors are the real limit.** The 16 kg drone holds as well as the 3 kg one when its
+  rotors answer within 40 ms, even loaded to the Alta X's 35.5 kg. At 60 ms v22 starts to
+  crash (3.0 %, more than the PD) while v24 still holds (0.3 %). At 120 ms nothing holds
+  with the rate loop slowed to match, the PD included; a softer PD would, so the drone itself
+  can be flown, but neither released policy can fly it. Whether a real 16 kg drone answers in
+  40 or in 120 ms is the open question: Freefly publishes no rotor lag, and one autotune log
+  (`docs/airframe-fit.md`) would measure it. v27 heavy is the training answer.
 
 ## v27 and v27 heavy: the training candidates
 
