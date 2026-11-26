@@ -1,0 +1,124 @@
+# Surface passes on v24 (docs/surface-passes.md): structure_hold_ppo_pass.yaml's recipe,
+# continued from v24 instead of v22. v24 is the release for drones with a forward rangefinder
+# (Decided 2026-11-10), the drones an inspection pass is flown with. pass_s0, the same recipe
+# on v22, held 21 to 23 % tighter than v22 in the release check on three seeds and 7 to 15 %
+# tighter in the Gazebo hold, but every seed failed the ring rule (docs/gazebo_check.md).
+# - Inputs as v24: v22's 21 plus the wall range and its usable flag (23). The rangefinder's
+#   reference is latched at engage, and a pass keeps the standoff, so the range input reads
+#   the same on a pass as on a hold.
+# - The rangefinder as v24 trained it: present in half the episodes, spike-gate outliers and
+#   dropouts as the module sees them.
+# - Everything else is the pass recipe: 70 % passes, 30 % plain holds with v24's re-engages,
+#   fresh critic warmed up first, 4096 drones, 1200 iterations a part, two parts chained.
+#   About 10 min a part on one server GPU, about 6 s an iteration (5 h a seed) on 4 cloud cores.
+#   python -m training.launch --config training/configs/structure_hold_ppo_pass_v24.yaml --smoke --device cpu
+#   python -m training.launch --config training/configs/structure_hold_ppo_pass_v24.yaml --device cuda --set seed=0
+#   part 2: --set params.init_actor_onnx=null --set params.critic_warmup=0 --set params.resume=<part 1>/policy.pt
+name: structure_hold_ppo_pass_v24
+entrypoint: training.train_ppo
+seed: 0
+expected_hours: 0.9
+gpus: 1
+params:
+  num_envs: 4096
+  init_actor_onnx: training/policies/structure_hold_v24.onnx  # released 2026-11-10 (rangefinder drones)
+  critic_warmup: 200
+  resume_std: 0.05  # as for v12 to v22: PPO's std decays to the 0.01 floor, where it cannot learn
+  iterations: 1200
+  save_interval: 100
+  num_obs: 23  # v24's inputs (v22's 21, the wall range and its flag); passes add none
+  num_steps_per_env: 48
+  history: 15
+  sim: torch
+  resume: null  # part 2: the queue sets params.resume to part 1's policy.pt
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 60.0
+    reengage_rate_hz: 0.05  # on the plain holds only; a pass is flown from one engage
+    surface_pass:
+      prob: 0.7
+      length_m: [3.0, 6.0]
+      speed_mps: [0.2, 1.0]
+      accel_mps2: 0.5
+      start_s: [1.0, 4.0]
+      vertical_prob: 0.25
+      legs: [1, 3]
+      row_step_m: [0.5, 1.0]
+      pause_s: 1.0
+    disturbance:
+      mean_heading_deg: [-90.0, 90.0]
+    reward:  # v22's
+      thrust: 1.0
+      ang_vel: 0.2
+      pos: 2.0
+      pos_scale_m: 0.5
+      toward_wall: 2.0
+      height: 0.5
+      height_scale_m: 0.1
+      action_band: 5.0
+    rate_lag_s: [0.0, 0.06]
+    contact_radius_m: 0.40
+    estimate:
+      jump_rate_hz: 0.1
+      dropout_rate_hz: 0.1
+    airframe_rand:
+      mass_scale: [0.85, 1.2]
+      inertia_scale: [0.75, 1.35]
+      thrust_to_weight_scale: [0.9, 1.1]
+      motor_tau_s: [0.012, 0.035]
+      hover_thrust_error: [-0.2, 0.2]
+    wall_yaw_torque:
+      peak_nm: [0.0, 0.02]
+    range:  # v24's (training/configs/structure_hold_ppo_v24.yaml)
+      present_prob: 0.5
+      rate_hz: 20.0
+      noise_std_m: 0.01
+      noise_frac: 0.005
+      scale_error: [-0.02, 0.02]
+      outlier_prob: 0.01
+      dropout_rate_hz: 0.05
+      dropout_s: [0.2, 2.0]
+  curriculum:
+    dropout_max_s: null
+    fraction: 0.6
+  eval:
+    num_envs: 256
+    episodes: 1
+    score_envs: 32
+    env:
+      reengage_rate_hz: 0.0
+      episode_length_s: 25.0
+      estimate:
+        jump_rate_hz: 0.02
+        dropout_rate_hz: 0.02
+      surface_pass:  # every episode a 5 m, 0.5 m/s pass along the wall
+        prob: 1.0
+        length_m: 5.0
+        speed_mps: 0.5
+        start_s: [2.0, 4.0]
+        vertical_prob: 0.0
+        legs: 1
+    select_every: 300
+    select_envs: 256
+smoke:
+  critic_warmup: 2
+  num_obs: 23
+  num_envs: 32
+  iterations: 3
+  num_steps_per_env: 16
+  save_interval: 1
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 3.0
+    surface_pass: {prob: 0.7, length_m: 1.0, speed_mps: [0.5, 1.0], start_s: 0.5,
+                   vertical_prob: 0.25, legs: [1, 2], row_step_m: 0.3}
+    disturbance: {mean_heading_deg: [-90.0, 90.0]}
+    airframe_rand: {mass_scale: [0.85, 1.2], hover_thrust_error: [-0.2, 0.2]}
+    range: {present_prob: 0.7, outlier_prob: 0.01, dropout_rate_hz: 0.5}
+  eval:
+    num_envs: 8
+    episodes: 1
+    score_envs: 4
+    env: {surface_pass: {prob: 1.0}}
+    select_every: 2
+    select_envs: 8

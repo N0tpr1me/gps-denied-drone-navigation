@@ -423,8 +423,11 @@ pass-trained policy is Zain's call. Flights: `runs/20261110-093928`, `-122418` (
 
 - **Releasing a pass-trained policy.** pass_s0 flew the passes and the 60 s hold a little
   tighter than v22 (above, 7 to 15 % on the hold) but fails the release check's ring rule by
-  a small margin, and one seed's margin is inside seed luck. A release needs the recipe's
-  other seeds checked, the check passed (or the rule changed by Zain) and Zain's yes.
+  a small margin. Its other two seeds fail the same rule, so the ring comes with the recipe.
+  A release needs the check passed (or the rule changed by Zain) and Zain's yes. The same
+  recipe on v24, the release for drones with a rangefinder, is ready to run on the server:
+  `training/queues/surface_passes_v24.yaml` (three seeds, each checked against v24 by
+  `eval/configs/gazebo_check_pass_v24.yaml`), not started.
 - **Guards in Gazebo.** The Gazebo pass flights have no rangefinder and no lidar, so they
   score the pass, not the wall guard or the keep-out on it; those are SIH only.
 - **Faster, longer, up the wall.** Gazebo flew 5 m along at 0.5 m/s. 1 m/s, a pass up a pier
