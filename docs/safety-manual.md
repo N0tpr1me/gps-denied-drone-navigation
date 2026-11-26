@@ -330,7 +330,8 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
   so they score the pass itself, not its guards. F50 and F52 have no test. A pass has not
   been flown faster than 0.5 m/s outside the mock, and the policy that flew it (v22) was not
   trained on a moving hold point; v24, the release since version 1.13, has not flown a
-  pass in Gazebo (PASSNOTE). The 2 s wait of F51 is a first value, set on one seed's
+  pass in Gazebo; in the mock, with a rangefinder, it holds the
+  passes 12 to 21 % tighter than v22 with no crash (`docs/wall-range.md`). The 2 s wait of F51 is a first value, set on one seed's
   two 1.5 s dropouts and confirmed on the same eight seeds; a dropout of over 2 s while the
   point moves has not been flown.
 - The GPS faults (F27, F38 to F40) are one seed on one scenario except the jump; a jump

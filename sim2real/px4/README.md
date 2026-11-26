@@ -379,7 +379,7 @@ also drops three EKF2 options a GPS-denied multicopter at a wall does not use: t
 auxiliary velocity fusion (`EKF2_AUXVEL`, fed only by the landing-target estimator the
 variant already drops), the auxiliary global position fusion (`EKF2_AUX_GLOBAL_POSITION`)
 and the multirotor drag fusion (`EKF2_DRAG_FUSION`, off by default in PX4, `EKF2_DRAG_CTRL`
-0). With them out the v24 build is at 99.43 % (1,954,880 B, about 11 KB spare). Put a line
+0). With them out the v24 build is at 99.43 % (1,954,880 B, about 11 KB spare); with the long-step check of the range input (2026-11-26) it is at 99.44 % (1,955,072 B, still about 11 KB spare). Put a line
 back in the board file if your drone uses one of them, and check the size. The first such build also caught a format string the SITL build never flagged (`uint32_t` is `long unsigned` on Arm). The partner build steps are in
 `docs/partner-pack.md`.
 

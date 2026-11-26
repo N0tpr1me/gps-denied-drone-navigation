@@ -259,4 +259,9 @@ drone without a forward rangefinder: export the header from `structure_hold_v22.
 that build (`sim2real/px4/README.md`). What is known and accepted with the release is in the
 decision row: the p95 gain over v22 is small (5 to 12 %, scored like for like), the gain
 toward the wall (18 to 38 % less) and the smoother commands are the clear part, and seed 6
-is v24's loosest seed. Surface passes: PASSNOTE2
+is v24's loosest seed. Surface passes:
+v24 was scored on them in the mock on 2026-11-26 (`eval/configs/gate1_x500_ekf_pass.yaml`,
+rangefinder on, reference latched at the engage, held-out seeds 9001 to 9003, run
+`20261126-200259`): PASS 7/7 against the PD, pooled p95 0.15 against 0.38 m, crash 0.0 %
+against 3.7 %, and 12 to 21 % tighter than v22 in every cell (0.13 to 0.18 m against 0.16
+to 0.21 m). It has not flown a pass in Gazebo.

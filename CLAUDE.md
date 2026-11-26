@@ -179,7 +179,9 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   released with it: its Gazebo re-fly with `--rangefinder` (cloud, 2026-11-09) came out
   tighter than v22 (mean p95 0.18 against 0.20 m, -5 to -12 %, 18 to 38 % less toward the
   wall, smoother, 0 crashes) and 44 to 45 % tighter than tuned PX4. Without a rangefinder
-  it only ties v22 in the mock. PASSNOTE
+  it only ties v22 in the mock.
+  On 5 m surface passes in the mock (rangefinder on, run `20261126-200259`) it passes 7/7
+  against the PD, 12 to 21 % tighter than v22 in every cell, no crash; no Gazebo pass yet.
 - Long range readings (2026-11-26, Proposed, `docs/wall-range.md` "Readings that are too
   long"): glass, a wet or mirror-like face and water make the rangefinder read too far, and
   v24 flew at the wall in the mock (59 % of episodes). `RangeReference` and the mock's gate
@@ -249,8 +251,8 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   collision-prevention data (`obstacle_distance`, side-facing `distance_sensor`s) keeps the
   hold point of all three modes that far from obstacles other than the structure; not
   avoidance. `structurehold.px4board` also drops the Septentrio GNSS driver so the fmu-v6x
-  build still fits (99.55 % with the surface pass and the pre-arm VIO check, about 9 KB
-  spare: the next feature needs room made first).
+  build still fits; with v24 it also drops three unused EKF2 options and is at 99.44 %
+  (about 11 KB spare, 2026-11-26): the next feature needs room made first.
   GPS on (2026-11-02, decided; `docs/field-faults.md` "GPS on"): the envelope allows a GPS or
   RTK receiver fused beside the VIO, with the forward rangefinder required (`SH_WALL_REQ` 1):
   on a 1.5 m GPS jump tuned PX4 hit the wall on 3 of 3 seeds, v22's wall guard held 0.70 m;
