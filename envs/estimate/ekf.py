@@ -61,6 +61,19 @@ takes ``baro_offset``, metres added to the reading from outside: the env passes 
 the static port (``envs/ambient``). The fused height follows all of it, as it follows the
 barometer's own walk, because the barometer is the reference. Off by default.
 
+A downward rangefinder as the height reference (``height_source: range``, EKF2_HGT_REF 2;
+``docs/environment-factors.md`` "Height from a downward rangefinder"): the answer to those
+pressure events over a flat floor, a tunnel's or a hall's. ``step`` takes ``range_height``,
+the height the beam gives above the floor beneath (slant distance times the cosine of the
+tilt, as EKF2 uses it; NaN without a return), sampled at ``range_rate_hz`` with white noise
+``range_noise_m`` and lost beyond ``range_max_m``. The first return after a reset or a gap
+sets the floor's level from the current height (EKF2's terrain estimate starting), so the
+height does not jump; after that the height follows the range. While there is no return
+the barometer carries the height, with all its errors, as EKF2 falls back to it; the
+barometer is otherwise not fused (its bias estimator absorbs it). Not modelled: a floor that
+changes height under the drone (a step, a box, a passing vehicle) and water or glass under
+the beam (``docs/environment-factors.md``).
+
 Not modelled: attitude and bias states, EKF2's limit of five horizontal resets per fusion
 start (after it, EKF2 stops and restarts the fusion, which resets anyway). Off by default;
 the ``gz_x500_sitl`` airframe turns it on (docs/decisions.md 2026-10-23).
@@ -108,6 +121,11 @@ class FusionConfig:
     baro_step_m: tuple[float, float] = (0.0, 0.0)  # magnitude, random sign
     baro_step_tau_s: float = 1.0
     baro_step_decay_s: float | None = None  # None: the step stays
+    # A downward rangefinder (height_source "range"; module docstring): a small lidar such
+    # as a TFmini or LightWare, a few cm of noise, good to some metres over a dull floor.
+    range_rate_hz: float = 20.0
+    range_noise_m: float = 0.03
+    range_max_m: float = 8.0
 
     def __post_init__(self) -> None:
         lo, hi = ((float(self.baro_step_m),) * 2 if isinstance(self.baro_step_m, (int, float))
@@ -119,19 +137,25 @@ class FusionConfig:
             raise ValueError("fusion baro_step_decay_s must be positive or None")
         for name in ("vision_rate_hz", "pos_noise_m", "vel_noise_mps", "gate_sd",
                      "output_tau_s", "stop_after_s", "hpos_reset_after_s", "hgt_reset_after_s",
-                     "baro_rate_hz", "baro_noise_m"):
+                     "baro_rate_hz", "baro_noise_m", "range_rate_hz", "range_noise_m",
+                     "range_max_m"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"fusion {name} must be positive")
         for name in ("ev_delay_s", "accel_noise_mps2", "imu_noise_mps2", "imu_bias_mps2",
                      "baro_walk_m_per_sqrt_s", "baro_walk_max_m"):
             if getattr(self, name) < 0:
                 raise ValueError(f"fusion {name} must be >= 0")
-        if self.height_source not in ("vision", "baro"):
-            raise ValueError('fusion height_source must be "vision" or "baro"')
+        if self.height_source not in ("vision", "baro", "range"):
+            raise ValueError('fusion height_source must be "vision", "baro" or "range"')
 
     @property
     def baro(self) -> bool:
-        return self.height_source == "baro"
+        """The barometer is in the height loop: the reference, or the range's fallback."""
+        return self.height_source in ("baro", "range")
+
+    @property
+    def range(self) -> bool:
+        return self.height_source == "range"
 
     @property
     def baro_steps(self) -> bool:
@@ -185,6 +209,17 @@ class TorchFusion:
             int(seed) * 104729 + 0xBA5)
         self.baro_step_target, self.baro_step = z(n), z(n)
         self.true_z = z(k, n)
+        # Downward rangefinder (height_source "range"): its tick, the height it gives at the
+        # delayed horizon (buffered like the barometer's truth), the floor's level latched
+        # from its first return, and whether the last sample had a return. Its own generator.
+        self.range_gen = torch.Generator(device=self.device).manual_seed(
+            int(seed) * 104729 + 0xD0E)
+        self.range_clock = 0.0
+        self.range_z = torch.full((k, n), float("nan"), dtype=dtype, device=self.device)
+        self.floor_z = torch.full((n,), float("nan"), dtype=dtype, device=self.device)
+        self.range_ok = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.baro_bias = z(n)  # the barometer's offset from the range height, at fallback
+        self.baro_on = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.reset(torch.arange(n, device=self.device), z(n, 3), z(n, 3))
 
     def reset(self, env_ids: Any, pos: torch.Tensor, vel: torch.Tensor) -> None:
@@ -203,6 +238,11 @@ class TorchFusion:
         self.baro_step_target[ids] = 0.0
         self.baro_step[ids] = 0.0
         self.true_z[:, ids] = pos[:, 2]
+        self.range_z[:, ids] = float("nan")
+        self.floor_z[ids] = float("nan")
+        self.range_ok[ids] = False
+        self.baro_bias[ids] = 0.0
+        self.baro_on[ids] = False
         if self.cfg.imu_bias_mps2 > 0:  # no draw when off, so other draws stay as they were
             self.imu_bias[ids] = self.cfg.imu_bias_mps2 * torch.randn(
                 pos.shape[0], 3, generator=self.gen, device=self.device, dtype=self.dtype)
@@ -221,6 +261,32 @@ class TorchFusion:
             u[:, 0] < cfg.baro_step_rate_hz * dt, size, torch.zeros_like(size))
         self.baro_step = self.baro_step + min(1.0, dt / cfg.baro_step_tau_s) * (
             self.baro_step_target - self.baro_step)
+
+    def _range(self, range_height: torch.Tensor) -> None:
+        """The downward rangefinder as the height reference (module docstring)."""
+        cfg, dt = self.cfg, self.dt
+        h = range_height.to(self.dtype)
+        h = torch.where(torch.isfinite(h) & (h <= cfg.range_max_m) & (h >= 0), h,
+                        torch.full_like(h, float("nan")))
+        self.range_z = torch.cat([self.range_z[1:], h[None]], 0)
+        self.range_clock += dt
+        if self.range_clock < 1.0 / cfg.range_rate_hz - 1e-9:
+            return
+        self.range_clock -= 1.0 / cfg.range_rate_hz
+        noise = cfg.range_noise_m * torch.randn(self.n, generator=self.range_gen,
+                                                device=self.device, dtype=self.dtype)
+        meas = self.range_z[0] + noise  # at the delayed horizon, as the barometer
+        ok = torch.isfinite(meas)
+        # A first return, or the first after a gap: the floor's level from the height now.
+        start = ok & ~self.range_ok
+        self.floor_z = torch.where(start, self.p_d[:, 2] - meas, self.floor_z)
+        self.range_ok = ok
+        y = torch.zeros_like(self.p_d)
+        y[:, 2] = torch.nan_to_num(meas + self.floor_z - self.p_d[:, 2])
+        only_z = torch.tensor([False, False, True], device=self.device)
+        # Weighted and gated as EKF2 does the range (EKF2_RNG_NOISE 0.1 m, EKF2_RNG_GATE 5):
+        # the filter trusts it less than its few cm of noise, which smooths that noise out.
+        self._fuse(y, max(cfg.range_noise_m, 0.1) ** 2, True, (ok & ~start)[:, None] & only_z)
 
     def _fuse(self, y: torch.Tensor, var: float, h_pos: bool, ok: torch.Tensor,
               gate_var: float | None = None) -> torch.Tensor:
@@ -271,15 +337,20 @@ class TorchFusion:
 
     def step(self, accel: torch.Tensor, fix_pos: torch.Tensor, fix_vel: torch.Tensor,
              fresh: torch.Tensor, true_pos: torch.Tensor | None = None,
-             baro_offset: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+             baro_offset: torch.Tensor | None = None,
+             range_height: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Advance one step with the true acceleration ``accel`` (N, 3) and the latest fix;
         ``fresh`` (N,) is False while the fix is stale. ``true_pos`` (N, 3) is what the
         barometer measures the height of, needed with ``height_source`` "baro";
         ``baro_offset`` (N,) is metres added to its reading from outside (the wind on the
-        static port). Returns (position, velocity) now."""
+        static port). ``range_height`` (N,) is the downward rangefinder's height above the
+        floor, NaN without a return, needed with ``height_source`` "range". Returns
+        (position, velocity) now."""
         cfg, dt = self.cfg, self.dt
         if cfg.baro and true_pos is None:
-            raise ValueError('fusion height_source "baro" needs true_pos')
+            raise ValueError(f'fusion height_source "{cfg.height_source}" needs true_pos')
+        if cfg.range and range_height is None:
+            raise ValueError('fusion height_source "range" needs range_height')
         accel = torch.nan_to_num(accel) + cfg.imu_noise_mps2 * torch.randn(
             self.n, 3, generator=self.gen, device=self.device, dtype=self.dtype)
         bias = self.imu_bias * (~fresh)[:, None]  # EKF2 absorbs it while aided
@@ -316,11 +387,22 @@ class TorchFusion:
                 if baro_offset is not None:
                     z_meas = z_meas + torch.nan_to_num(baro_offset)
                 y = torch.zeros_like(self.p_d)
-                y[:, 2] = z_meas - self.p_d[:, 2]
                 only_z = torch.tensor([False, False, True], device=self.device).expand(self.n, 3)
+                if cfg.range:
+                    # The barometer only while the rangefinder has no return, from where its
+                    # bias estimate stood when the range went (EKF2 keeps one per source).
+                    use = ~self.range_ok
+                    start = use & ~self.baro_on
+                    self.baro_bias = torch.where(start, z_meas - self.p_d[:, 2], self.baro_bias)
+                    self.baro_on = use
+                    z_meas = z_meas - self.baro_bias
+                    only_z = only_z & use[:, None]
+                y[:, 2] = z_meas - self.p_d[:, 2]
                 # Gated as EKF2 gates the barometer (EKF2_BARO_NOISE 3.5 m): its slow error
                 # is never rejected, whatever the filter's own height variance has shrunk to.
                 self._fuse(y, cfg.baro_noise_m ** 2, True, only_z, gate_var=3.5 ** 2)
+        if cfg.range:
+            self._range(range_height)
         if self.clock >= self.period - 1e-9:
             self.clock -= self.period
             ok = fresh[:, None].expand(self.n, 3)

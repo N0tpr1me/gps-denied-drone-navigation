@@ -94,6 +94,7 @@ the row says so. A partner's flight logs are what turn the guesses into numbers
 | Barometer noise and slow walk | The height reference wanders | yes | yes | `fusion.height_source: baro`, numbers from EKF2 on Gazebo hovers |
 | Pressure steps: a door or shutter opening, ventilation starting, a train entering the tunnel, a gust front | 12 Pa reads as 1 m. The height estimate steps and the drone follows it | **new** | no | `fusion.baro_step_*` |
 | Wind on the barometer's port | A pressure error that grows with airspeed squared, so height moves with every gust | **new** | no | `ambient.baro_wind_m_per_mps2` |
+| The fix: height from a downward rangefinder (`EKF2_HGT_REF` 2) | Pressure no longer reaches the height; over a floor that rises or falls the height is out by the change | **new** (2026-11-26) | no | `fusion.height_source: range`; below, "Height from a downward rangefinder" |
 | The rotors' own pressure near the ground | A height error on take-off and landing | no | no | Constant at a fixed height, so the hold does not see it. It would matter for Structure Land, which PX4's own controller flies |
 
 ### IMU
@@ -254,8 +255,9 @@ What the table says, row group by row group:
    with doors and ventilation, the barometer is the weak sensor. The envelope already allows
    a downward rangefinder as the height reference (`EKF2_HGT_REF` 2); this result is the
    reason to prefer it there. In tunnels it is not about tightness but crashes (Route
-   Follow, below). The mock does not model that height source yet, so the gain is not
-   measured.
+   Follow, below). Measured since 2026-11-26 ("Height from a downward rangefinder"): it
+   takes the doors out completely over a level floor, and must not be used where the floor
+   climbs.
 3. **Training.** Air, battery, draughts and rotor effects are not worth training time on
    this airframe. One try with everything on (below) taught a drifting IMU and not glass.
 
@@ -329,6 +331,54 @@ rangefinder, not the barometer. In narrow pipes the rotor effects add about 5 po
 crashes for v2 (7 % to 12 %, 256 routes each, so within about two standard errors) and next
 to nothing for the PDs. Air, battery and draughts do nothing measurable.
 
+## Height from a downward rangefinder
+
+Added 2026-11-26 as the answer to the pressure steps. `fusion.height_source: range` makes a
+downward rangefinder EKF2's height reference, as `EKF2_HGT_REF` 2 does
+(`envs/estimate/ekf.py`): a small lidar under the drone, 20 Hz, 3 cm of noise, good to 8 m,
+weighted and gated as EKF2 weights and gates it (`EKF2_RNG_NOISE` 0.1 m, `EKF2_RNG_GATE` 5).
+The first return sets the floor's level from the current height, so nothing jumps. Without a
+return (out of range, tilted past 45 deg) the barometer carries the height from where it
+stood, doors and all, and hands it back when the range returns. The barometer is otherwise
+not fused. The beam is traced to the floor (the ground in Structure Hold, the tunnel or
+corridor floor in Route Follow). Not modelled: things on the floor (a step, a box, a passing
+vehicle), and water or glass under the beam, where the glass row above applies downward too.
+
+Mock, the same 768 holds a row as the table above, x500 on the EKF2-like fusion; p95 hold
+error, against the PD yardstick:
+
+| Height reference | v22 | v24 | PD |
+| --- | --- | --- | --- |
+| barometer, no doors (nominal) | 0.175 | 0.153 | 0.338 |
+| barometer, doors 0.2-1 m one per 20 s | 0.511 | 0.500 | 0.673 |
+| downward rangefinder, no doors | 0.182 (+4 %) | 0.163 (+6 %) | 0.342 (+1 %) |
+| downward rangefinder, the same doors | 0.182 (+4 %) | 0.163 (+6 %) | 0.342 (+1 %) |
+
+The doors are gone: the two rangefinder rows are the same episodes to the digit, because
+the barometer is never used while the floor is in range. It costs 4 to 6 % against a quiet
+barometer (the range's noise, and v22 and v24 trained on the barometer), no crashes.
+
+Route Follow (`eval/configs/route_follow_range_height.yaml`, 256 routes a row, cross-track
+p95 in m and crash rate, v2 / PD on the estimate / PD with range centring):
+
+| Routes | Height | v2 | PD | PD centring |
+| --- | --- | --- | --- | --- |
+| level | barometer | 0.20, 0 % | 0.32, 4 % | 0.32, 4 % |
+| level, doors | barometer | 0.48, 13 % | 0.60, 30 % | 0.45, 12 % |
+| level | rangefinder | 0.21, 1 % | 0.32, 5 % | 0.31, 4 % |
+| level, doors | rangefinder | 0.22, 0 % | 0.33, 6 % | 0.32, 6 % |
+| climbing (-10 to 10 deg a segment, the default) | rangefinder | 0.64, 39 % | 0.82, 62 % | 0.52, 36 % |
+
+In a level tunnel the rangefinder takes v2 from 13 % crashes with doors back to none. On a
+route that climbs it is far worse than the barometer ever was: the floor rises and falls by
+metres over a route, the height estimate rises and falls with it, and the drone flies into
+the roof or the floor. So the advice
+is plain: **a downward rangefinder as the height reference where the floor is level and the
+pressure moves (a level tunnel, a hall, a plant room, under a deck over level ground); the
+barometer wherever the floor climbs or is broken up**. A route that does both would need the
+rangefinder as an aid to the barometer, not its replacement (`EKF2_RNG_CTRL` 1 with a terrain
+estimate), which the mock does not model. Gazebo flies neither option yet.
+
 ## Not done, and why
 
 - **Gazebo has almost none of the new factors.** The benchmark against tuned PX4 is flown
@@ -366,6 +416,14 @@ Route Follow, one run under an hour:
 
 ```
 python -m training.launch --config eval/configs/route_follow_environment.yaml --device cpu
+```
+
+Height from a downward rangefinder, about 20 minutes each (side by side is fine):
+
+```
+python -m training.launch --config eval/configs/environment_factors.yaml --device cpu \
+    --set "params.only=[baro_doors,range_height,baro_doors_range]"
+python -m training.launch --config eval/configs/route_follow_range_height.yaml --device cpu
 ```
 
 To fly any config with a factor on, add its block to the env config, for example
