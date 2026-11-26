@@ -93,6 +93,28 @@ training/queues/server_week1.yaml --dry-run` prints the plan for the GPUs it fin
 queue, every free GPU busy and the SITL flights on the other cores. The page lists the few
 jobs that need Zain's yes (`--approved`) and the go/no-go check for each result.
 
+## Runs in Docker
+
+Every run on the shared server goes inside a container (Zain, 2026-11-26). Gazebo flights
+already do (the SITL image, `sim2real/docker/`) and so does Isaac Lab (section 5). Mock
+training and scoring use the `dronenav-train` image from `training/docker/Dockerfile`: Python
+3.11, torch 2.15 (cu132), rsl-rl-lib 5.5.1 and onnx, with no repo code inside it.
+`training/docker/run.sh` mounts the checkout at `/work`, so `runs/` lands in the checkout as
+usual, owned by your user, and a new commit needs no rebuild. Only a change to
+`pyproject.toml`'s dependencies does.
+
+```bash
+training/docker/run.sh build     # once, and after a dependency change
+training/docker/run.sh smoke     # the selfcheck smoke on a GPU, and torch's CUDA check
+training/docker/run.sh python -m training.queue training/queues/server_week1.yaml --max-gpus 2
+training/docker/run.sh python -m training.launch --config <config> --device cuda --gpu 1
+```
+
+The container sees every GPU, so `launch.py`'s `nvidia-smi` check still picks only free
+cards (`CUDA_VISIBLE_DEVICES` uses the host's indices). `DRONENAV_CPUS` caps the container's
+cores (16 by default). Do not stop a running queue by killing the shell script that started
+it: the container goes with it. Let it finish, or stop the container with `docker stop`.
+
 ## 4. Running the benchmark on the server
 
 The same commands as on the Mac, plus `--jobs auto`:
