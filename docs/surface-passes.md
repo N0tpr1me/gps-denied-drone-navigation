@@ -409,8 +409,11 @@ re-flown v22 matches its 2026-11-09 batch (0.198 / 0.195 / 0.195 m).
 What it decides: a 7 to 15 % margin on one training seed is inside seed luck (CLAUDE.md,
 "Releasing a policy"; `docs/gazebo_check.md` "Seed repeatability"), and pass_s0 still fails
 the release check's ring rule. So the recipe is being trained on two more seeds before any
-release question: seed 2 on the cloud CPUs in chained parts (`experiments/LOG.md`), seed 1
-from the server's 2026-11-09 run when the server is back. **v22 stays the compiled-in
+release question. Done on 2026-11-26 (`docs/gazebo_check.md` "The same recipe on two more
+seeds"): seeds 1 and 2 hold 23 and 21 % tighter than v22 in the release check, as seed 0 did,
+and all three fail only the ring rule (6 to 21 % above v22's ring). The mock gain and the ring
+are both the recipe's; whether the ring counts is Zain's call. Seeds 1 and 2 have not flown
+in Gazebo. **v22 stays the compiled-in
 policy** (and v24, decided 2026-11-10, for drones with a forward rangefinder); a release of a
 pass-trained policy is Zain's call. Flights: `runs/20261110-093928`, `-122418` (pass_s0) and
 `-131622`, `-125042` (v22), pooled and re-scored copies kept in
