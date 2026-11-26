@@ -296,6 +296,8 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   server we got"): reached only by `ssh gpu` from the Mac on the VPN, at most 2 GPUs at once,
   Gazebo batches fly in cloud containers for now and the server does GPU and mock work
   (CPU training there is too slow under other users' load).
+  Every run on the server goes inside Docker (Zain, 2026-11-26): mock training and scoring
+  through `training/docker/run.sh` (`docs/gpu-server.md` "Runs in Docker"), Gazebo in the SITL image.
   Until it is up, the cloud container (4 cores, no GPU) does mock training, scoring, C++
   unit tests, docs and PX4 SIH flights (`sim2real/px4/sitl_test.sh`), and it can run Docker
   too: `sudo dockerd &`, then `sim2real/docker/cloud_build.sh` builds the SITL image (PX4's
