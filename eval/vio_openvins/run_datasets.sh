@@ -28,6 +28,9 @@ for seq in "$tum"/dataset-room*_512_16; do
     [ -f "$seq/mav0/mocap0/data.csv" ] || continue
     name="$(basename "$seq")"; dest="$out/tumvi/$name"
     [ -s "$dest/stamped_traj_estimate.txt" ] && continue
-    "$here/run_openvins.sh" "$seq" "$dest" tum_vi || { echo "$name: OpenVINS failed" >&2; continue; }
+    # OpenVINS's TUM-VI config says init_imu_thresh 0.45 for room1-5 and 0.25 for room6.
+    extra=(); [ "$name" = dataset-room6_512_16 ] && extra=(--set init_imu_thresh=0.25)
+    "$here/run_openvins.sh" "$seq" "$dest" tum_vi ${extra[@]+"${extra[@]}"} \
+        || { echo "$name: OpenVINS failed" >&2; continue; }
     cp "$seq/mav0/mocap0/data.csv" "$dest/truth.csv"
 done
