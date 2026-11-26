@@ -131,6 +131,69 @@ outliers and 1 to 5 s sensor dropouts at 0.2 Hz both hold 0.164 m, the same as a
 where the rangefinder helps least (0.388 vs 0.484 m): with no estimate the error along the
 wall drifts and the range only pins the normal axis.
 
+## Readings that are too long (2026-11-10)
+
+On glass, a mirror-like or wet face, or over water, the beam goes through or bounces away
+and the sensor reads whatever is behind: too far by half a metre to several metres, reading
+after reading. The spike gate took that for a real step at its second reading. The input
+then said the wall had moved away (clipped at 1 m) and v24 flew at the wall to close the
+gap. The environmental-factors work found it in the mock before v24 flew anywhere
+(`docs/environment-factors.md`, cell `range_glass`: every episode's rangefinder reads 0.5 to
+3 m too far for 20 to 80 % of the time, in stretches of half a second on average): v24
+struck the wall in 58.7 % of 768 episodes. v22, which does not read the range, in none.
+
+**The long-step check** (`RangeReference::update` in `WallGuard.hpp`; the env's
+`range.long_step_check`, on by default in both):
+
+- A step to a **longer** distance is accepted, at its second reading as before, only when
+  the position estimate moved away from the wall by about as much since the last accepted
+  reading (within the gate, 0.25 m). Otherwise the input stays unusable, and the policy
+  flies on the estimate as it does without a rangefinder, until readings come back to
+  within the gate of the last accepted distance.
+- A step to a **shorter** distance is still taken on the sensor's word. It moves the vehicle
+  away from the wall, and it is the case the input exists for: the estimate jumped and the
+  vehicle followed it in.
+- Such a shorter step may also be dust the beam stopped on. So the distance it replaced is
+  kept, with where the estimate was, and a longer step that lands back on it is accepted.
+  After 40 readings in a row at the new distance (2 s at 20 Hz) the old one is forgotten.
+- A reading within the gate of the last accepted one is used whatever the estimate did, so
+  an estimate jump or drift with a steady range is still measured against the wall.
+- Without a finite estimate no longer step is accepted.
+
+The estimate's position along the wall normal is what the module already has (`pos . n`,
+the heading of the engage). The wall guard's own gate is unchanged (Decided 2026-11-02): the
+guard only ever moves the hold point away from the wall, so a long reading costs it its
+protection (safety manual F15) but cannot pull the point in.
+
+What it gives up: a real longer step that the estimate did not see leaves the input off
+until the readings return or the estimate's own motion explains them. That is the vehicle
+pushed out during a range dropout while the estimate jumped, and a recess in the face on a
+surface pass (a part that stands proud is a shorter step and is followed out and back).
+The policy then flies like v22, which is the price of not trusting a longer reading alone.
+
+**Mock** (`eval/configs/environment_factors.yaml`, the three seeds x 256 episodes of that
+doc's table, v24, mean p95 on true position and crashes; run `GLASSRUN`):
+
+| Cell | Before the check | With the check | v22 (does not read the range) |
+| --- | --- | --- | --- |
+GLASSTABLE
+
+GLASSTEXT
+
+**Flown holds.** The 24 Gazebo holds v24's release rests on (calm, 4 and 8 m/s, seeds 1 to
+8, `docs/baseline.md`) were replayed from their logs through the gate before and after:
+of 126,054 logged wall distances neither gate held one back, so the check would not have
+changed a tick of those flights and the benchmark numbers stand. Gazebo's rangefinder has
+no long readings; the check has not flown.
+
+**Not covered.** A beam that is already through the glass at the engage: the reference is
+then latched too far, the real wall reads as too close when it shows, and the policy is
+expected to back away from the face by up to that much (not tested; the mock's reference is
+the true standoff, not the reading at engage). The wall guard, Structure Hover and
+Structure Land on the same sensor (F15). Both stay in the safety manual's do-not-use list:
+glass, wet or mirror-like faces and water are outside the envelope with or without the
+check. The glass numbers are assumed, not measured on a sensor.
+
 ## Where it stands
 
 v24 beats v22 everywhere it was measured in the mock, most with a rangefinder (Gazebo-like

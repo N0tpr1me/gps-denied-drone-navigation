@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
-| Version | 1.11, ready for sign-off (section 8); 1.0 to 1.10 were not signed |
+| Version | 1.12, ready for sign-off (section 8); 1.0 to 1.11 were not signed |
 | Date | 2026-11-10 |
 | Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`), the VIO runaway trip and pre-arm VIO check of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`, `SH_WD_GND_V`) the surface pass of 1.10 (`SH_PASS_LEN`, off by default) and the Gate 2 numbers scored like for like of 1.11 (F8, no module change): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md`, `docs/field-faults.md` and `docs/surface-passes.md` |
 | Owner | Zain |
@@ -80,8 +80,15 @@ Tested in simulation inside this envelope. Outside it, nothing is claimed.
   accepts losing every guard that uses it (wall guard, Structure Hover, Structure Land's
   guard, `SH_HB_RANGE`). With GPS on, never: a GPS jump walked the unguarded hold into the
   wall (F27).
-- Next to a structure the rangefinder cannot see reliably: thin poles, mesh, glass, water
-  spray, or a face more than 35 deg off the heading.
+- Next to a structure the rangefinder cannot see reliably: thin poles, mesh, or a face more
+  than 35 deg off the heading.
+- **Facing glass, a mirror-like or polished face, a wet face, standing water or water
+  spray.** The beam goes through or bounces away and the sensor reads what is behind, too
+  far. The wall guard then guards nothing (F15), and a policy that reads the rangefinder
+  (v24) flew into the wall in simulation before the long-step check of 1.12 (F54). The
+  check covers a reading that goes long during the hold; it does not cover a beam that is
+  already through the glass at the engage, and nothing covers the guard. If the face may
+  be any of these, do not fly Structure Hold at it.
 - In dust, fog, steam, smoke or darkness that the VIO cannot track through: the drone holds
   what the VIO says, so when the VIO walks off, the drone walks with it (F36). Stop the
   hold and back off as soon as the ground station shows VIO quality dropping, the hold
@@ -211,7 +218,8 @@ height, F27 over three seeds.
 | F13 | No range, or broken readings (0, below minimum, beyond maximum, flagged invalid) | Sensor fault, bad surface | A false push or a missing guard | 3 | Each reading is checked: under 0.2 s old, inside the sensor's range, not flagged, angle under 35 deg, and within 0.25 m of the last accepted reading unless the next one agrees (spike gate) | The guard does nothing on a bad reading; `SH_WALL_REQ` 1 refuses to engage without a usable range | 2 | U, S (`--range-faults`) |
 | F14 | Range lost while Structure Hover holds on it alone | Sensor fault during `SH_HB_RANGE` | Uncontrolled drift | 4 | No usable range for 0.5 s | `range_lost` trip, then Altitude mode (Position mode if the estimate is back), Hold, Land | 3 | U |
 | F37 | Short returns off dust, fog or spray in front of the sensor | Same air as F36 | The guard reads a close wall and moves the hold point back; the ratchet never brings it forward again, so a long cloud keeps pushing the drone away from the structure (it did, 0.6 to 0.95 m in 20 s, before the gate) | 3 | Spike gate on the guard (0.25 m, since 2026-11-02): a reading that far from the last accepted one waits for the next to agree, and counts as no range for the range hover | A lone short return moves nothing. Re-flown: the two seeds whose VIO did not walk toward the wall saw 0.00 to 0.02 m of shift (0.5 to 0.6 m before); the seed whose VIO did walk the drone toward the wall was backed off 0.6 m, which is the guard's job (F7). 0 of 6 touched, closest 0.82 m. Returns that get through the gate tick after tick stop at the cap | 2: two consecutive short returns that agree within 0.25 m still pass, up to 3 m of retreat | U (gate, cap), G (`field_degrade`, with and without the gate) |
-| F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing | Follows what the range says | 3: keep inside the envelope | none |
+| F15 | Range sees something other than the wall | Thin pole, mesh, glass, a person | Guard holds off the wrong thing, or not at all | 3 | Nothing for the guard. The policy's own range input: F54 | The guard follows what the range says | 3: keep inside the envelope | none |
+| F54 | Range reads too far, reading after reading (policies that read the rangefinder, v24) | Glass, a mirror-like or wet face, water: the beam goes through or bounces away and reads what is behind, 0.5 to 3 m too far | The policy takes the wall to have moved away and flies at it: v24 struck the wall in 58.7 % of 768 simulated holds with such a sensor; v22, which does not read the range, in none | 4 | Long-step check on the policy's range input (`RangeReference`, since 1.12): a step to a longer distance counts only when the position estimate moved away from the wall by as much (within 0.25 m); otherwise the input is off until readings return to where the wall was | Flies on the position estimate, as v22 does, for as long as the reading is long: GLASSROW | 2 during a hold. 4 at the engage: a beam already through the glass sets the reference too far, the real wall then reads as too close and the drone backs away from it by that much, up to `SH_SHIFT_MAX` away from where the pilot put it. The wall guard still guards nothing (F15) | U (`test_wall_guard.cpp`), M (`docs/wall-range.md` "Readings that are too long"); no Gazebo flight |
 
 ### Obstacle sensors (keep-out)
 
@@ -305,7 +313,9 @@ table are checked against the module by `sim2real/px4/tests/test_safety_manual.p
 - F1, F2, F6 and F7 are one flight each on the earlier vision-height set-up; they should be
   re-flown on barometer height over more seeds and winds. F4 has seeds 1 to 4; seeds 5 to 8
   and longer silences are next (`docs/field-faults.md`, Next).
-- No test yet for F12 (wrong heading) or F15 (wrong surface).
+- No test yet for F12 (wrong heading) or F15 (wrong surface). F54 (a rangefinder reading
+  long on glass or a wet face) is a unit test and mock episodes with assumed numbers (0.5 to
+  3 m too far, 20 to 80 % of the time); no Gazebo flight and no real sensor on real glass.
 - F36 and F37 (dust, fog, low light) are one `degrade` setting on two seeds; a harsher
   degrade, more seeds and a longer cloud are next.
 - F46 (VIO runaway) is one setting on two seeds in Gazebo. After the trip the drone coasts
@@ -360,6 +370,7 @@ signed again. Record each one below.
 | 1.9 | 2026-11-09 | `023f699`, PR #168, and PR #159 for F8 | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7. Added before any signature: the pre-arm VIO check (`SH_WD_GND_V`, proposed row 2026-11-09): section 3 row, section 4 two messages, section 6, F47. F8: the Gate 2 numbers re-flown on the envelope's height reference (`EKF2_HGT_REF` 0): v22 holds about 0.3 m, 34 to 46 % below tuned PX4, where versions up to 1.8 quoted 43 to 45 % from flights on `EKF2_HGT_REF` 1 (no module change) | |
 | 1.10 | 2026-11-10 | this PR | Surface pass in the module (`SH_PASS_LEN`, `SH_PASS_DIR`, `SH_PASS_SPD`, `SH_PASS_T0`, off by default; Proposed decision row 2026-11-10): section 1, section 2 envelope row and do-not-use item, section 3 layer, section 4 three messages, F48 to F53, section 6 two rows, section 7 | |
 | 1.11 | 2026-11-10 | this PR | F8: the Gate 2 numbers scored like for like (decision row 2026-11-10: the height offset on the ground out, a fixed hold point for both controllers): v22 about 0.20 m against tuned PX4's 0.33 m, 39 to 41 % below, where 1.9 and 1.10 quoted 0.3 m and 34 to 46 % from the same flights against the setpoint as logged. No flight, no module change | |
+| 1.12 | 2026-11-10 | this PR | Long readings on glass, wet or mirror-like faces and water (Proposed decision row 2026-11-10): the policy's range input takes a step to a longer distance only when the position estimate moved by as much (`RangeReference`); section 2 do-not-use item rewritten and made stronger, F15, new F54, section 7. Found in the mock by the environmental-factors work before v24 flew anywhere | |
 
 ## Change control
 
