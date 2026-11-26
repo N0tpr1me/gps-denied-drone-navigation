@@ -7,7 +7,11 @@
 #
 #   python -m training.queue training/queues/airframe_sizes.yaml --dry-run --gpus 2
 #   python -m training.queue training/queues/airframe_sizes.yaml --smoke --device cpu
-#   python -m training.queue training/queues/airframe_sizes.yaml --gpus 2
+#   # on the server, inside Docker (docs/gpu-server.md "Runs in Docker"); the gz_* jobs fly
+#   # in the cloud (Gazebo benchmarks run there, decided 2026-11-09), so the server runs the rest:
+#   training/docker/run.sh python -m training.queue training/queues/airframe_sizes.yaml \
+#       --max-gpus 2 --only \
+#       v27_s0,v27_s1,v27h_s0,v27h_s1,sizes_score,sizes_score_big,sizes_check_s0,sizes_check_s1,sizes_check_h0,sizes_check_h1
 name: airframe_sizes
 reserve_cpus: 4
 gpu_job_cpus: 4
