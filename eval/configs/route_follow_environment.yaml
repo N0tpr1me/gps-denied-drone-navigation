@@ -1,0 +1,68 @@
+# Route Follow with the environmental factors on (docs/environment-factors.md): the same
+# corridor and tunnel mix as route_follow_stress.yaml, one factor at a time, against the
+# classical yardsticks (PD on the estimate, PD with range centring) and v2 (mock only, not
+# released). Tunnels are where pressure steps (doors, ventilation, a passing train) and the
+# rotors' own downwash coming back off the walls are worst, so those get their own rows; the
+# narrow-pipe rows come in pairs, with and without the rotor effects, so the difference is
+# the rotors and not the pipe. Ranges are physics or literature-shaped, not fitted.
+#   python -m training.launch --config eval/configs/route_follow_environment.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/route_follow_environment.yaml --device cpu
+name: route_follow_environment
+entrypoint: eval.route_follow
+seed: 7500
+expected_hours: 0.8
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  policies:
+    v2: training/policies/route_follow_v2.onnx
+  env:
+    airframe: gz_x500_sitl  # barometer height through the EKF2-like fusion
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  sets:
+    - name: nominal
+      env: {}
+    - name: hot_high  # 25 to 35 degC at 1000 to 1500 m: 0.74 to 0.86 of standard air
+      env: {ambient: {temperature_c: [25, 35], altitude_m: [1000, 1500], humidity: [0.2, 0.8]}}
+    - name: low_battery  # 3.4 to 3.6 V a cell, sag 5 to 15 %
+      env: {ambient: {battery_voltage: [0.92, 0.97], battery_sag: [0.05, 0.15]}}
+    - name: draughts  # a shaft or ventilation: up and down to 2 m/s on top of the draft
+      env: {disturbance: {mean_vertical: [-2.0, 2.0]}}
+    - name: pressure_steps  # 0.2 to 1 m on the barometer, about one every 20 s
+      env: {fusion: {baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0], baro_step_tau_s: 1.0}}
+    - name: baro_wind  # the draft on the barometer's port
+      env: {ambient: {baro_wind_m_per_mps2: [0.002, 0.006]}}
+    - name: rotors  # the corridor and tunnel mix with the rotors feeling the nearest surface
+      env: {ambient: {rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10]}}
+    - name: pipe  # narrow pipes, 0.8 to 1.1 m radius, no rotor effects (the control)
+      env: {route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}}
+    - name: pipe_rotors  # the same pipes with the rotors feeling the walls
+      env:
+        route: {tunnel_prob: 1.0, tunnel_radius_m: [0.8, 1.1]}
+        ambient: {rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.05], unsteady: [0.0, 0.10]}
+    - name: seeing_poor  # dark, flickering lights, wet walls: noise x1-3, drift x1-3, losses x1-5
+      env:
+        estimate: {degrade_prob: 1.0, degrade_noise_scale: [1.0, 3.0],
+                   degrade_walk_scale: [1.0, 3.0], degrade_jump_rate_scale: [1.0, 3.0],
+                   degrade_dropout_rate_scale: [1.0, 5.0]}
+    - name: field_day  # a moderate share of everything at once
+      env:
+        ambient: {temperature_c: [0, 35], altitude_m: [0, 800], humidity: [0.2, 0.9],
+                  battery_voltage: [0.95, 1.12], battery_sag: [0.0, 0.10],
+                  rotor_radius_m: [0.13, 0.25], wall_pull: [0.0, 0.03], unsteady: [0.0, 0.05],
+                  baro_wind_m_per_mps2: [0.0, 0.003]}
+        disturbance: {mean_vertical: [-1.0, 1.0]}
+        fusion: {baro_step_rate_hz: 0.02, baro_step_m: [0.1, 0.5]}
+        estimate: {degrade_prob: 0.5, degrade_noise_scale: [1.0, 3.0],
+                   degrade_walk_scale: [1.0, 3.0], degrade_jump_rate_scale: [1.0, 3.0],
+                   degrade_dropout_rate_scale: [1.0, 5.0]}
+smoke:
+  num_envs: 8
+  policies: {}
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
