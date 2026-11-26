@@ -246,8 +246,11 @@ What the table says, row group by row group:
    rangefinder may see through or bounce off, either the module refuses a range that steps
    by more than the gate while the position estimate did not move (v24 then flies like v22),
    or a policy is trained with glass in the mix. Training was tried and is not enough (59 %
-   to 47 %, below), so it has to be the module's check. Until that is built and shown to
-   work, v24's release notes and the safety manual need the stronger wording.
+   to 47 %, below), so it has to be the module's check.
+   Done 2026-11-26: the module and the mock take a longer range step only when the estimate
+   moved by as much (`docs/wall-range.md` "Readings that are too long"); on glass v24 no
+   longer touches the wall (2.9 % of episodes back off more than 3 m), and the safety
+   manual has the stronger wording (1.12, F54). The rows above are from before the check.
 2. **Height where the pressure moves.** In a tunnel with trains, a plant room, a building
    with doors and ventilation, the barometer is the weak sensor. The envelope already allows
    a downward rangefinder as the height reference (`EKF2_HGT_REF` 2); this result is the

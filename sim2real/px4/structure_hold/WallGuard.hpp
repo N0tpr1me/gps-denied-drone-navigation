@@ -253,30 +253,86 @@ private:
  * unusable until the next accepted reading, unless the reading before it, also rejected,
  * agrees with it within the gate (a real step is accepted at its second reading). The filter
  * belongs to the sensor, so it carries across engages. Gate 0 turns it off.
+ *
+ * A longer step needs the estimate's word too (the env's RangeSensor.long_step_check). On
+ * glass, a mirror-like or wet face, or over water, the beam goes through or bounces off and
+ * the sensor reads whatever is behind: readings 0.5 to 3 m too long that agree with each
+ * other, so the rule above accepted them, the input said the wall had moved away and the
+ * policy flew at it (v24 struck the wall in 59 % of mock episodes with such a sensor,
+ * docs/wall-range.md "Readings that are too long"). So a step to a longer distance is
+ * accepted only when the position estimate moved away from the wall by about as much (within
+ * the gate) since the last accepted reading. Otherwise the input stays unusable, and the
+ * policy flies on the estimate as it does without a rangefinder, until readings return to
+ * where the wall was. A step to a shorter distance is still taken on the sensor's word: it
+ * moves the vehicle away from the wall, and it is the case the input exists for (the
+ * estimate jumped and the vehicle followed it in). Such a step may also be a patch of dust
+ * the beam stopped on, so the distance it replaced is kept (with where the estimate was),
+ * and a longer step that lands back on it is accepted; after RANGE_STEADY_READINGS readings
+ * in a row at the new distance the old one is forgotten. ``along_m`` is the estimated
+ * position along the wall normal (toward the wall, any origin); not finite, no longer step
+ * is accepted.
+ *
+ * An engage starts this afresh: the last accepted distance is from the hold before, perhaps
+ * minutes and metres away, so the first step after an engage passes at its second reading
+ * whichever way it goes, as it always did, and the reference is latched on it; a distance
+ * kept from before the engage is dropped. The check then guards the latched reference. A
+ * beam that is through the glass at the engage is therefore latched as the wall: when the
+ * real wall shows, it reads as too close and the policy backs away from it, the safe way.
  */
+constexpr int RANGE_STEADY_READINGS = 40;  // 2 s of a 20 Hz sensor
+
 class RangeReference
 {
 public:
 	void setSpikeGate(float gate_m) { _gate_m = gate_m; }
 
-	void engage() { _valid = false; }
+	void engage()
+	{
+		_valid = false;
+		_fresh = true;
+		_have_before = false;
+	}
 
-	/** One tick, after WallGuard::apply; ``sample_us`` is the reading's own timestamp. */
-	void update(const WallGuardOutput &w, uint64_t sample_us)
+	/**
+	 * One tick, after WallGuard::apply; ``sample_us`` is the reading's own timestamp and
+	 * ``along_m`` the estimated position along the wall normal (pos . n).
+	 */
+	void update(const WallGuardOutput &w, uint64_t sample_us, float along_m)
 	{
 		if (!w.range_ok) { return; }
 
 		if (sample_us != _sample_us) {  // a new reading: through the gate once
 			_sample_us = sample_us;
-			const bool first = !_have_accepted;
-			const bool near_accepted = _have_accepted && std::fabs(w.wall_m - _accepted_m) <= _gate_m;
+			const bool gated = _gate_m > 0.f && _have_accepted;
+			const bool near_accepted = gated && std::fabs(w.wall_m - _accepted_m) <= _gate_m;
 			const bool near_pending = _have_pending && std::fabs(w.wall_m - _pending_m) <= _gate_m;
-			_sample_ok = !(_gate_m > 0.f) || first || near_accepted || near_pending;
+			const bool longer = w.wall_m > _accepted_m;
+			const bool seen = sawStep(w.wall_m, along_m, _accepted_m, _accepted_along_m);
+			const bool back = _have_before && sawStep(w.wall_m, along_m, _before_m, _before_along_m);
+			_sample_ok = !gated || near_accepted || (near_pending && (_fresh || !longer || seen || back));
 
 			if (_sample_ok) {
+				if (near_accepted) {
+					if (_have_before && ++_steady >= RANGE_STEADY_READINGS) { _have_before = false; }
+
+				} else if (gated) {  // a step
+					if (longer || _fresh) {
+						_have_before = false;
+
+					} else if (!seen && !_have_before) {
+						_before_m = _accepted_m;
+						_before_along_m = _accepted_along_m;
+						_have_before = true;
+					}
+
+					_steady = 0;
+				}
+
 				_accepted_m = w.wall_m;
+				_accepted_along_m = along_m;
 				_have_accepted = true;
 				_have_pending = false;
+				_fresh = false;
 
 			} else {
 				_pending_m = w.wall_m;
@@ -316,15 +372,30 @@ public:
 	float reference() const { return _ref_m; }
 
 private:
+	/**
+	 * True when the estimate moved along the normal by what the wall distance changed,
+	 * within the gate, between the reading at (``from_m``, ``from_along_m``) and this one.
+	 */
+	bool sawStep(float wall_m, float along_m, float from_m, float from_along_m) const
+	{
+		return std::fabs((from_m - wall_m) - (along_m - from_along_m)) <= _gate_m;  // false on NaN
+	}
+
 	float _gate_m{0.f};
 	float _ref_m{0.f};
 	bool _valid{false};
 	uint64_t _sample_us{0};
 	bool _sample_ok{false};
 	float _accepted_m{0.f};
+	float _accepted_along_m{0.f};
 	bool _have_accepted{false};
 	float _pending_m{0.f};
 	bool _have_pending{false};
+	float _before_m{0.f};  // the distance an unconfirmed shorter step replaced
+	float _before_along_m{0.f};
+	bool _have_before{false};
+	int _steady{0};
+	bool _fresh{true};  // no reading accepted since the engage: the first step passes either way
 };
 
 } // namespace structure_hold

@@ -1,0 +1,82 @@
+# Surface passes on v24 (docs/surface-passes.md): the pass recipe continued from v24, the
+# release for drones with a forward rangefinder, three seeds, then each judged against v24 in
+# the Gazebo-like check with a rangefinder on every flight. Three seeds from the start because
+# the same recipe on v22 (pass_s0, pass_s1, pass_s2) moved by seed as much as by recipe
+# (docs/gazebo_check.md "The same recipe on two more seeds"). Runs on its own or beside the
+# other queues; it needs nothing from them (no SITL image: the Gazebo re-fly is the cloud's).
+#
+# On the GPU server, inside Docker (training/docker/run.sh, docs/gpu-server.md "Runs in Docker"):
+#   training/docker/run.sh python -m training.queue training/queues/surface_passes_v24.yaml --dry-run --gpus 2
+#   training/docker/run.sh python -m training.queue training/queues/surface_passes_v24.yaml --smoke
+#   training/docker/run.sh python -m training.queue training/queues/surface_passes_v24.yaml --max-gpus 2
+#
+# Every run is under 1 h and 1 GPU: each training is a chain of two sub-1 h parts, so nothing
+# here needs --approved. About 7 GPU-hours, done about 4 h after the start on 2 free GPUs.
+name: surface_passes_v24
+reserve_cpus: 4
+gpu_job_cpus: 4
+
+jobs:
+  # ---------------------------------------------------------------- GPU: three seeds, one card each
+  - id: pass_v24_s0
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass_v24.yaml
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "v24 continued on passes (70 %) and plain holds (30 %), rangefinder as v24 trained it, 4096 drones, 2 parts of 1200 iterations, seed 0"
+
+  - id: pass_v24_s1
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass_v24.yaml
+    set: {seed: 1}
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "pass_v24_s0, seed 1"
+
+  - id: pass_v24_s2
+    gpu: true
+    launch: training/configs/structure_hold_ppo_pass_v24.yaml
+    set: {seed: 2}
+    chain: 2
+    chain_set: {params.init_actor_onnx: null, params.critic_warmup: 0}
+    hours: 1.6
+    why: "pass_v24_s0, seed 2"
+
+  # ---------------------------------------------------------------- GPU: the check, one seed per job
+  - id: pass_v24_check_s0
+    gpu: true
+    launch: eval/configs/gazebo_check_pass_v24.yaml
+    set: {params.candidates.pass_v24_s0: "{run:pass_v24_s0}/policy.onnx"}
+    after: [pass_v24_s0]
+    hours: 0.8
+    why: "pass_v24_s0 against v24 with a rangefinder on every flight; go/no-go: beats v24 with every rule passed, ring included"
+
+  - id: pass_v24_check_s1
+    gpu: true
+    launch: eval/configs/gazebo_check_pass_v24.yaml
+    set: {params.candidates.pass_v24_s1: "{run:pass_v24_s1}/policy.onnx"}
+    after: [pass_v24_s1]
+    hours: 0.8
+    why: "pass_v24_s1 against v24, the same check"
+
+  - id: pass_v24_check_s2
+    gpu: true
+    launch: eval/configs/gazebo_check_pass_v24.yaml
+    set: {params.candidates.pass_v24_s2: "{run:pass_v24_s2}/policy.onnx"}
+    after: [pass_v24_s2]
+    hours: 0.8
+    why: "pass_v24_s2 against v24, the same check"
+
+  # ---------------------------------------------------------------- not the server's: the re-fly
+  - id: gz_pass_v24
+    cmd: >
+      echo "fly the best passing seed in the cloud (Gazebo flies there): export its header, then
+      the 60 s hold (3 scenarios x seeds 1 to 8) and the wall1m_pass_* scenarios with
+      --rangefinder, against v24 and tuned PX4 on px4_tuned_v2.params (docs/surface-passes.md)"
+    smoke_cmd: "true"
+    after: [pass_v24_check_s0, pass_v24_check_s1, pass_v24_check_s2]
+    hours: 2.0
+    enabled: false
+    why: "only if the recipe beats v24 with every rule passed on at least two of the three seeds; release is Zain's decision"

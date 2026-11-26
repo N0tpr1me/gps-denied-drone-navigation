@@ -32,7 +32,10 @@ params:
     # generators, so v22 and the PD (which do not read it) fly the episodes they would without.
     range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
             scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
-            dropout_s: [0.2, 2.0]}
+            dropout_s: [0.2, 2.0], latch_reference: true}
+    # latch_reference: the input's reference latched from the reading at engage, as the module
+    # does (RangeReference), not the true standoff: the two differ when the beam is through
+    # glass at the engage. Since 2026-11-26; the rows logged before it are without.
     # The standard estimate corruption (eval rates), stated in full so a later change of a
     # default cannot silently move these rows.
     estimate:

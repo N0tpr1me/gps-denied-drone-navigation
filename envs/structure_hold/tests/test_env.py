@@ -588,6 +588,113 @@ def test_range_spike_gate_drops_one_outlier_and_accepts_a_real_step_at_its_secon
     assert off.range_input()[1].all()  # no gate: the outlier is used (clipped)
 
 
+def test_a_longer_range_step_needs_the_estimate_to_have_moved():
+    # Glass, a wet face, water: the beam reads what is behind, too long, reading after
+    # reading. The same sequence as test_wall_guard.cpp's (RangeReference).
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    env.step(hover_action(env))
+    take = torch.ones(2, dtype=torch.bool)
+    wall = env.clearance()
+    start = env.estimate_pos.clone()
+
+    def read(extra: float, moved: float = 0.0) -> bool:
+        # the estimate ``moved`` m toward the wall since the start, the reading ``extra`` long
+        env.estimate_pos = start + moved * env.wall_normal
+        env._take_range(take, wall + extra)
+        ok = env.range_input()[1]
+        assert ok.all() or not ok.any()
+        return bool(ok.all())
+
+    assert read(0.0)
+    assert not any(read(2.0 + 0.01 * (i % 3)) for i in range(20))  # through the glass
+    assert read(0.01)  # the wall again: used at once
+    # really 0.6 m further out after a dropout, and the estimate saw it: the second reading
+    assert not read(0.6, -0.6) and read(0.6, -0.6)
+    assert read(0.6, -0.1)  # an estimate jump with the reading still: used
+    # dust: two short returns that agree pass (away from the wall is the safe side), and
+    # so does the wall behind them, a longer step back onto where it was
+    assert not read(-0.3, -0.1) and read(-0.28, -0.1)
+    assert not read(0.6, -0.1) and read(0.6, -0.1)
+    assert not read(1.5, -0.1) and not read(1.5, -0.1) and read(0.6, -0.1)  # that goes once
+    # a shorter step that stays becomes the wall; the way back is then forgotten
+    assert not read(-0.1, -0.1) and read(-0.1, -0.1)
+    from envs.structure_hold.env import RANGE_STEADY_READINGS
+    assert all(read(-0.1, -0.1) for _ in range(RANGE_STEADY_READINGS))
+    assert not any(read(0.6, -0.1) for _ in range(5))
+
+    # switched off, the gate is the one from before: the second long reading is used
+    old = StructureHoldEnv(still_air(range=dataclasses.replace(rc, long_step_check=False)),
+                           num_envs=2, seed=5)
+    old.reset()
+    old.step(hover_action(old))
+    wall = old.clearance()
+    old._take_range(take, wall + 2.0)
+    assert not old.range_input()[1].any()
+    old._take_range(take, wall + 2.0)
+    assert old.range_input()[1].all()
+
+
+def test_an_engage_starts_the_long_step_check_afresh():
+    # The distance accepted in the hold before may be metres off: the first step after an
+    # engage passes at its second reading either way, and nothing kept from before the
+    # engage brings a longer distance back (RangeReference::engage).
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    env.step(hover_action(env))
+    take = torch.ones(2, dtype=torch.bool)
+    wall = env.clearance()
+
+    def read(extra: float) -> bool:
+        env._take_range(take, wall + extra)
+        return bool(env.range_input()[1].all())
+
+    assert not read(-0.5) and read(-0.5)  # a shorter step: the wall's distance is kept
+    assert not torch.isnan(env.range_before).any()
+    env.range_fresh[:] = True  # what a re-engage does
+    env.range_before[:] = math.nan
+    assert read(-0.5)  # the same distance: used, and the engage is no longer fresh
+    assert not read(0.0) and not read(0.0)  # what was kept before the engage is gone
+    env.range_fresh[:] = True
+    assert not read(1.1) and read(1.1)  # the first step after an engage, longer: taken
+    assert not read(2.0) and not read(2.0)  # after that the estimate has to agree again
+
+
+def test_latch_reference_takes_the_reading_at_engage_as_the_module_does():
+    rc = RangeSensor(present_prob=1.0, noise_std_m=0.0, noise_frac=0.0, rate_hz=100.0,
+                     latch_reference=True)
+    env = StructureHoldEnv(still_air(range=rc), num_envs=2, seed=5)
+    env.reset()
+    assert not env.range_input()[1].any()  # one reading is not a latch
+    env.step(hover_action(env))
+    err, ok = env.range_input()
+    assert ok.all() and env.range_latched.all()
+    # on the wall at the engage: the hold point's true distance, as without the option
+    torch.testing.assert_close(env.range_ref, env.clearance(env.hold_point), atol=2e-3, rtol=0)
+
+    # Through the glass at the engage, 2 m long: that is latched. When the wall shows, it
+    # reads as 2 m too close (clipped): the input pushes away from the face, never at it.
+    take = torch.ones(2, dtype=torch.bool)
+    env.range_latched[:] = False
+    env.range_fresh[:] = True
+    env.range_accepted[:] = math.nan
+    env.range_pending[:] = math.nan
+    wall = env.clearance()
+    env._take_range(take, wall + 2.0)
+    assert not env.range_input()[1].any()
+    env._take_range(take, wall + 2.0)
+    err, ok = env.range_input()
+    assert ok.all() and torch.allclose(err, torch.zeros(2), atol=0.3)
+    env._take_range(take, wall)
+    env._take_range(take, wall)
+    err, ok = env.range_input()
+    assert ok.all() and torch.allclose(err, torch.full((2,), rc.obs_clip_m))
+    with pytest.raises(ValueError, match="latch_reference"):
+        RangeSensor(present_prob=1.0, latch_reference=True, spike_gate_m=0.0)
+
+
 def test_step_pos_is_the_true_position_after_the_step_even_when_it_crashed():
     # step() resets a finished episode before it returns, so state.pos is then the next
     # episode's start; scorers read step_pos for the point the crash happened at.
