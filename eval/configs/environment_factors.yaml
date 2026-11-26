@@ -35,7 +35,7 @@ params:
             dropout_s: [0.2, 2.0], latch_reference: true}
     # latch_reference: the input's reference latched from the reading at engage, as the module
     # does (RangeReference), not the true standoff: the two differ when the beam is through
-    # glass at the engage. Since 2026-11-10; the rows logged before it are without.
+    # glass at the engage. Since 2026-11-26; the rows logged before it are without.
     # The standard estimate corruption (eval rates), stated in full so a later change of a
     # default cannot silently move these rows.
     estimate:

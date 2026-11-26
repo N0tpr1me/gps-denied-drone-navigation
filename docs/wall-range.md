@@ -131,7 +131,7 @@ outliers and 1 to 5 s sensor dropouts at 0.2 Hz both hold 0.164 m, the same as a
 where the rangefinder helps least (0.388 vs 0.484 m): with no estimate the error along the
 wall drifts and the range only pins the normal axis.
 
-## Readings that are too long (2026-11-10)
+## Readings that are too long (2026-11-26)
 
 On glass, a mirror-like or wet face, or over water, the beam goes through or bounces away
 and the sensor reads whatever is behind: too far by half a metre to several metres, reading

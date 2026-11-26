@@ -175,7 +175,7 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   released: its Gazebo re-fly with `--rangefinder` (cloud, 2026-11-09) came out tighter than
   v22 (mean p95 0.18 against 0.20 m, -5 to -12 %, 18 to 38 % less toward the wall, 0
   crashes), and the release is Zain's decision.
-- Long range readings (2026-11-10, Proposed, `docs/wall-range.md` "Readings that are too
+- Long range readings (2026-11-26, Proposed, `docs/wall-range.md` "Readings that are too
   long"): glass, a wet or mirror-like face and water make the rangefinder read too far, and
   v24 flew at the wall in the mock (59 % of episodes). `RangeReference` and the mock's gate
   (`range.long_step_check`, on by default) now take a step to a longer distance only when

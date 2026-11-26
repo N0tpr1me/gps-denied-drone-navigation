@@ -313,7 +313,7 @@ class RangeSensor:
     glass_extra_m: tuple[float, float] = (0.5, 3.0)
     glass_frac: tuple[float, float] = (0.2, 0.8)
     glass_dwell_s: float = 0.5
-    long_step_check: bool = True  # False is the gate as it was before 2026-11-10
+    long_step_check: bool = True  # False is the gate as it was before 2026-11-26
     latch_reference: bool = False
 
     def __post_init__(self) -> None:

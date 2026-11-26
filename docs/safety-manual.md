@@ -4,7 +4,7 @@
 | --- | --- |
 | Document | Structure Hold safety manual, with the failure table (FMEA) |
 | Version | 1.12, ready for sign-off (section 8); 1.0 to 1.11 were not signed |
-| Date | 2026-11-10 |
+| Date | 2026-11-26 |
 | Checked against | `main` at `868aeb4` (1.0) plus the pilot status messages of 1.1, the `field_degrade` flights of 1.2 (`def668f`), the GPS-on flights of 1.3 (`abc8fe7`, module unchanged), the height-reference value of 1.4, the wall guard spike gate of 1.5 (`9e0324e`), the keep-out of 1.6 (`cbb68ba`), the guarded modes' back-off of 1.7, the guards' retreat cap of 1.8 (`SH_SHIFT_MAX`), the VIO runaway trip and pre-arm VIO check of 1.9 (`SH_WD_VIO_DV`, `SH_WD_EV_CUT`, `SH_WD_GND_V`) the surface pass of 1.10 (`SH_PASS_LEN`, off by default) and the Gate 2 numbers scored like for like of 1.11 (F8, no module change): module parameters, trips, handback order and pilot messages as in `sim2real/px4/structure_hold/`; results as in `docs/baseline.md`, `docs/field-faults.md` and `docs/surface-passes.md` |
 | Owner | Zain |
 | Companion | `docs/integration-guide.md` (the interface: inputs, modes, trips, parameters, messages) |
@@ -370,7 +370,7 @@ signed again. Record each one below.
 | 1.9 | 2026-11-09 | `023f699`, PR #168, and PR #159 for F8 | VIO runaway in heavy dust (decision row 2026-11-09): section 2 visibility row, section 3 watchdog and entry checks, section 4 three messages, section 6 `SH_WD_VIO_DV` and `SH_WD_EV_CUT`, F46, section 7. Added before any signature: the pre-arm VIO check (`SH_WD_GND_V`, proposed row 2026-11-09): section 3 row, section 4 two messages, section 6, F47. F8: the Gate 2 numbers re-flown on the envelope's height reference (`EKF2_HGT_REF` 0): v22 holds about 0.3 m, 34 to 46 % below tuned PX4, where versions up to 1.8 quoted 43 to 45 % from flights on `EKF2_HGT_REF` 1 (no module change) | |
 | 1.10 | 2026-11-10 | this PR | Surface pass in the module (`SH_PASS_LEN`, `SH_PASS_DIR`, `SH_PASS_SPD`, `SH_PASS_T0`, off by default; Proposed decision row 2026-11-10): section 1, section 2 envelope row and do-not-use item, section 3 layer, section 4 three messages, F48 to F53, section 6 two rows, section 7 | |
 | 1.11 | 2026-11-10 | this PR | F8: the Gate 2 numbers scored like for like (decision row 2026-11-10: the height offset on the ground out, a fixed hold point for both controllers): v22 about 0.20 m against tuned PX4's 0.33 m, 39 to 41 % below, where 1.9 and 1.10 quoted 0.3 m and 34 to 46 % from the same flights against the setpoint as logged. No flight, no module change | |
-| 1.12 | 2026-11-10 | this PR | Long readings on glass, wet or mirror-like faces and water (Proposed decision row 2026-11-10): the policy's range input takes a step to a longer distance only when the position estimate moved by as much (`RangeReference`); section 2 do-not-use item rewritten and made stronger, F15, new F54, section 7. Found in the mock by the environmental-factors work before v24 flew anywhere | |
+| 1.12 | 2026-11-26 | this PR | Long readings on glass, wet or mirror-like faces and water (Proposed decision row 2026-11-26): the policy's range input takes a step to a longer distance only when the position estimate moved by as much (`RangeReference`); section 2 do-not-use item rewritten and made stronger, F15, new F54, section 7. Found in the mock by the environmental-factors work before v24 flew anywhere | |
 
 ## Change control
 

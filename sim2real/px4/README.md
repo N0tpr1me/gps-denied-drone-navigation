@@ -301,7 +301,7 @@ and moves it back with each wall-guard shift; the input is that reference minus
 `range × cos(body x, normal)`, positive toward the wall, clipped at `RANGE_OBS_CLIP_M`, and
 zero with the flag off whenever the guard has no usable sample. The guard does not need to
 be on (`SH_WALL_MIN 0` still measures). A step to a longer distance counts only when the
-position estimate moved away from the wall by as much (since 2026-11-10: glass, wet faces
+position estimate moved away from the wall by as much (since 2026-11-26: glass, wet faces
 and water read too far, and the policy would fly at the wall to close the gap). See
 `docs/wall-range.md`.
 
