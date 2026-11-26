@@ -39,6 +39,15 @@ Termination on the TRUE state: ``contact`` (any wall, floor or ceiling within
 cross-track error, error to the target, clearance and distance to the last waypoint in
 ``step_*`` attributes before resetting finished envs, for the scorer
 (``eval/route_follow.py``).
+
+The surroundings (``cfg.ambient``, ``envs/ambient``, off by default; drawn per episode from a
+generator of their own, so a config without them flies the same episodes): air density,
+battery level and rain scale the thrust and torque a command gives and the draft's push, the
+battery sags under load, and near a surface the rotors feel it. A tunnel's nearest surface
+can be a wall, the floor or the roof, so the cushion (floor), the pull upward (roof) and the
+pull sideways (wall) act on whichever is nearest, split by which way it faces; the downwash
+coming back grows as that surface comes closer. A barometer fused for height
+(``fusion.height_source: baro``) also reads the airspeed past its port.
 """
 
 from __future__ import annotations
@@ -49,6 +58,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from envs.ambient import nearness, sag_gain, sample_ambient, surface_gain
 from envs.disturbance import sample_params
 from envs.disturbance import torch_adapter as wind
 from envs.estimate.ekf import TorchFusion
@@ -57,7 +67,13 @@ from envs.route_follow.config import RANGE_DIRS, RouteFollowConfig
 from envs.route_follow.geometry import RouteGeometry
 from envs.route_follow.routes import sample_routes
 from envs.sims import QuadState, RatePid, make_sim
-from envs.sims.torch_quad import GRAVITY, quat_from_yaw, quat_rotate, quat_rotate_inverse
+from envs.sims.torch_quad import (
+    GRAVITY,
+    body_z_world,
+    quat_from_yaw,
+    quat_rotate,
+    quat_rotate_inverse,
+)
 
 OBS = {
     "pos_err": slice(0, 3),
@@ -151,6 +167,18 @@ class RouteFollowEnv:
         # Last step's true diagnostics, before finished envs reset (module docstring).
         self.step_cross_track, self.step_track_err = z(n), z(n)
         self.step_clearance, self.step_to_end = z(n), z(n)
+        # The surroundings (cfg.ambient): their own generators, so nothing else moves.
+        self.ambient_rng = np.random.default_rng([int(seed), 0xA3B])
+        self.ambient_gen = torch.Generator(device=dev).manual_seed(int(seed) * 7907 + 0xA3B)
+        ones = lambda: torch.ones(n, dtype=dt, device=dev)  # noqa: E731
+        self.amb_power, self.amb_drag, self.amb_mass = ones(), ones(), ones()
+        self.amb_sag, self.amb_down, self.amb_radius = z(n), z(n), z(n)
+        self.amb_ground_coef, self.amb_ceiling_coef = z(n), z(n)
+        self.amb_wall_pull, self.amb_unsteady, self.amb_baro_wind = z(n), z(n), z(n)
+        self.amb_cmd_per_n = torch.full((n,), self.thrust_cmd_per_n, dtype=dt, device=dev)
+        self.amb_max_thrust = torch.full((n,), cfg.quad.max_thrust, dtype=dt, device=dev)
+        self.ambient_force, self.unsteady_noise = z(n, 3), z(n, 3)
+        self.baro_wind_ref, self.baro_wind_err = z(n), z(n)
         self.reset()
 
     # ------------------------------------------------------------ helpers
@@ -227,6 +255,8 @@ class RouteFollowEnv:
                     self.range_rng.random(k) < cfg.ranges.dust_prob, device=self.device)
         self.range_meas[env_ids] = math.inf
         self.range_sampled[env_ids] = False
+        if cfg.ambient.active:
+            self._draw_ambient(env_ids)
         self._update_target()
 
     def place_on_target(self) -> None:
@@ -313,6 +343,89 @@ class RouteFollowEnv:
                                        rot(state.vel, -1.0))
         return rot(local, 1.0)
 
+    def _draw_ambient(self, env_ids: torch.Tensor) -> None:
+        """One episode's surroundings for ``env_ids``, as Structure Hold draws them: PX4's
+        hover-thrust estimate keeps hover where it was, so what changes is the headroom above
+        it (maximum thrust and torque times ``power``), the draft's push (times the density)
+        and the weight of the rain on the airframe."""
+        cfg, q = self.cfg, self.cfg.quad
+        p = sample_ambient(cfg.ambient, int(env_ids.numel()), self.ambient_rng)
+        t = lambda a: torch.as_tensor(a, dtype=self.dtype, device=self.device)  # noqa: E731
+        self.sim.set_airframe(env_ids, mass=q.mass * p.mass_scale,
+                              max_thrust=q.max_thrust * p.power,
+                              max_torque=np.asarray(q.max_torque)[None, :] * p.power[:, None])
+        hover_frac = np.minimum(1.0, q.mass * p.mass_scale * GRAVITY / (q.max_thrust * p.power))
+        u_hover = cfg.actuation.command_for_fraction(hover_frac)
+        self.amb_cmd_per_n[env_ids] = t(u_hover / (q.mass * GRAVITY))
+        self.amb_max_thrust[env_ids] = t(q.max_thrust * p.power)
+        self.amb_mass[env_ids] = t(p.mass_scale)
+        self.amb_power[env_ids] = t(p.power)
+        self.amb_drag[env_ids] = t(p.density_ratio)
+        self.amb_sag[env_ids] = t(p.battery_sag)
+        self.amb_down[env_ids] = t(p.down_force_n)
+        self.amb_radius[env_ids] = t(p.rotor_radius_m)
+        self.amb_ground_coef[env_ids] = t(p.ground_coef)
+        self.amb_ceiling_coef[env_ids] = t(p.ceiling_coef)
+        self.amb_wall_pull[env_ids] = t(p.wall_pull)
+        self.amb_unsteady[env_ids] = t(p.unsteady)
+        self.amb_baro_wind[env_ids] = t(p.baro_wind_m_per_mps2)
+        self.ambient_force[env_ids] = 0.0
+        self.unsteady_noise[env_ids] = 0.0
+        self.baro_wind_ref[env_ids] = 0.0
+        self.baro_wind_err[env_ids] = 0.0
+
+    def _ambient_force(self, thrust: torch.Tensor) -> torch.Tensor:
+        """What the surroundings add to the draft's force this step, (N, 3) N, world: the
+        rain's momentum and, near the nearest surface, the rotors' cushion off a floor, the
+        pull up into a roof or sideways into a wall, and the downwash coming back. The
+        surface's direction is the clearance's gradient (it points away from the surface)."""
+        amb, st = self.cfg.ambient, self.sim.state
+        f = torch.zeros(self.num_envs, 3, dtype=self.dtype, device=self.device)
+        f[:, 2] = -self.amb_down
+        if not amb.surfaces:
+            return f
+        pos = torch.nan_to_num(st.pos)
+        d = self.geo.clearance(pos)
+        h = 0.02
+        eye = torch.eye(3, dtype=self.dtype, device=self.device) * h
+        grad = torch.stack([self.geo.clearance(pos + eye[i]) - d for i in range(3)], -1) / h
+        away = grad / grad.norm(dim=-1, keepdim=True).clamp(min=1e-6)  # from the surface
+        floor, roof = away[:, 2].clamp(min=0.0), (-away[:, 2]).clamp(min=0.0)
+        side = torch.sqrt((1.0 - away[:, 2] ** 2).clamp(min=0.0))
+        r = self.amb_radius
+        x = nearness(r, d)
+        gain = (1.0 + floor * (surface_gain(r, d, self.amb_ground_coef) - 1.0)
+                + roof * (surface_gain(r, d, self.amb_ceiling_coef) - 1.0))
+        f = f + ((gain - 1.0) * thrust)[:, None] * body_z_world(st.quat)
+        toward = -away.clone()
+        toward[:, 2] = 0.0
+        toward = toward / toward.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        f = f + (self.amb_wall_pull * thrust * x * x * side)[:, None] * toward
+        if amb.unsteady[1] > 0:
+            a = math.exp(-self.dt / amb.unsteady_tau_s)
+            self.unsteady_noise = a * self.unsteady_noise + math.sqrt(1.0 - a * a) * torch.randn(
+                self.num_envs, 3, generator=self.ambient_gen, device=self.device,
+                dtype=self.dtype)
+            near = (x * x).clamp(max=1.0)
+            f = f + (self.amb_unsteady * thrust * near)[:, None] * self.unsteady_noise
+        return torch.nan_to_num(f)
+
+    def _baro_wind(self, state: QuadState) -> torch.Tensor:
+        """How far the barometer's reading has moved since the episode began because of the
+        air moving past its port, (N,) m (``cfg.ambient.baro_wind_m_per_mps2``). The draft is
+        turned along the route, which does not change its speed against the drone."""
+        x = self.geo.segment_x_at(self.target_s) * self.draft_sign[:, None]
+        heading = torch.atan2(x[:, 1], x[:, 0])
+        c, s = torch.cos(heading), torch.sin(heading)
+        v = state.vel
+        local_vel = torch.stack([c * v[:, 0] + s * v[:, 1], -s * v[:, 0] + c * v[:, 1],
+                                 v[:, 2]], -1)
+        air = wind.air_velocity(self.wind, self.episode_time, state.pos) - local_vel
+        err = torch.nan_to_num(self.amb_baro_wind * (air * air).sum(-1))
+        self.baro_wind_ref = torch.where(self.episode_step == 1, err, self.baro_wind_ref)
+        self.baro_wind_err = err - self.baro_wind_ref
+        return self.baro_wind_err
+
     # ------------------------------------------------------------ stepping
 
     def get_observations(self) -> tuple[torch.Tensor, dict]:
@@ -330,13 +443,32 @@ class RouteFollowEnv:
         rate_cmd = actions[:, :3] * cfg.max_rate_rad_s
         self.rate_sp += self.rate_lag_alpha[:, None] * (rate_cmd - self.rate_sp)
         thrust = 0.5 * (actions[:, 3] + 1.0) * cfg.quad.max_thrust
-        if cfg.actuation.thrust_via_module:
+        ambient = cfg.ambient.active
+        if ambient:
+            # The module's mapping through this episode's hover point, then the battery's sag
+            # under load (the top of the throttle gives less than its share).
+            cap = self.amb_max_thrust
+            if cfg.actuation.thrust_via_module:
+                u = (thrust * self.amb_cmd_per_n).clamp(*cfg.actuation.thrust_cmd_range)
+                thrust = cap * cfg.actuation.thrust_fraction(u)
+            else:
+                thrust = thrust * self.amb_mass
+            weight_n = cfg.quad.mass * self.amb_mass * GRAVITY
+            thrust = thrust * sag_gain(self.amb_sag, (thrust / cap).clamp(0.0, 1.0),
+                                       (weight_n / cap).clamp(max=1.0))
+        elif cfg.actuation.thrust_via_module:
             u = (thrust * self.thrust_cmd_per_n).clamp(*cfg.actuation.thrust_cmd_range)
             thrust = cfg.quad.max_thrust * cfg.actuation.thrust_fraction(u)
         torque = self.rate_pid(self.rate_sp, self.sim.state.ang_vel)
         self.wind_force = self._draft_force(self.sim.state)
+        force = self.wind_force
+        if ambient:
+            torque = torque * self.amb_power[:, None]
+            self.wind_force = self.wind_force * self.amb_drag[:, None]
+            self.ambient_force = self._ambient_force(self.sim.thrust)
+            force = self.wind_force + self.ambient_force
         vel_before = self.sim.state.vel.clone()
-        state = self.sim.step(thrust, torque, self.wind_force)
+        state = self.sim.step(thrust, torque, force)
         self.episode_step += 1
         self.episode_time += cfg.dt
         self._update_target()
@@ -353,8 +485,12 @@ class RouteFollowEnv:
         if self.fusion is not None:
             accel = torch.where(finite[:, None], (state.vel - vel_before) / cfg.dt,
                                 torch.zeros_like(vel_before))
+            extra = {}
+            if cfg.ambient.baro_wind and cfg.fusion.baro:
+                extra["baro_offset"] = self._baro_wind(state)
             self.estimate_pos, self.estimate_vel = self.fusion.step(accel, est.pos, est.vel,
-                                                                    ~est.stale, true_pos=state.pos)
+                                                                    ~est.stale, true_pos=state.pos,
+                                                                    **extra)
         self.estimate_stale, self.estimate_age = est.stale, est.age
 
         # Termination and reward on the TRUE state.

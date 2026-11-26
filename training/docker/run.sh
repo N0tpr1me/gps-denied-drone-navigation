@@ -5,7 +5,7 @@
 # nvidia-smi check can still pick only free cards (CUDA_VISIBLE_DEVICES uses host indices).
 #
 #   training/docker/run.sh build                    # once, and after a dependency change
-#   training/docker/run.sh smoke                    # tests + the selfcheck smoke on GPU
+#   training/docker/run.sh smoke                    # torch's CUDA check + the selfcheck smoke on GPU
 #   training/docker/run.sh <command ...>            # e.g. python -m training.queue ...
 set -euo pipefail
 
