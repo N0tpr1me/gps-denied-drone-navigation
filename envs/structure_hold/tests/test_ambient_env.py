@@ -235,3 +235,21 @@ def test_wind_on_the_static_port_moves_the_fused_height():
         ref.state.pos[:, 2] - ref.hold_point[:, 2])
     torch.testing.assert_close(moved, -port, atol=0.1, rtol=0.5)
     assert not ref.baro_wind_err.any()
+
+
+def test_height_from_a_downward_rangefinder_rides_out_the_pressure_steps():
+    """Doors and ventilation move the barometer's height and the hold with it; with the
+    downward rangefinder as the height reference (``fusion.height_source: range``) the hold
+    stays where it was."""
+    doors = {"baro_step_rate_hz": 0.2, "baro_step_m": [0.5, 1.0], "baro_step_tau_s": 1.0}
+    base = dict(STILL, episode_length_s=30.0)
+    errs = {}
+    for src in ("baro", "range"):
+        fusion = dataclasses.replace(on("gz_x500_sitl").fusion, height_source=src,
+                                     **{k: tuple(v) if isinstance(v, list) else v
+                                        for k, v in doors.items()})
+        env = StructureHoldEnv(on("gz_x500_sitl", **base, fusion=fusion), num_envs=16, seed=2)
+        fly_pd(env, 25.0)
+        errs[src] = float((env.state.pos[:, 2] - env.hold_point[:, 2]).abs().mean())
+    assert errs["baro"] > 0.3  # a few doors in 25 s, each 0.5 to 1 m
+    assert errs["range"] < 0.1

@@ -72,7 +72,7 @@ station, vision in the policy. The module consumes the drone's existing position
 | --- | --- |
 | `envs/disturbance/` | Stateless wind + near-wall force model (NumPy core, torch adapter); near-wall flow terms off by default (`docs/near-wall-flow.md`); an optional second surface (a deck overhead: its shelter and edge shedding; `docs/bridge-holds.md`) |
 | `envs/ambient/` | The air and the power (NumPy only; `ambient:` in an env config, off by default): air density from temperature, altitude and humidity, battery level and sag, rain, ground, ceiling and wall effect on the rotors, wind on the barometer's port. The list of every environmental factor, where each one lives and what is still missing is `docs/environment-factors.md` |
-| `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning), the EKF2-like fusion (`ekf.py`; barometer pressure steps, `baro_step_*`), poor seeing per episode (`degrade_*`: flicker, glare, blank or wet walls, smoke; severities assumed) and the heading error a compass near steel puts in the attitude (`heading.py`, `heading_error:` in an env config, off by default; `docs/heading-error.md`) |
+| `envs/estimate/` | Estimate corruption (delay, noise, bias, jumps, dropouts, dead-reckoning), the EKF2-like fusion (`ekf.py`; barometer pressure steps, `baro_step_*`; a downward rangefinder as the height reference, `height_source: range`), poor seeing per episode (`degrade_*`: flicker, glare, blank or wet walls, smoke; severities assumed) and the heading error a compass near steel puts in the attitude (`heading.py`, `heading_error:` in an env config, off by default; `docs/heading-error.md`) |
 | `envs/sims/` | Simulator backends behind one seam (thrust, body torque, external force in; `QuadState` out), PX4-shaped rate PID |
 | `envs/structure_hold/` | The task: env, reward, airframe presets (`airframes.py`: `gz_x500`, `gz_x500_sitl`), PD yardstick, fallback, surface passes (`passes.py`: the hold point moving 5 m along or up the wall, `surface_pass`, off by default; `docs/surface-passes.md`) |
 | `envs/route_follow/` | Route Follow (second capability): random corridor and tunnel routes, plus arched drifts, narrowed stretches and side branches (`routes.py`), walls, target and rangefinder beams on tensors (`geometry.py`), the env, the PD yardsticks (estimate only, and with range centring); `ambient:` acts on the nearest wall, floor or roof (`docs/environment-factors.md`) |
@@ -269,9 +269,11 @@ the after-merge run on main runs Python 3.11 only, sitl-image does not re-run on
   Offboard on trajectory setpoints (`pass_flight.py`), scored by `eval/pass_score.py`; level
   with a healthy estimate, v22 ahead on the VIO-jump seed, no crash.
   `pass_s0` (`training/policies/structure_hold_pass_s0.*`) is the server's pass-trained
-  candidate: a little tighter than v22 on the same Gazebo passes, not released (it fails the
-  release check's ring rule by a small margin and has not flown the hold benchmark; a
-  release is Zain's call).
+  candidate: a little tighter than v22 on the same Gazebo passes and on the 60 s hold
+  benchmark (like for like 0.18 against 0.20 m, 7 to 15 %, 2026-11-10), not released: it
+  fails the release check's ring rule by a small margin. Its recipe on two more seeds
+  (2026-11-26) holds 21 to 23 % tighter than v22 in the check and fails the same ring rule
+  each time (`docs/gazebo_check.md`); a release is Zain's call.
 - Heading error near steel (2026-11-09, `docs/heading-error.md`): in the mock v22 holds a
   15 deg wrong heading but circles into the wall at 30 deg (100 % crash, the PD holds); the
   server queue `training/queues/heading_error.yaml` trains two heading candidates. In Gazebo
