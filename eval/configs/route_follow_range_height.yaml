@@ -1,0 +1,50 @@
+# Route Follow with a downward rangefinder as EKF2's height reference (fusion.height_source
+# range, EKF2_HGT_REF 2; docs/environment-factors.md "Height from a downward rangefinder"):
+# the barometer's pressure steps (doors, ventilation, a passing train), which are the worst
+# environmental factor in tunnels, with and without it. The range height is right only over
+# a level floor, so the level rows are the fix and the climbing rows (the default routes,
+# -10 to 10 deg a segment) show what it costs where the floor rises. Classical yardsticks
+# and v2 (mock only, not released); v2 trained on the barometer.
+#   python -m training.launch --config eval/configs/route_follow_range_height.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/route_follow_range_height.yaml --device cpu
+name: route_follow_range_height
+entrypoint: eval.route_follow
+seed: 7500
+expected_hours: 0.4
+gpus: 1
+params:
+  num_envs: 256
+  episodes: 1
+  policies:
+    v2: training/policies/route_follow_v2.onnx
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 30.0
+    contact_radius_m: 0.40
+    ranges: {present_prob: 0.7, outlier_prob: 0.01}
+  sets:
+    - name: level  # level routes, barometer height, no pressure steps
+      env: {route: {climb_deg: [0.0, 0.0]}}
+    - name: level_doors  # 0.2 to 1 m on the barometer, about one every 20 s
+      env:
+        route: {climb_deg: [0.0, 0.0]}
+        fusion: {baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0], baro_step_tau_s: 1.0}
+    - name: level_range  # level routes, height from the downward rangefinder
+      env:
+        route: {climb_deg: [0.0, 0.0]}
+        fusion: {height_source: range}
+    - name: level_doors_range
+      env:
+        route: {climb_deg: [0.0, 0.0]}
+        fusion: {height_source: range, baro_step_rate_hz: 0.05, baro_step_m: [0.2, 1.0],
+                 baro_step_tau_s: 1.0}
+    - name: climbing_range  # the default routes: the floor rises and falls under the drone
+      env: {fusion: {height_source: range}}
+smoke:
+  num_envs: 8
+  policies: {}
+  env:
+    airframe: gz_x500_sitl
+    episode_length_s: 8.0
+    contact_radius_m: 0.40
+    fusion: {height_source: range}

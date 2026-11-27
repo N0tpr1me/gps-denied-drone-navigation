@@ -256,7 +256,7 @@ int main()
 		// Engage at the vehicle, wall 1.5 m ahead: reference 1.5 m, error 0.
 		float hold[3] = {0.f, 0.f, -2.5f};
 		WallGuardOutput o = g.apply(range(1.5f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 1u);
+		ref.update(o, 1u, 0.f);
 		CHECK(ref.valid() && near(ref.reference(), 1.5f));
 		CHECK(ref.error(o, err) && near(err, 0.f));
 
@@ -264,20 +264,20 @@ int main()
 		// clearance follows the estimate, the reference and the error do not.
 		const float jumped[3] = {0.4f, 0.f, -2.5f};
 		o = g.apply(range(1.5f), NOW, jumped, n_north, bx_north, hold);
-		ref.update(o, 2u);
+		ref.update(o, 2u, 0.4f);
 		CHECK(near(o.clearance_m, 1.9f));
 		CHECK(near(ref.reference(), 1.5f));
 		CHECK(ref.error(o, err) && near(err, 0.f));
 
 		// The vehicle really moves 0.3 m toward the wall: error +0.3 m.
 		o = g.apply(range(1.2f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 3u);
+		ref.update(o, 3u, 0.f);
 		CHECK(ref.error(o, err) && near(err, 0.3f));
 
 		// The guard shifts the hold point back 0.4 m: the reference moves with it.
 		float near_hold[3] = {1.f, 0.f, -2.5f};  // hold point 1 m ahead, wall 1.3 m ahead
 		o = g.apply(range(1.3f), NOW, origin, n_north, bx_north, near_hold);
-		ref.update(o, 4u);
+		ref.update(o, 4u, 0.f);
 		CHECK(near(o.shift_m, 0.4f));
 		CHECK(near(ref.reference(), 1.9f));
 
@@ -285,7 +285,7 @@ int main()
 		RangeSample stale = range(1.5f);
 		stale.timestamp_us = NOW - 500000;
 		o = g.apply(stale, NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 5u);
+		ref.update(o, 5u, 0.f);
 		CHECK(!ref.error(o, err) && near(err, 0.f));
 		ref.engage();
 		CHECK(!ref.valid());
@@ -295,7 +295,7 @@ int main()
 		const float bx_pitch[3] = {std::cos(a), 0.f, -std::sin(a)};
 		float hold2[3] = {0.f, 0.f, -2.5f};
 		o = g.apply(range(2.f), NOW, origin, n_north, bx_pitch, hold2);
-		ref.update(o, 6u);
+		ref.update(o, 6u, 0.f);
 		CHECK(near(ref.reference(), 2.f * std::cos(a)));
 	}
 
@@ -308,35 +308,188 @@ int main()
 		float err = 0.f;
 		float hold[3] = {0.f, 0.f, -2.5f};
 		WallGuardOutput o = g.apply(range(1.5f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 1u);
+		ref.update(o, 1u, 0.f);
 		CHECK(ref.error(o, err) && near(err, 0.f));
 
 		o = g.apply(range(6.0f), NOW, origin, n_north, bx_north, hold);  // an outlier
-		ref.update(o, 2u);
+		ref.update(o, 2u, 0.f);
 		CHECK(!ref.error(o, err));
-		ref.update(o, 2u);  // the same reading on the next tick: still rejected
+		ref.update(o, 2u, 0.f);  // the same reading on the next tick: still rejected
 		CHECK(!ref.error(o, err));
 
 		o = g.apply(range(1.52f), NOW, origin, n_north, bx_north, hold);  // back to normal
-		ref.update(o, 3u);
+		ref.update(o, 3u, 0.f);
 		CHECK(ref.error(o, err) && near(err, -0.02f));
 
 		o = g.apply(range(1.0f), NOW, origin, n_north, bx_north, hold);  // a real 0.5 m step
-		ref.update(o, 4u);
+		ref.update(o, 4u, 0.f);
 		CHECK(!ref.error(o, err));
 		o = g.apply(range(1.01f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 5u);
+		ref.update(o, 5u, 0.f);
 		CHECK(ref.error(o, err) && near(err, 0.49f));
 		CHECK(near(ref.reference(), 1.5f));
 
 		// A latch is never taken on a rejected reading.
 		ref.engage();
 		o = g.apply(range(8.0f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 6u);
+		ref.update(o, 6u, 0.f);
 		CHECK(!ref.valid());
 		o = g.apply(range(1.02f), NOW, origin, n_north, bx_north, hold);
-		ref.update(o, 7u);
+		ref.update(o, 7u, 0.f);
 		CHECK(ref.valid() && near(ref.reference(), 1.02f));
+	}
+
+	// A longer step needs the estimate's word (glass, a wet or mirror-like face, water: the
+	// beam reads what is behind, 0.5 to 3 m too far, reading after reading).
+	{
+		WallGuard g = guard(0.f);
+		RangeReference ref{};
+		ref.setSpikeGate(0.25f);
+		float err = 0.f;
+		float hold[3] = {0.f, 0.f, -2.5f};
+		uint64_t t = 0;
+		const auto read = [&](float range_m, float along_m) {
+			const float pos[3] = {std::isfinite(along_m) ? along_m : 0.f, 0.f, -2.5f};
+			RangeSample r = range(range_m);
+			r.timestamp_us = NOW - 1000 + ++t;
+			const WallGuardOutput o = g.apply(r, NOW, pos, n_north, bx_north, hold);
+			ref.update(o, r.timestamp_us, along_m);
+			return ref.error(o, err);
+		};
+
+		CHECK(read(1.5f, 0.f) && near(err, 0.f));
+
+		// Through the glass: 2 m too long for a second, the estimate still. Never used.
+		for (int i = 0; i < 20; i++) { CHECK(!read(3.5f + 0.01f * (i % 3), 0.f)); }
+
+		// The wall again: used at once.
+		CHECK(read(1.51f, 0.f) && near(err, -0.01f));
+
+		// The vehicle really backs off 0.6 m between two readings (a dropout) and the
+		// estimate saw it: accepted at the second reading, as before.
+		CHECK(!read(2.1f, -0.6f));
+		CHECK(read(2.1f, -0.6f) && near(err, -0.6f));
+
+		// The estimate jumps 0.5 m (the vehicle has not moved, nor the reading): used.
+		CHECK(read(2.1f, -0.1f) && near(err, -0.6f));
+
+		// Dust: two short returns that agree are taken (the safe side: away from the wall)...
+		CHECK(!read(1.2f, -0.1f));
+		CHECK(read(1.22f, -0.1f) && near(err, 0.28f));
+		// ...and the wall behind the dust is accepted again, though it is a longer step
+		// the estimate did not see: it is where the wall was.
+		CHECK(!read(2.1f, -0.1f));
+		CHECK(read(2.1f, -0.1f) && near(err, -0.6f));
+		// That goes once: a longer step from here is glass again.
+		CHECK(!read(3.0f, -0.1f));
+		CHECK(!read(3.0f, -0.1f));
+		CHECK(read(2.1f, -0.1f));
+
+		// A shorter step that stays (the vehicle really is closer; the estimate jumped in
+		// the dropout and never saw it) becomes the wall after RANGE_STEADY_READINGS: the
+		// distance it replaced is forgotten, and a longer step back to it is not taken.
+		CHECK(!read(1.4f, -0.1f));
+		CHECK(read(1.4f, -0.1f) && near(err, 0.1f));
+		for (int i = 0; i < RANGE_STEADY_READINGS; i++) { CHECK(read(1.4f, -0.1f)); }
+		for (int i = 0; i < 5; i++) { CHECK(!read(2.1f, -0.1f)); }
+
+		// No estimate (not finite): shorter steps still pass, longer ones never.
+		CHECK(read(1.4f, NAN));
+		CHECK(!read(0.9f, NAN));
+		CHECK(read(0.9f, NAN) && near(err, 0.6f));
+		for (int i = 0; i < 5; i++) { CHECK(!read(1.4f, NAN)); }
+
+		// Gate off: every reading is used, as before.
+		RangeReference open{};
+		float hold2[3] = {0.f, 0.f, -2.5f};
+		WallGuardOutput o = g.apply(range(1.5f), NOW, origin, n_north, bx_north, hold2);
+		open.update(o, 1u, 0.f);
+		o = g.apply(range(4.f), NOW, origin, n_north, bx_north, hold2);
+		open.update(o, 2u, 0.f);
+		CHECK(open.error(o, err) && near(err, -2.5f));
+	}
+
+	// An engage starts the check afresh. The distance accepted in the hold before may be
+	// metres off, so the first step after an engage passes at its second reading whichever
+	// way it goes, and the reference is latched there; nothing kept from before the engage
+	// can bring a longer distance back.
+	{
+		WallGuard g = guard(0.f);
+		RangeReference ref{};
+		ref.setSpikeGate(0.25f);
+		float err = 0.f;
+		float hold[3] = {0.f, 0.f, -2.5f};
+		uint64_t t = 0;
+		const auto read = [&](float range_m) {
+			RangeSample r = range(range_m);
+			r.timestamp_us = NOW - 1000 + ++t;
+			const WallGuardOutput o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+			ref.update(o, r.timestamp_us, 0.f);
+			return ref.error(o, err);
+		};
+
+		// First hold at 1.5 m; the next engage is at 2.6 m and the estimate was reset in
+		// between (it reads the same place): the longer distance is latched all the same.
+		ref.engage();
+		CHECK(read(1.5f) && near(ref.reference(), 1.5f));
+		ref.engage();
+		CHECK(!read(2.6f) && !ref.valid());
+		CHECK(read(2.6f) && near(ref.reference(), 2.6f) && near(err, 0.f));
+		CHECK(!read(4.f) && !read(4.f));  // after the latch a longer step needs the estimate
+		CHECK(read(2.6f));
+
+		// The hold before ended with the beam through the glass (3.5 m latched and accepted);
+		// this engage is on the wall at 1.5 m. The glass coming back is a longer step the
+		// estimate did not see, and nothing from before the engage says the wall was there.
+		ref.engage();
+		CHECK(!read(3.5f) && read(3.5f) && near(ref.reference(), 3.5f));
+		ref.engage();
+		CHECK(!read(1.5f) && !ref.valid());
+		CHECK(read(1.5f) && near(ref.reference(), 1.5f));
+		for (int i = 0; i < 10; i++) { CHECK(!read(3.5f)); }
+		CHECK(read(1.5f) && near(err, 0.f));
+
+		// Engaged through the glass (3.5 m latched as the wall). When the real wall shows
+		// at 1.5 m it reads as 2 m too close: the input pushes away from it, never at it.
+		ref.engage();
+		CHECK(!read(3.5f));
+		CHECK(read(3.5f) && near(ref.reference(), 3.5f));
+		CHECK(!read(1.5f));
+		CHECK(read(1.5f) && near(err, 2.f));
+		CHECK(!read(3.5f));
+		CHECK(read(3.5f) && near(err, 0.f));  // back through the glass: at the hold point
+	}
+
+	// The same behind the guard's own gate, as the module runs them: the guard takes the
+	// long readings at the second one (it only ever moves the point away from the wall, so
+	// a long reading costs it nothing), the input never does, and the input is back two
+	// readings after the wall is.
+	{
+		WallGuardLimits l{};
+		l.min_standoff_m = 0.7f;
+		l.spike_gate_m = 0.25f;
+		WallGuard g{};
+		g.setLimits(l);
+		RangeReference ref{};
+		ref.setSpikeGate(0.25f);
+		float err = 0.f;
+		float hold[3] = {0.f, 0.f, -2.5f};
+		uint64_t t = 0;
+		const auto read = [&](float range_m) {
+			RangeSample r = range(range_m);
+			r.timestamp_us = NOW - 1000 + ++t;
+			const WallGuardOutput o = g.apply(r, NOW, origin, n_north, bx_north, hold);
+			ref.update(o, r.timestamp_us, 0.f);
+			return ref.error(o, err);
+		};
+
+		CHECK(read(1.5f) && near(err, 0.f));
+
+		for (int i = 0; i < 20; i++) { CHECK(!read(4.2f)); }
+
+		CHECK(!read(1.5f));  // the guard's gate holds the first one back
+		CHECK(read(1.5f) && near(err, 0.f));
+		CHECK(near(hold[0], 0.f) && near(ref.reference(), 1.5f));  // nothing moved
 	}
 
 	// The guard's own spike gate (dust, fog: short returns off the particles). A lone short

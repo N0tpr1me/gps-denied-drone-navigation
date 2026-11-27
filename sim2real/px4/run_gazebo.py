@@ -87,7 +87,7 @@ from sim2real.gazebo.run_scenario import (
     watch_options,
     watch_url,
 )
-from sim2real.gazebo.scenario import load_scenario, sample_scenario
+from sim2real.gazebo.scenario import load_scenario, payload_environment, sample_scenario
 from sim2real.gazebo.verify_trace import verify as verify_wind
 
 HERE = Path(__file__).resolve().parent
@@ -474,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         "commit": commit, "image": args.image, "world": sc.world, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hold_s": args.hold_s, "settle_s": args.settle_s, "disturbance": params_summary(wind),
+        "payload": sc.payload.__dict__,
     }
     if sc.surface_pass is not None:
         config["pass"] = dataclasses.asdict(sc.surface_pass)
@@ -481,7 +482,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, args.hold_s,
                          args.settle_s, args.drift_tol, args.param, args.container_name,
-                         to_environment(px4_params), watch=args.watch, land=args.land,
+                         {**to_environment(px4_params), **payload_environment(sc)},
+                         watch=args.watch, land=args.land,
                          cpuset=args.cpuset, world=sc.world, flight_args=flight_args)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)

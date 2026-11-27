@@ -1,0 +1,110 @@
+# Bring your own drone (docs/airframe-sizes.md): the released policy, v24 and any candidate
+# added by name, against the cascaded PD on the x500, the x500 with a payload and a 300 g
+# quad in the mock (the 3 kg and 16 kg drones: airframe_sizes_big.yaml), all flown through the
+# same PX4 pieces as the Gazebo benchmark (rate loop and filters, 83 Hz tick, EKF2-like fusion
+# on the barometer), so only the vehicle differs:
+#   - the x500 (gz_x500_sitl, 2.06 kg, thrust/weight 1.69),
+#   - the x500 with a 25, 35, 40 and 50 % payload (max thrust unchanged, so thrust/weight
+#     1.35, 1.25, 1.21 and 1.13; inertia up 7 to 15 % for a box just under the frame, as the
+#     Gazebo payload scenarios carry it: sim2real/gazebo/scenarios/*_payload*),
+#   - a 300 g class quad (small_300g: Starling 2's published 285 g, 230 mm, thrust/weight 2.6;
+#     its own rate gains as autotune would give them; envs/structure_hold/airframes.py).
+# A policy trained on the x500 flies the others through the module's own thrust mapping
+# (eval.gate1.ModuleThrustScale), as the module would. The 40 and 50 % payloads hover at a
+# normalised thrust of 0.89 and 0.93, at and above the module's 0.9 clamp: those cells
+# measure the edge. PX4 v1.17's hover thrust estimate stops at 0.8 (MPC_THR_HOVER's top; the
+# 25 % Gazebo hover commanded 0.835 with the estimate at 0.80), so the module's hover
+# reference reads low on a heavy x500: hover_thrust_error -4 to -14 % in the payload cells.
+# Every episode has a forward rangefinder (base_env.range, as gate1_x500_ekf_range_v24.yaml):
+# v24 reads it, v22 and the PD do not and fly exactly as without it.
+#   python -m training.launch --config eval/configs/airframe_sizes.yaml --smoke --device cpu
+#   python -m training.launch --config eval/configs/airframe_sizes.yaml --device cpu
+#   ... --set params.policies.v27=runs/<run>/policy.onnx   # add a candidate (the queue does)
+name: airframe_sizes
+entrypoint: eval.gate1
+seed: 7101  # unused: the seeds are params.seeds
+expected_hours: 0.75  # 8 cells x 3 seeds, 100 s each for v22, v24 and the PD on 4 CPU cores
+gpus: 1
+params:
+  controllers:
+    - name: v22
+      policy: training/policies/structure_hold_v22.onnx  # released
+    - name: v24
+      policy: training/policies/structure_hold_v24.onnx  # wall-range input, release decided
+  gate_controller: v22
+  seeds: [7101, 7102, 7103]  # outside the Gate 1 held-out block (9000-9999)
+  num_envs: 512
+  bootstrap: 2000
+  base_env:
+    airframe: gz_x500_sitl
+    contact_radius_m: 0.40  # the x500's props (eval/configs/gazebo_check.yaml)
+    hold_distance: [1.0, 2.0]
+    range: {present_prob: 1.0, rate_hz: 20.0, noise_std_m: 0.01, noise_frac: 0.005,
+            scale_error: [-0.02, 0.02], outlier_prob: 0.01, dropout_rate_hz: 0.05,
+            dropout_s: [0.2, 2.0]}
+    # The standard estimate corruption (eval rates), stated in full as in Gate 1.
+    estimate:
+      delay_min_s: 0.05
+      delay_max_s: 0.15
+      pos_noise_std_m: 0.02
+      vel_noise_std_mps: 0.05
+      bias_walk_std_m_per_sqrt_s: 0.01
+      bias_max_m: 0.3
+      jump_rate_hz: 0.02
+      jump_min_m: 0.1
+      jump_max_m: 2.0
+      jump_decay_s: 5.0
+      dropout_rate_hz: 0.02
+      dropout_min_s: 0.2
+      dropout_max_s: 3.0
+      dropout_mode: dead_reckon
+      dropout_accel_bias_mps2: 0.3
+    disturbance:
+      # Gate 1's held-out gust schedule; k_quad is left to the airframe (small_300g has its
+      # own, scaled to its frontal area).
+      num_gusts: 2
+      gust_start: [2.0, 16.0]
+      gust_duration: [0.5, 3.0]
+      gust_speed: [2.0, 5.0]
+      turb_sigma: [0.0, 1.5]
+      mean_speed: [0.0, 8.0]
+  rules:
+    p95_headline_reduction: 0.30
+    max_pooled_crash_rate: 0.10
+  cells:
+    - {name: x500, label: "x500 2.06 kg, 0-8 m/s", headline: true}
+    - name: x500_payload25
+      label: "x500 + 25 % payload, 0-8 m/s"
+      env: {airframe_rand: {mass_scale: 1.25, thrust_to_weight_scale: 0.8, inertia_scale: 1.07,
+                            hover_thrust_error: -0.043}}
+    - name: x500_payload35
+      label: "x500 + 35 % payload, 0-8 m/s (hover at 0.88, near the clamp)"
+      env: {airframe_rand: {mass_scale: 1.35, thrust_to_weight_scale: 0.7407, inertia_scale: 1.10,
+                            hover_thrust_error: -0.086}}
+    - name: x500_payload40
+      label: "x500 + 40 % payload, 0-8 m/s (hover at 0.89, at the clamp)"
+      envelope: false
+      env: {airframe_rand: {mass_scale: 1.40, thrust_to_weight_scale: 0.7143, inertia_scale: 1.12,
+                            hover_thrust_error: -0.105}}
+    - name: x500_payload50
+      label: "x500 + 50 % payload, 0-8 m/s (hover above the 0.9 clamp)"
+      envelope: false
+      env: {airframe_rand: {mass_scale: 1.5, thrust_to_weight_scale: 0.6667, inertia_scale: 1.15,
+                            hover_thrust_error: -0.142}}
+    - name: small_300g
+      label: "300 g class, 0-8 m/s"
+      env: {airframe: small_300g, contact_radius_m: 0.18}  # 0.115 m arms + 0.06 m props
+    - name: small_300g_w8
+      label: "300 g class, 8 m/s"
+      env: {airframe: small_300g, contact_radius_m: 0.18, disturbance: {mean_speed: 8.0}}
+    - name: small_300g_hover_err
+      label: "300 g class, hover thrust error +/-15 %"
+      env: {airframe: small_300g, contact_radius_m: 0.18,
+            airframe_rand: {hover_thrust_error: [-0.15, 0.15]}}
+smoke:
+  num_envs: 6
+  bootstrap: 50
+  seeds: [7101]
+  base_env:
+    airframe: gz_x500_sitl
+    episode_length_s: 2.0

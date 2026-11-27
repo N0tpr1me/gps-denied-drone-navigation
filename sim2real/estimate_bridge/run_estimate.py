@@ -66,7 +66,7 @@ from sim2real.gazebo.run_scenario import (
     watch_options,
     watch_url,
 )
-from sim2real.gazebo.scenario import load_scenario, sample_scenario
+from sim2real.gazebo.scenario import load_scenario, payload_environment, sample_scenario
 from sim2real.gazebo.verify_trace import verify as verify_wind
 
 HERE = Path(__file__).resolve().parent
@@ -277,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         "image": args.image, "world": sc.world, "spawn": sc.spawn.__dict__,
         "wall_clearance_m": sc.wall_clearance, "altitude_m": sc.hover.altitude,
         "hover_s": hover_s, "disturbance": params_summary(wind),
+        "payload": sc.payload.__dict__,
     }
     flies_pass = sc.surface_pass is not None
     if flies_pass:
@@ -284,8 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     (out / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     cmd = docker_command(args.image, out, sc.spawn.px4_pose(), sc.hover.altitude, hover_s,
-                         args.container_name, to_environment(px4_params), watch=args.watch,
-                         cpuset=args.cpuset, world=sc.world,
+                         args.container_name,
+                         {**to_environment(px4_params), **payload_environment(sc)},
+                         watch=args.watch, cpuset=args.cpuset, world=sc.world,
                          pass_args=sc.surface_pass.flight_args() if flies_pass else None)
     print("run folder:", out)
     print("$", " ".join(cmd), flush=True)

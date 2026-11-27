@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 
 from envs.disturbance import disturbance_force, wind_velocity
-from sim2real.gazebo.scenario import SCENARIO_DIR, Scenario, load_scenario, sample_scenario
+from sim2real.gazebo.scenario import (
+    SCENARIO_DIR,
+    Scenario,
+    load_scenario,
+    payload_environment,
+    sample_scenario,
+)
 
 NAMES = ["calm_0ms", "wind_4ms", "wind_8ms",
          "wall1m_calm_0ms", "wall1m_wind_4ms", "wall1m_wind_8ms",
@@ -92,6 +98,31 @@ def test_unknown_keys_are_rejected():
         Scenario.from_dict({"name": "x", "wall": {"normal_toward": [0, 0, 0]}})
 
 
+PAYLOADS = [f"{base}_payload{pct}" for base in ("wall1m_calm_0ms", "wall1m_wind_8ms")
+            for pct in (25, 35, 50)]
+
+
+@pytest.mark.parametrize("name", PAYLOADS)
+def test_payload_copies_differ_only_in_name_and_payload(name):
+    # docs/airframe-sizes.md: 25 % and 50 % of the x500's 2.064 kg, same wind and seed.
+    pct = int(name.rsplit("payload", 1)[1])
+    base, heavy = load_scenario(name.rsplit("_payload", 1)[0]), load_scenario(name)
+    assert heavy.payload.mass_kg == pytest.approx(2.0643 * pct / 100, abs=1e-3)
+    assert base.payload.mass_kg == 0.0
+    assert replace(heavy, name=base.name, payload=base.payload) == base
+    assert payload_environment(base) == {}
+    env = payload_environment(heavy)
+    assert float(env["STRUCTURE_HOLD_PAYLOAD_KG"]) == heavy.payload.mass_kg
+    assert float(env["STRUCTURE_HOLD_PAYLOAD_OFFSET_M"]) == 0.05
+
+
+def test_payload_rejects_negative_mass():
+    with pytest.raises(ValueError):
+        Scenario.from_dict({"name": "x", "payload": {"mass_kg": -1.0}})
+    with pytest.raises(TypeError):
+        Scenario.from_dict({"name": "x", "payload": {"kg": 1.0}})
+
+
 def test_old_scenarios_fly_wall_slab_without_a_second_surface():
     sc = load_scenario("wall1m_wind_8ms")
     assert sc.world == "wall_slab" and sc.surface2_normal_toward is None
@@ -173,3 +204,19 @@ def test_pass_block_is_checked_against_the_module_limits():
             Scenario.from_dict({"name": "x", "pass": {"length_m": 5.0, **bad}})
     with pytest.raises(TypeError):
         Scenario.from_dict({"name": "x", "pass": {"lenght_m": 5.0}})
+
+
+@pytest.mark.parametrize("name, up", [("wall1m_draught_up_4ms", 2.0),
+                                      ("wall1m_draught_down_4ms", -2.0)])
+def test_draught_scenarios_are_the_4ms_hold_with_a_vertical_wind(name, up):
+    # docs/environment-factors.md: the same draws as wall1m_wind_4ms, plus the vertical wind,
+    # which sample_params draws last so the horizontal wind, gusts and turbulence stay put.
+    sc, base = load_scenario(name), load_scenario("wall1m_wind_4ms")
+    assert replace(sc, name=base.name, disturbance=base.disturbance) == base
+    p, q = sample_scenario(sc), sample_scenario(base)
+    np.testing.assert_allclose(p.mean_wind[0], (4.0, 0.0, up), atol=1e-12)
+    for f in p.__dataclass_fields__:
+        if f != "mean_wind":
+            np.testing.assert_array_equal(np.asarray(getattr(p, f)), np.asarray(getattr(q, f)))
+    f_up = disturbance_force(p, 0.0, np.array([[sc.spawn.x, 0.0, 2.5]]), np.zeros((1, 3)))
+    assert np.sign(f_up[0, 2]) == np.sign(up)

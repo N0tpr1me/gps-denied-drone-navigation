@@ -452,3 +452,24 @@ As the rule is written it does not go to a release re-fly: the verdict is "does 
 and v22 stays released. Whether a ring this small should count (an absolute floor under the
 relative rule, as the lift rule got on 2026-11-03) is in "Ideas parked" of `docs/decisions.md`
 and is Zain's call; the hold p95 gain, 22 %, is outside seed luck.
+
+### The same recipe on two more seeds (2026-11-26)
+
+The hold benchmark in Gazebo put pass_s0 7 to 15 % ahead of v22 (`docs/surface-passes.md`),
+inside seed luck, so the recipe's other two seeds were checked the same way. Seed 1 is the
+server's run of 2026-11-09 (`20261109-210432_structure_hold_ppo_pass_s1_63a05e0`), seed 2 was
+trained on the server on 2026-11-26 in two parts, the same config with `seed=2`. Their files
+are kept in `/mnt/project-files/surface-passes/seeds/`, not in `training/policies/` (neither
+is a candidate on its own). Same check, same reference, cloud CPU:
+
+| seed | run | p95 (m), v22 0.176 | ratio (interval) | ring, v22 0.0034 | rules | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | `20261110-035256` | 0.137 | 0.78 (0.76 to 0.80) | 0.0038 (+14 %) | 17 of 18 | fails `ring_not_higher` only |
+| 1 | `20261126-153726` | 0.136 | 0.77 (0.75 to 0.79) | 0.0036 (+6 %) | 17 of 18 | fails `ring_not_higher` only |
+| 2 | `20261126-201158` | 0.139 | 0.79 (0.77 to 0.81) | 0.0041 (+21 %) | 17 of 18 | fails `ring_not_higher` only |
+
+So both halves of the verdict are the recipe's, not one seed's: on three seeds it holds 21 to
+23 % tighter than v22 in the check, and on three seeds its 1.2 to 2.2 Hz ring sits 6 to 21 %
+above v22's, always under a twentieth of the 0.1 wobble threshold. Under the rule as written
+none of the three beats v22; with an absolute floor on the ring ("Ideas parked") all three
+would. That is Zain's call.

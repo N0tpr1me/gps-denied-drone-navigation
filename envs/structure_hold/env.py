@@ -97,7 +97,7 @@ from envs.sims.torch_quad import (
     quat_rotate,
     quat_rotate_inverse,
 )
-from envs.structure_hold.config import StructureHoldConfig
+from envs.structure_hold.config import RATE_LOOP_LAG_FLOOR_S, StructureHoldConfig
 from envs.structure_hold.passes import PassPaths
 
 OBS = {
@@ -119,6 +119,10 @@ NUM_OBS_V22 = 21  # v22: plus the engage time
 NUM_ACTIONS = 4
 
 TERM_REASONS = ("none", "contact", "ground", "tilt", "box", "nonfinite", "timeout")
+
+# Readings in a row at a new, shorter wall distance before the one it replaced is forgotten
+# (the module's RANGE_STEADY_READINGS, WallGuard.hpp): 2 s of a 20 Hz rangefinder.
+RANGE_STEADY_READINGS = 40
 
 # The wall: a point on it and the normal pointing from the drone toward it (structure x).
 WALL_POINT = (0.0, 0.0, 0.0)
@@ -252,6 +256,18 @@ class StructureHoldEnv:
         self.range_accepted = torch.full((n,), math.nan, dtype=dt, device=dev)
         self.range_pending = torch.full((n,), math.nan, dtype=dt, device=dev)
         self.range_rejected = torch.zeros(n, dtype=torch.bool, device=dev)
+        # The long-step check (cfg.range.long_step_check): where the estimate was along the
+        # wall normal at the last accepted reading, the distance an unconfirmed shorter step
+        # replaced (NaN: none) with the estimate then, and the readings in a row since.
+        self.range_along = torch.zeros(n, dtype=dt, device=dev)
+        self.range_before = torch.full((n,), math.nan, dtype=dt, device=dev)
+        self.range_before_along = torch.zeros(n, dtype=dt, device=dev)
+        self.range_steady = torch.zeros(n, dtype=torch.long, device=dev)
+        # No reading accepted since the engage: the first step then passes either way
+        # (RangeReference::engage). And, with cfg.range.latch_reference, whether the
+        # reference has been latched from a reading yet (always true without it).
+        self.range_fresh = torch.ones(n, dtype=torch.bool, device=dev)
+        self.range_latched = torch.ones(n, dtype=torch.bool, device=dev)
         self.cos_range_off = math.cos(math.radians(cfg.range.max_off_axis_deg))
         # Surface passes (cfg.surface_pass): the paths, the hold point's velocity, and the
         # pass's own clock (rsl_rl's random episode phase moves episode_time, and a pass must
@@ -481,6 +497,10 @@ class StructureHoldEnv:
             self.glass_frac[env_ids] = t(frac)
             self.glass_through[env_ids] = torch.as_tensor(g.random(n) < frac,
                                                           device=self.device)
+        self.range_before[env_ids] = math.nan
+        self.range_steady[env_ids] = 0
+        self.range_fresh[env_ids] = True
+        self.range_latched[env_ids] = not rc.latch_reference
         take = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         self._take_range(take, self._range_reading())
@@ -541,13 +561,52 @@ class StructureHoldEnv:
         if gate <= 0:
             return
         wall = reading * self._beam_cos()
-        accept = (torch.isnan(self.range_accepted)  # nothing accepted yet this flight
-                  | ((wall - self.range_accepted).abs() <= gate)
-                  | ((wall - self.range_pending).abs() <= gate))
+        first = torch.isnan(self.range_accepted)  # nothing accepted yet this flight
+        near = (wall - self.range_accepted).abs() <= gate
+        agree = (wall - self.range_pending).abs() <= gate
+        step = agree & ~near & ~first
+        rc = self.cfg.range
+        check = rc.long_step_check
+        if check:
+            # A longer step needs the estimate to have moved away from the wall by as much,
+            # or to land back on the distance an unconfirmed shorter step replaced
+            # (RangeReference::update, WallGuard.hpp). NaN compares false, as there.
+            along = self.to_latched(self.estimate_pos) @ self.wall_normal
+            longer = wall > self.range_accepted
+            seen = ((self.range_accepted - wall) - (along - self.range_along)).abs() <= gate
+            back = ((self.range_before - wall)
+                    - (along - self.range_before_along)).abs() <= gate
+            step = step & (self.range_fresh | ~longer | seen | back)
+        # The first reading of a flight is taken at once; where the reference is latched
+        # from it (latch_reference), at the second that agrees, the module's rule at an
+        # engage, so that a stray return is not latched as the wall.
+        accept = (first & agree if rc.latch_reference else first) | near | step
         # A beam that missed the wall (inf) is not a wall: the gate keeps its last finite
         # reference, as the module's does (an unusable sample never reaches its gate).
-        self.range_accepted = torch.where(take & accept & torch.isfinite(wall), wall,
-                                          self.range_accepted)
+        took = take & accept & torch.isfinite(wall)
+        if check:
+            stepped = took & step
+            keep = (stepped & ~self.range_fresh & ~longer & ~seen
+                    & torch.isnan(self.range_before))
+            self.range_before_along = torch.where(keep, self.range_along,
+                                                  self.range_before_along)
+            self.range_before = torch.where(keep, self.range_accepted, self.range_before)
+            self.range_steady = torch.where(stepped, torch.zeros_like(self.range_steady),
+                                            self.range_steady + (took & near).long())
+            drop = ((stepped & (longer | self.range_fresh))
+                    | (self.range_steady >= RANGE_STEADY_READINGS))
+            self.range_before = torch.where(drop, torch.full_like(wall, math.nan),
+                                            self.range_before)
+            self.range_along = torch.where(took, along, self.range_along)
+        self.range_fresh = self.range_fresh & ~took
+        if rc.latch_reference:
+            # The module's latch (RangeReference::update): the hold point's wall distance as
+            # the first accepted reading after the engage measures it, on the estimate.
+            new = took & ~self.range_latched
+            ahead = self.to_latched(self.hold_point - self.estimate_pos) @ self.wall_normal
+            self.range_ref = torch.where(new, wall - ahead, self.range_ref)
+            self.range_latched = self.range_latched | new
+        self.range_accepted = torch.where(took, wall, self.range_accepted)
         self.range_pending = torch.where(take, torch.where(accept, math.nan, wall),
                                          self.range_pending)
         self.range_rejected = torch.where(take, ~accept, self.range_rejected)
@@ -561,7 +620,8 @@ class StructureHoldEnv:
         wall) but is measured on the wall, not on the estimate. Zero while unusable."""
         rc = self.cfg.range
         cos = self._beam_cos()
-        ok = (self.range_present & ~self.range_rejected & (self.range_age <= rc.max_age_s + 1e-6)
+        ok = (self.range_present & ~self.range_rejected & self.range_latched
+              & (self.range_age <= rc.max_age_s + 1e-6)
               & (self.range_meas >= rc.min_m) & (self.range_meas <= rc.max_m)
               & (cos >= self.cos_range_off) & torch.isfinite(self.range_meas))
         err = (self.range_ref - self.range_meas * cos).clamp(-rc.obs_clip_m, rc.obs_clip_m)
@@ -615,6 +675,10 @@ class StructureHoldEnv:
             self.max_thrust_act[env_ids] = t(q.max_thrust * mass * tw)
             self.mass_scale[env_ids] = t(mass)
             self.inertia_scale[env_ids] = t(inertia)
+            if ar.rate_loop_follows_lag:
+                floor = RATE_LOOP_LAG_FLOOR_S
+                self.rate_pid.set_gain_scale(
+                    env_ids, max(q.motor_tau, floor) / np.maximum(tau, floor))
         wy = cfg.wall_yaw_torque
         if wy.active:
             peak = rng.uniform(*wy.peak_nm, size=n)
@@ -676,6 +740,15 @@ class StructureHoldEnv:
                 dtype=self.dtype)
             f = f + (self.amb_unsteady * thrust * near)[:, None] * self.unsteady_noise
         return torch.nan_to_num(f)
+
+    def _down_range(self, state: QuadState) -> torch.Tensor:
+        """The downward rangefinder's height above the ground (``fusion.height_source``
+        range), (N,): the slant along body -z times the tilt's cosine, which over the flat
+        ground is the height itself; NaN past 45 deg of tilt, where EKF2 stops using it."""
+        cos = body_z_world(state.quat)[:, 2]
+        h = torch.nan_to_num(state.pos[:, 2], nan=-1.0)
+        ok = (cos > 0.7071) & (h > 0)
+        return torch.where(ok, h, torch.full_like(h, float("nan")))
 
     def _baro_wind(self, state: QuadState) -> torch.Tensor:
         """How far the barometer's reading has moved since the engage because of the air
@@ -787,8 +860,10 @@ class StructureHoldEnv:
                                 torch.zeros_like(vel_before))
             baro = (self._baro_wind(state) if cfg.ambient.baro_wind and cfg.fusion.baro
                     else None)
+            rng = self._down_range(state) if cfg.fusion.range else None
             self.estimate_pos, self.estimate_vel = self.fusion.step(
-                accel, est.pos, est.vel, ~est.stale, true_pos=state.pos, baro_offset=baro)
+                accel, est.pos, est.vel, ~est.stale, true_pos=state.pos, baro_offset=baro,
+                range_height=rng)
         self.estimate_stale, self.estimate_age = est.stale, est.age
         if self.heading_err is not None:
             self.heading_err.step()
@@ -911,6 +986,11 @@ class StructureHoldEnv:
                                    self.deck_z[ids] - (cfg.contact_radius_m + 0.5))
         self.hold_point[ids] = hold
         self.range_ref[ids] = self.clearance(hold)
+        # A new engage starts the long-step check afresh and, with latch_reference, latches
+        # the reference again at the next accepted reading (RangeReference::engage).
+        self.range_fresh[ids] = True
+        self.range_before[ids] = math.nan
+        self.range_latched[ids] = not cfg.range.latch_reference
         self.last_action[ids] = 0.0
         self.engage_time[ids] = 0.0
         if self.heading_err is not None:  # the module latches its frame again

@@ -56,7 +56,7 @@ row is the target.
 
 - **Same flight code.** `sim2real/auterion/structure_hold_app/include/structure_hold_app/HoldCore.hpp`
   is a ROS-free wrapper around the module's own PX4-free headers: `PolicyController.hpp`
-  (observation, the released policy v22, fallback, yaw guard, setpoint mapping),
+  (observation, the released policy, fallback, yaw guard, setpoint mapping),
   `Watchdog.hpp`, `Handback.hpp` and `ParamLimits.hpp`. A policy release regenerates
   `PolicyWeights.hpp` once and both variants fly it. `test_hold_core.cpp` checks the app's
   setpoints against a bare `PolicyController` value for value.
@@ -86,8 +86,12 @@ row is the target.
 | Settings | PX4 parameters, editable from the ground station | ROS 2 parameters; not visible to the ground station yet |
 | Disarm, NaN guards, parameter clamping, frozen-fix trip, stale trip, fallback | Yes | Yes, same code |
 
-v22, the released policy, needs nothing the app lacks. The wall guard is the first thing to
-add (next steps).
+v24, the released policy since 2026-11-10, reads the forward range as an input. The app
+has no range yet, so the input's usable flag stays off and v24 flies on the estimate alone,
+which the mock scores level with v22 (`docs/wall-range.md`); nothing breaks. For an app
+build without a rangefinder, generate the module header from v22, the fallback
+(`sim2real/px4/README.md`). The wall guard, and with it the range input, is the first thing
+to add (next steps).
 
 ## What runs today, without Auterion hardware or an account
 
