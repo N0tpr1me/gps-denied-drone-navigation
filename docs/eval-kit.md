@@ -69,7 +69,49 @@ the cloud container); `--dry-run` prints the estimate for the machine it runs on
 The first build of the image takes 20 to 40 minutes; ship a saved image
 (`docker save structure-hold/px4-sitl:v1.17.0 -o kit-image.tar`, about 3 GB) to skip it.
 
-### Latest run (2026-11-09, current main, cloud container)
+### Latest run (2026-11-27, v24 in the module, cloud container)
+
+`python -m eval.eval_kit` on main at `0fb68ad` (v24 released in the module, #186, with the
+long-step check of #183), the image brought up to it in place (the module's sources copied
+in and PX4 rebuilt in a container from the previous image, then committed under the same
+tag: the disk had no room for a second unpacked copy). 12 flights one at a time, 23 minutes
+(01:23 to 01:47 UTC), exit 0. Kit folder `runs/20261127-012320_eval_kit_0fb68ad`. One
+flight dipped: tuned PX4's reset flight fell to a real-time factor of 0.22 for one 10 s
+sample while other work ran on the machine, so the reset pair was flown again
+(`runs/20261127-014729_eval_kit_0fb68ad`, both flights at 0.985 or more) and came out the
+same to 1 cm; the table below has the re-flown pair. Every other flight stayed at 0.97 or
+more, except Structure Hold's degrade flight (one sample at 0.72, mean 0.99).
+
+| Fault | Controller | Closest to wall, m | Largest move, m | Lowest height, m | What happened | Better |
+|---|---|---|---|---|---|---|
+| VIO resets to its origin in the air | Structure Hold | 0.96 | 0.07 | 2.44 | no trip, still flying at the end | **about the same**: within 5 cm on wall distance and movement |
+|  | tuned PX4 | 0.97 | 0.08 | 2.48 | still flying at the end |  |
+| VIO process restarts (3 s gap, then reset) | Structure Hold | 0.95 | 0.08 | 2.42 | no trip, still flying at the end | **about the same**: within 5 cm on wall distance and movement |
+|  | tuned PX4 | 0.96 | 0.09 | 2.44 | still flying at the end |  |
+| position link lost for 8 s | Structure Hold | 0.90 | 0.38 | 2.29 | tripped (estimate lost) and handed back, still flying at the end | **Structure Hold**: tuned PX4 touched the wall |
+|  | tuned PX4 | 0.19 (contact) | 9.73 | 0.01 | touched the wall, climbed 2.1 m, dropped 2.5 m, still flying at the end |  |
+| estimate freezes for 5 s | Structure Hold | 0.93 | 0.31 | 2.31 | tripped (estimate frozen) and handed back, still flying at the end | **about the same**: within 5 cm on wall distance and movement |
+|  | tuned PX4 | 0.96 | 0.34 | 2.22 | still flying at the end |  |
+| estimate drifts 0.6 m away from the wall | Structure Hold | 0.95 | 0.30 | 2.39 | no trip, still flying at the end | **Structure Hold**: stayed 0.53 m further from the wall |
+|  | tuned PX4 | 0.42 | 0.59 | 2.48 | still flying at the end |  |
+| dust, fog or low light for 20 s (VIO and rangefinder degrade) | Structure Hold | 0.84 | 0.81 | 1.90 | no trip, dropped 0.6 m, still flying at the end | **Structure Hold**: tuned PX4 touched the wall |
+|  | tuned PX4 | 0.37 (contact) | 0.70 | 2.38 | touched the wall, still flying at the end |  |
+
+Structure Hold better on 3 of 6 faults, tuned PX4 on 0, about the same on 3. Wall contacts:
+Structure Hold 0, tuned PX4 2.
+
+Against the run of 2026-11-09 (v22, below): the same two contacts for tuned PX4 (link loss
+and dust) and none for Structure Hold. Two verdicts moved from "Structure Hold" to "about the
+same", and neither is v24 doing worse. On the freeze, tuned PX4 wandered 0.34 m this time
+against 0.62 m then, so the 5 cm rule called it level; Structure Hold moved 0.31 m both times.
+On the reset, the 9 cm wall margin of the earlier flight is 1 cm now; both moved 7 to 9 cm.
+The drift is the one where v24's range input shows: 0.95 m from the wall, where v22 was
+stopped by the guard at 0.70 m. Dust: 0.84 m from the wall against v22's 0.92, both clear;
+v24 moved further along the wall with the walk (0.81 against 0.47 m), as on the 8 seeds in
+`docs/fault-rates.md` (0 of 8 touched with v24). One seed per cell: read it as a demo, not a
+benchmark.
+
+### Run of 2026-11-09 (v22, current main then, cloud container)
 
 `./evaluate.sh` on current main (`a53005d` plus this change, so with the VIO runaway trip
 of PR #154 in the module), the image rebuilt from it with `cloud_build.sh` (5 minutes with
@@ -180,7 +222,22 @@ It is one self-contained HTML file (no scripts or web fonts) that prints on one 
 No real session exists yet; the tests (`eval/tests/test_partner_report.py`) build one from
 synthetic logs, and the sample below came from Gazebo logs scored through the same path.
 
-### Sample (2026-11-10, Gazebo, not a partner flight)
+### Sample (2026-11-27, Gazebo, v24, not a partner flight)
+
+The same four holds flown again with v24 in the module (image from `0fb68ad`):
+`wall1m_wind_4ms`, seeds 1 and 2, v24 with the rangefinder on `vio_at_engage`, tuned PX4 on
+`vio_at_hover`, `px4_tuned_v2.params` (`runs/20261127-015203_px4_baseline_v24_sample_0fb68ad`
+and `runs/20261127-015613_px4_baseline_tuned_v2_sample_0fb68ad`), written up as a
+`session.yaml` with `truth: gazebo` and the wall at the world origin (`point: [0, 0, 0]`,
+normal `[1, 0, 0]`: the Gazebo truth is in the world frame, the drone spawns at x = -1) and
+scored by `eval.partner_session` with the height offset out. The page says Structure Hold
+held 64 % tighter (p95 0.165 against 0.462 m, worst run 0.178 against 0.695 m), 0 contacts
+and 0 early ends on either side, closest to the wall 0.94 against 0.90 m. The page is
+`/mnt/project-files/eval-kit/sample_benchmark_report.html` (and `.pdf`); the v22 page of
+2026-11-10 is kept beside it. Two holds a side on one wind: a check that the page works,
+not a result; the benchmark is `docs/baseline.md`.
+
+### Sample (2026-11-10, Gazebo, v22, not a partner flight)
 
 To check the whole path on real PX4 logs, four clean 60 s holds were flown in the cloud on
 `wall1m_wind_4ms`, seeds 1 and 2, on current main's image (`run_baseline`, v22 with the
