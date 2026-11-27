@@ -79,6 +79,7 @@ Run folders and the `experiments/LOG.md` lines are dated 2026-11-10.
 | drift | F7 | tuned PX4 | 4 of 8 (seeds 2, 4, 5, 7) | 0.31 m (0.39) | 0.71 m (0.62) | 8 of 8 | failsafe in 0 |
 | degrade | F36 | Structure Hold v22 | 1 of 8 (seed 8) | 0.36 m (0.86) | 0.74 m (0.53) | 8 of 8 | no trip in 8 |
 | degrade | F36 | tuned PX4 | 2 of 8 (seeds 1, 8) | 0.37 m (0.53) | 0.80 m (0.73) | 8 of 8 | failsafe in 0 |
+| degrade | F36 | Structure Hold v24 (2026-11-27) | 0 of 8 | 0.77 m (0.85) | 1.09 m (0.72) | 8 of 8 | no trip in 8 |
 | gps jump | F27 | Structure Hold v22 | 0 of 8 | 0.68 m (0.70) | 0.35 m (0.31) | 8 of 8 | no trip in 8 |
 | gps jump | F27 | tuned PX4 | 8 of 8 (seeds 1, 2, 3, 4, 5, 6, 7, 8) | 0.15 m (0.25) | 16.55 m (5.53) | 4 of 8 | failsafe in 0 |
 | rtk float | F38 | Structure Hold v22 | 0 of 8 | 0.70 m (0.72) | 0.31 m (0.28) | 8 of 8 | no trip in 8 |
@@ -130,9 +131,9 @@ barometer height sat about 0.43 m high, so the drone hovered at 2.07 m true and 
 (2.2 m) never came. It is void and was flown again on 2026-11-26 (same image; the fault fired, 0.69 m closest, 0.28 m moved); the table counts that flight. The anchor would be safer keyed
 to EKF2's own height or set lower; that is in "Next" below rather than changed here.
 
-### What this changes in the failure table (for Zain, not yet in the manual)
+### What this changes in the failure table (safety manual 1.14, for Zain to re-sign)
 
-The safety manual is signed, so these go into it only as a new version for Zain to re-sign:
+These went into the safety manual as version 1.14 (2026-11-27), not yet signed:
 
 | Row | Manual now | 8 seeds in Gazebo |
 | --- | --- | --- |
@@ -140,14 +141,18 @@ The safety manual is signed, so these go into it only as a new version for Zain 
 | F4 | Tuned PX4 touched on 6 of 12 (three winds) | 2 of 8 at 4 m/s; v22 0 of 8, closest 0.92 m (agrees) |
 | F6 | Tuned PX4 wandered 0.46 m | Tuned PX4 flew off and came down on 2 of 8; v22 moved up to 1.24 m along the wall after the trip (row says 0.21 m) |
 | F7 | Tuned PX4 followed it to 0.42 m | Tuned PX4 touched on 4 of 8; v22 0.67 m closest (agrees) |
-| **F36** | **v22 0 of 6 touched, residual 2 with the rangefinder** | **v22 touched on 1 of 8 (0.36 m)**; tuned PX4 2 of 8 |
+| **F36** | **v22 0 of 6 touched, residual 2 with the rangefinder** | **v22 touched on 1 of 8 (0.36 m)**; tuned PX4 2 of 8; v24 (released 2026-11-26) 0 of 8, closest 0.77 m. 1.14: residual 2 with v24, 3 for a v22 build |
 | F27 | Tuned PX4 touched on 3 of 3 | 8 of 8; v22 0 of 8 (agrees) |
 
 ### Next
 
-- The degrade contact: fly `field_degrade` on more seeds with v24 (decided for release on 2026-11-10; its
-  rangefinder input may close the step), look at whether v22 really ignores a hold-point
-  step (a mock test that steps the hold point by 0.5 m), and decide F36's residual.
+- The degrade contact: flown with v24 on the same 8 seeds (2026-11-27, image from `0fb68ad`,
+  run `20261127-010621`): 0 of 8 touched, closest 0.77 m (median 0.85), largest move 1.09 m
+  (median 0.72), no trip, every flight at a real-time factor of 0.92 or more. Its range
+  input keeps it off the wall where v22 stayed short of the guard's moved point; it follows
+  the walk along the wall a little further than v22 (one flight moved 1.09 m, past the
+  runner's 1 m position check). Left: whether v22 really ignores a hold-point step (a mock
+  test that steps the hold point by 0.5 m), which matters only for a v22 build.
 - Key the stock runner's fault anchor to EKF2's height, or lower it, so no flight goes
   without its fault.
 
