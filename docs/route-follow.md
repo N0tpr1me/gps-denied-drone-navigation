@@ -129,7 +129,9 @@ Defaults worth knowing: 4 segments with turns up to 90 degrees and slopes up to 
 (a short route turns less, one piece per 3 m at most); corridors 2 to 4 m wide and 2.4 to 4 m
 tall, tunnels 1.1 to 2 m in radius; cruise 0.5 to 1.5 m/s at 0.5 m/s^2; 30 s episodes with
 the last 5 s a hold on the last waypoint; draft up to 3 m/s along the tunnel; the estimate's
-drift walk and cap raised to 0.02 m/sqrt(s) and 0.5 m (a guess until a tunnel VIO fit).
+drift walk and cap raised to 0.02 m/sqrt(s) and 0.5 m (a guess; TUM-VI, a VIO carried at
+walking pace, fits a walk of 0.018 to 0.021 and a 60 s cap of 0.16 to 0.27 m: `docs/vio-fit.md`
+"Third fit"; a tunnel is still unmeasured).
 
 ```
 python -m training.launch --config training/configs/route_follow_ppo.yaml --smoke --device cpu
