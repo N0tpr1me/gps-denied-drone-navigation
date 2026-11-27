@@ -23,8 +23,19 @@ if [[ "${WATCH:-0}" == "1" ]]; then
     start_viewer
 fi
 
+# A scenario's payload (sim2real/gazebo/scenario.py): fixed under the x500 in its model file
+# before PX4 spawns it; this container is the flight's own, so the edit goes with it.
+add_payload() {
+    if [[ -n "${STRUCTURE_HOLD_PAYLOAD_KG:-}" ]]; then
+        python3 /opt/sitl/add_payload.py "${PX4_DIR}/Tools/simulation/gz/models/x500/model.sdf" \
+            --mass-kg "${STRUCTURE_HOLD_PAYLOAD_KG}" \
+            --offset-down-m "${STRUCTURE_HOLD_PAYLOAD_OFFSET_M:-0.05}"
+    fi
+}
+
 start_px4_background() {
     mkdir -p "${OUT_DIR}"
+    add_payload
     # -d: no interactive shell. PX4 starts gz sim (server only, HEADLESS=1) itself.
     PX4_SYS_AUTOSTART=4001 "${BUILD_DIR}/bin/px4" -d >"${OUT_DIR}/px4.log" 2>&1 &
     PX4_PID=$!
@@ -60,6 +71,7 @@ copy_latest_ulog() {
 
 case "${1:-sitl}" in
     sitl)
+        add_payload
         PX4_SYS_AUTOSTART=4001 exec "${BUILD_DIR}/bin/px4" -d
         ;;
     hover-test)

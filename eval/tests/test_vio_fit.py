@@ -127,6 +127,15 @@ def test_euroc_csv_loader_reads_ns_and_velocity(tmp_path):
     assert traj.vel is not None and traj.vel[1].tolist() == [0.1, 0.2, 0.3]
 
 
+def test_euroc_csv_loader_reads_tumvi_mocap_without_velocity(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_text("#timestamp [ns],p_x,p_y,p_z,q_w,q_x,q_y,q_z\n"
+                    "1000000000,1,2,3,1,0,0,0\n2000000000,1,2,4,1,0,0,0\n")
+    traj = vio_fit.load_euroc_csv(path)
+    assert traj.t.tolist() == [1.0, 2.0]
+    assert traj.vel is None
+
+
 def test_dir_source_resolves_inside_the_repo(tmp_path):
     with pytest.raises(FileNotFoundError):
         vio_fit.ensure_source({"name": "x", "dir": "runs/no_such_folder_for_test"})
@@ -138,3 +147,17 @@ def test_a_flight_with_almost_no_overlap_is_refused_in_plain_words():
     with pytest.raises(ValueError, match="fewer than 20"):
         vio_fit.measure_flight("s", vio_fit.Trajectory(t[tiny], pos[tiny]),
                                vio_fit.Trajectory(t, pos, vel), vio_fit.FitParams())
+
+
+def test_drift_per_distance_reads_a_scale_error_as_a_percentage():
+    # Flying 2 m/s along x for 60 s with a 1 % scale error: every 10 m flown, the error
+    # grows by 0.1 m, so the relative error is 1 % at every distance.
+    t = np.arange(0.0, 60.0, 0.05)
+    truth = np.stack([2.0 * t, np.zeros_like(t), np.ones_like(t)], axis=1)
+    est = truth * np.array([1.01, 1.0, 1.0])
+    f = vio_fit.measure_flight("scale", vio_fit.Trajectory(t, est),
+                               vio_fit.Trajectory(t, truth), vio_fit.FitParams())
+    result = vio_fit.summarise([f], vio_fit.FitParams(), vio_fit.EstimateCorruptionConfig())
+    for dist in ("1", "5", "10", "20"):
+        assert abs(result["drift_per_distance"][dist]["median_pct"] - 1.0) < 0.05
+    assert "drift per distance flown" in vio_fit.format_report(result)

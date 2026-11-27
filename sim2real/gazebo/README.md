@@ -61,8 +61,12 @@ Scenario keys: `name`, `seed`, `world` (a file in `worlds/`, default `wall_slab`
 drone into the structure), `surface2` (optional: `point`, `normal_toward` and `across`, the
 second surface of the wind model, the deck in `bridge_deck`; docs/bridge-holds.md),
 `disturbance` (any `DisturbanceConfig` key), `wind_heading_deg` (direction the mean wind
-blows toward, 0 = +x, optional), `hover` (`altitude`, `hover_s`). The runners fly each
-scenario in its own world and score contacts with both surfaces.
+blows toward, 0 = +x, optional), `hover` (`altitude`, `hover_s`), `payload` (`mass_kg`,
+`offset_down_m`, optional: a rigid box fixed under the x500's base_link, added to the model
+by the image before PX4 spawns it, `sim2real/docker/add_payload.py`; the `*_payload25`,
+`*_payload35` and `*_payload50` scenarios carry 25, 35 and 50 % of its mass,
+`docs/airframe-sizes.md`). The runners fly each scenario in its own world and score contacts
+with both surfaces.
 
 ## Notes
 
