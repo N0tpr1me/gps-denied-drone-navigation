@@ -1,0 +1,27 @@
+# Third fit of envs/estimate to real VIO error (eval/vio_fit.py, docs/vio-fit.md): Basalt (TUM, stereo-inertial optimiser, eval/vio_basalt/)
+# on the six TUM-VI room sequences (TU Munich, handheld, stereo 512x512 at 20 Hz, IMU
+# 200 Hz), against the dataset's motion-capture truth (the IMU's pose). Handheld walking
+# and turning in one room: slower than UZH-FPV, more rotation than EuRoC. The VIO output is
+# made in the cloud container into runs/vio_tumvi/basalt/ (ignored by git), one folder per
+# sequence:
+#   eval/vio_basalt/run_tumvi.sh <tumvi dir> runs/vio_tumvi/basalt
+#   python -m training.launch --config eval/configs/vio_fit_basalt_tumvi.yaml --device cpu
+name: vio_fit_basalt_tumvi
+entrypoint: eval.vio_fit
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.02
+gpus: 1
+params:
+  sources:
+    - name: basalt_tumvi
+      dir: runs/vio_tumvi/basalt
+      pattern: "*"
+      estimate: stamped_traj_estimate.txt
+      truth: truth.csv
+      truth_format: euroc  # mocap0/data.csv: ns, p xyz, q wxyz (no velocity)
+  fit:
+    skip_start_s: 10.0  # VIO initialisation
+    hover_speed_max_mps: 0.3
+    walk_match_s: 20.0
+    cap_horizon_s: 60.0
+smoke: {}

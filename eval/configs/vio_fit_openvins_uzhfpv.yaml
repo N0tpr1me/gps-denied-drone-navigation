@@ -1,0 +1,27 @@
+# Third fit of envs/estimate to real VIO error (eval/vio_fit.py, docs/vio-fit.md): OpenVINS (RPNG, stereo MSCKF filter, eval/vio_openvins/)
+# on the UZH-FPV drone racing flights (University of Zurich, Snapdragon Flight stereo
+# 640x480 at 30 Hz, IMU 500 Hz), against the dataset's Leica total-station truth. Fast
+# flight (3 to 6 m/s through a hangar or a field), so this measures drift per distance and
+# tracking under aggressive motion, not a hover. The truth starts 18 to 47 s after the VIO
+# does, so nothing is skipped at the start. The VIO output is made in the cloud container
+# into runs/vio_uzhfpv/openvins/ (ignored by git), one folder per flight:
+#   eval/vio_openvins/run_datasets.sh runs/vio_uzhfpv/basalt/_layout <tumvi dir> <out>
+#   python -m training.launch --config eval/configs/vio_fit_openvins_uzhfpv.yaml --device cpu
+name: vio_fit_openvins_uzhfpv
+entrypoint: eval.vio_fit
+seed: 0  # unused: the fit draws no random numbers
+expected_hours: 0.02
+gpus: 1
+params:
+  sources:
+    - name: openvins_uzhfpv
+      dir: runs/vio_uzhfpv/openvins
+      pattern: "*"
+      estimate: stamped_traj_estimate.txt
+      truth: truth.txt
+  fit:
+    skip_start_s: 0.0  # the VIO has been running 18 to 47 s when the truth starts
+    hover_speed_max_mps: 0.3
+    walk_match_s: 20.0
+    cap_horizon_s: 60.0
+smoke: {}

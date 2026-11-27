@@ -4,8 +4,11 @@ Every robustness number so far is measured against `envs/estimate`, a VIO model 
 numbers came from papers, not from data (`docs/real-flight-gap.md`, row 1). The plan was one
 logging flight with our own drone (`docs/logging-flight.md`). Since the project went
 software only (`docs/decisions.md`, 2026-10-30), the real VIO error comes from public
-real-drone datasets with ground truth instead. This page is how the fit works, the first
-result, and what it does not cover yet.
+real-drone datasets with ground truth instead. This page is how the fit works, the three
+fits so far (EuRoC, then UZH-FPV and TUM-VI with a second VIO), and what it does not cover
+yet. In one line: near hover the default drift is right or on the safe side, its noise and
+jumps are pessimistic, and drift grows with distance flown (0.3 to 0.5 % at walking pace,
+2 to 5 % racing).
 
 ## The method (`eval/vio_fit.py`)
 
@@ -20,6 +23,7 @@ shift, the standard 4-DoF alignment), takes the error `e(t)` = VIO minus truth, 
 | `jump_*` | A single-step change of `e` above 0.1 m and 8 times the usual step-to-step spread. Rate, size range, and how much is left 5 s later (the decay). |
 | `dropout_*` | A gap between VIO samples longer than 0.2 s and 3 sample periods: a real VIO sends nothing while it has lost tracking. |
 | `vel_noise_std_mps` | VIO velocity minus truth velocity, when the file carries velocity. |
+| (drift per distance) | The 3-D change of `e` over each stretch of 1, 5, 10 and 20 m along the true path, as a % of the stretch. Reported, not a corruptor field: the corruptor's drift is in time. |
 | `delay_*` | **Not measured.** Offline VIO output is stamped with the image time, so it has no latency in it. Latency needs the VIO's processing time on a live run. |
 
 Fields with no events in the data keep their default rather than being switched off: no
@@ -223,11 +227,134 @@ the next policy's training mix (fitted plus standard corruption, `docs/decisions
 The stress run took 73 min on the 4 cloud cores, over its 0.9 h estimate and over the 1 h
 limit; its config now says 1.25 h, so a re-run needs a go-ahead or a split into two halves.
 
+## Third fit: Basalt and OpenVINS on UZH-FPV and TUM-VI (2026-11-26)
+
+Two more datasets and a second VIO, all run in the cloud container (4 cores, no GPU) once
+the dataset hosts were allowed in its network settings:
+
+- **UZH-FPV** (University of Zurich): a racing quadrotor flown by a pilot through a hangar
+  and a field, 16 flights with Leica total-station truth (the IMU's pose), Snapdragon Flight
+  stereo fisheye 640x480 at 30 Hz, IMU 500 Hz. Truth covers 18 to 86 s of each flight, 618 s
+  in all, at 2.8 to 8 m/s (median 5.1 m/s). Laid out for the VIOs by
+  `eval/vio_basalt/prepare_uzhfpv.py` (Kalibr calibration to Basalt's, image stamps moved
+  onto the IMU clock by Kalibr's time shift); `eval/vio_basalt/run_uzhfpv.sh`.
+- **TUM-VI** (TU Munich): a handheld stereo-inertial rig carried through a motion-capture
+  room, the six room sequences (the only ones with truth over the whole run), stereo
+  512x512 at 20 Hz, IMU 200 Hz, 723 to 750 s in all at 0.5 to 1.1 m/s;
+  `eval/vio_basalt/run_tumvi.sh`, Basalt's own TUM-VI calibration and config.
+- **OpenVINS** (University of Delaware, an MSCKF filter, v2.7) beside Basalt (an optimiser):
+  built without ROS in Docker (`eval/vio_openvins/`), fed by our own runner
+  (`run_euroc.cpp`) the way its ROS serial runner reads a bag, with OpenVINS's own config
+  for each dataset. GPL-3.0, evaluation only: nothing from it ships.
+
+Both VIOs ran with the same IMU noise on every dataset: Basalt's (the numbers it ships for
+EuRoC and TUM-VI; OpenVINS's UZH-FPV config uses the same EuRoC values). UZH-FPV's own Kalibr
+file says 0.1 and 0.05, far above a MEMS datasheet; with those Basalt reached 0.69 m ATE on
+indoor_forward_3 against 0.20 m. OpenVINS needed one setting its TUM-VI config itself notes:
+room6 does not start with its room1-5 initialisation threshold (0.45, no pose in 2636
+frames), and does with 0.25.
+
+EuRoC was not run again: its host now answers every request with "too many requests"
+(`www.research-collection.ethz.ch`, 429) and the old `robotics.ethz.ch` mirror is gone, so
+the second fit's EuRoC numbers stand and OpenVINS has no EuRoC run.
+
+Runs `20261126-204558_vio_fit_basalt_uzhfpv`, `-204601_vio_fit_openvins_uzhfpv`,
+`-204601_vio_fit_basalt_tumvi`, `-204602_vio_fit_openvins_tumvi` (`experiments/LOG.md`;
+configs `eval/configs/vio_fit_{basalt,openvins}_{uzhfpv,tumvi}.yaml`):
+
+| | EuRoC, Basalt (second fit) | TUM-VI, Basalt | TUM-VI, OpenVINS | UZH-FPV, Basalt | UZH-FPV, OpenVINS |
+| --- | --- | --- | --- | --- | --- |
+| Flights, VIO seconds | 10, 1135 | 6, 750 | 6, 723 | 16, 618 | 16, 618 |
+| Speed (median of flights) | 0.4 to 1.1 m/s | 1.0 m/s | 1.0 m/s | 5.1 m/s | 5.1 m/s |
+| ATE, median (range) | 0.06 (0.05 to 0.25) m | 0.12 (0.05 to 0.19) m | 0.09 (0.02 to 0.15) m | 0.66 (0.20 to 1.78) m | 0.30 (0.13 to 1.04) m |
+| Lost tracking, gaps, resets | none | none | none (after the room6 setting) | none | none |
+| Drift rms per axis at 1 / 5 / 20 / 60 s, every window | 0.013 / 0.034 / 0.064 / 0.085 m | 0.047 / 0.079 / 0.087 / 0.115 m | 0.042 / 0.061 / 0.066 / 0.089 m | 0.21 / 0.61 / 0.55 / 1.00 m | 0.14 / 0.35 / 0.44 / 1.09 m |
+| Drift at 1 / 5 s, near-hover windows | 0.005 / 0.010 m | 0.008 / 0.017 m | 0.006 / 0.018 m | 0.014 / too few | 0.015 / too few |
+| Drift per distance flown, median (p95), 10 m | not measured | 0.49 (2.1) % | 0.35 (1.6) % | 4.8 (12.7) % | 2.0 (6.7) % |
+| Walk fitted (every window) | 0.009 | 0.021 | 0.018 | 0.057 | 0.029 m/sqrt(s) |
+| Cap (95th percentile of 60 s drift) | 0.19 m | 0.27 m | 0.16 m | 1.63 m | 2.08 m |
+| Position noise | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 m |
+| Velocity noise | 0.017 | 0.059 | 0.054 | 0.24 | 0.15 m/s |
+| Jumps | 6, 0.1 to 0.4 m, stay | none | none | 8, 0.10 to 0.19 m | 5, 0.10 to 0.21 m |
+
+The current defaults for comparison: noise 0.02 m, velocity noise 0.05 m/s, walk 0.01
+m/sqrt(s) (drift 0.030 / 0.036 / 0.053 / 0.082 m at 1 / 5 / 20 / 60 s), cap 0.3 m, jumps 0.1
+to 2 m at 0.02 Hz decaying in 5 s, dropouts 0.2 to 3 s at 0.02 Hz, delay 50 to 150 ms.
+
+"Drift per distance flown" is new in `eval/vio_fit.py`: the 3-D change of the error over each
+stretch of 1, 5, 10 and 20 m along the true path, as a share of the stretch (the relative
+error VIO papers quote, here in the fixed frame the hold sees, so heading error counts).
+
+**What the three datasets say together.**
+
+1. **Drift goes with distance flown, not with time.** At walking pace (TUM-VI) both VIOs drift
+   0.3 to 0.5 % of the distance (median, 10 m stretches); racing at 5 m/s with motion blur
+   (UZH-FPV) 2 to 5 %. A VIO that barely moves drifts least: in near-hover windows TUM-VI's
+   drift at 5 s is 0.017 to 0.018 m, half the default's 0.036 m, and EuRoC's 0.010 m. So for
+   a hold the default walk (0.01 m/sqrt(s)) stays right or on the safe side on all three
+   datasets; the every-window walks of 0.02 (walking) to 0.03 to 0.06 (racing) apply to a
+   VIO that is carried somewhere, which a hold is not.
+2. **The 0.3 m cap holds for a slow VIO, not a fast one.** Over 60 s the 95th percentile is
+   0.16 to 0.27 m at walking pace (0.19 m on EuRoC), 1.6 to 2.1 m racing. A hold never flies
+   60 s at 5 m/s, so the default stands for Structure Hold.
+3. **Noise is pessimistic, velocity noise about right.** No VIO in any dataset has white
+   position noise; the default's 2 cm is a safety margin. Velocity noise is 0.05 to 0.06 m/s
+   at walking pace (the default's 0.05) and 0.02 m/s on EuRoC's slower flights.
+4. **Jumps are small and rare; tracking was never lost.** 0 to 0.013 per second, every one
+   0.1 to 0.4 m, against the default's up to 2 m at 0.02 Hz. On UZH-FPV the "jumps" are
+   single-frame steps of 0.1 to 0.2 m at 5 to 8 m/s, inside error that moves more than that
+   within the next seconds, not resets. None of the 44 runs (22 flights, two VIOs each)
+   lost tracking or left a gap, even racing outdoors; the default's dropouts and large jumps stand for the field faults
+   (`docs/field-faults.md`) and dust (`docs/vio-render.md`) that no public dataset shows.
+5. **The two VIOs agree at walking pace, not racing.** On TUM-VI the walks are 0.021 and
+   0.018 and the drift within about 30 % at every horizon (the 60 s caps differ more, 0.27
+   and 0.16 m); on UZH-FPV OpenVINS (with the configs its authors ship for these flights)
+   drifts half as much as Basalt (with its EuRoC config). The racing numbers are a VIO
+   tuning question as much as a dataset one.
+6. **Processing time** (OpenVINS on the cloud's 4 cores, sharing them with downloads and
+   other runs): a median 10 ms per stereo frame on UZH-FPV and 13 ms on TUM-VI, 95th
+   percentile 21 ms, worst 181 ms. With Basalt's 2.6 ms median on an M4 (second fit), the VIO
+   is still a small part of the default's 50 to 150 ms delay.
+
+**For Route Follow** (`docs/route-follow.md`): its estimate's drift walk was raised to
+0.02 m/sqrt(s) with a 0.5 m cap "until a tunnel VIO fit". TUM-VI is the closest thing yet: a
+VIO carried at 0.5 to 1.1 m/s, Route Follow's cruise of 0.5 to 1.5 m/s. Both VIOs fit 0.018
+to 0.021 over every window, and a 60 s cap of 0.16 to 0.27 m, so the guess matches the walk
+and is on the safe side on the cap. A tunnel (dark, repetitive) is still unmeasured.
+
+**v22 under the TUM-VI fit.** The Gate 1 x500 test set through the fusion, as in the two
+re-checks above, with the estimate fitted to TUM-VI over every window (walk 0.02, cap 0.27 m,
+noise 0, velocity noise 0.057 m/s; no jumps in TUM-VI, so the EuRoC fit's 0.1 to 0.4 m at
+0.01 Hz; delay and dropouts kept): twice the walk of the EuRoC fit, a VIO that is being
+carried about rather than hovering. `eval/configs/gate1_x500_ekf_tumvi_fit_v22.yaml`, run
+`20261126-204602`, 3072 paired episodes per cell, against the cascaded PD (the mock's
+yardstick, not tuned PX4):
+
+| Cell (wind, hold distance) | v22 p95 | PD p95 | v22 vs PD | Under the Basalt EuRoC fit (v22 / PD) |
+| --- | --- | --- | --- | --- |
+| 0 m/s, 1 m | 0.207 | 0.222 | -7 % | 0.177 / 0.190 |
+| 0 m/s, 2 m | 0.208 | 0.228 | -9 % | 0.178 / 0.195 |
+| 4 m/s, 1 m | 0.209 | 0.232 | -10 % | 0.179 / 0.200 |
+| 4 m/s, 2 m | 0.212 | 0.251 | -15 % | 0.183 / 0.222 |
+| 8 m/s, 1 m (headline) | 0.219 | 0.273 | -20 % | 0.192 / 0.252 |
+| 8 m/s, 2 m | 0.237 | 0.340 | -30 % | 0.214 / 0.328 |
+| Pooled | 0.22 | 0.26 | | 0.187 / 0.231 |
+
+No crashes for either. v22 holds tighter than the PD in every cell with confidence intervals
+clear of zero; 5 of 6 cells pass the Gate 1 rules and the headline misses the -30 % bar at
+-20 % (-24 % under the EuRoC fit). Both controllers loosen by about 0.03 m against the
+EuRoC fit, which is the doubled walk, and the order between them does not change. Not a
+gate: Gate 1 stays judged on the standard corruption.
+
+The defaults in `envs/estimate` are not changed by this fit; a change is its own decision.
+
 ## What is still open
 
-- **More raw datasets.** The second fit (Basalt on ten EuRoC flights) added processing time
-  and VIO velocity. Still missing: EuRoC V2_01, tracking loss on genuinely hard data (UZH-FPV's fast flight, TUM-VI's dark rooms and outdoor parts,
-  `rpg.ifi.uzh.ch` and `cdn3.vision.in.tum.de`), and a third VIO (OpenVINS).
+- **More raw datasets.** The third fit added UZH-FPV, TUM-VI's rooms and OpenVINS. Still
+  missing: EuRoC V2_01 and OpenVINS on EuRoC (the ETH host refuses with 429), TUM-VI's
+  corridor, hall, outdoor and slide sequences (truth only at start and end: they would give
+  end-to-end drift over hundreds of metres, not windows), and any tracking loss: no run on
+  the three datasets lost it.
 - **Hover is under-sampled.** Dataset flights move most of the time; only 10 to 45 % of each
   flight is near hover, and 60 s near-hover windows exist in one flight only.
 - **Dust, fog and low light.** No dataset has them; `docs/vio-render.md` renders hold flights

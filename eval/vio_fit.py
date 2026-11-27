@@ -80,12 +80,16 @@ class FitParams:
     # the cap); one flight's slow stretch is one situation, not a sample.
     hover_min_pairs: int = 200
     hover_min_flights: int = 3
+    # Drift per distance flown (the relative error VIO papers quote, in % of the distance):
+    # the error's change between two samples this far apart along the true path.
+    rel_dist_m: tuple[float, ...] = (1.0, 5.0, 10.0, 20.0)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FitParams:
         data = dict(data)
-        if "report_lags_s" in data:
-            data["report_lags_s"] = tuple(data["report_lags_s"])
+        for key in ("report_lags_s", "rel_dist_m"):
+            if key in data:
+                data[key] = tuple(data[key])
         return cls(**data)
 
 
@@ -106,9 +110,13 @@ def load_tum(path: str | Path) -> Trajectory:
 
 
 def load_euroc_csv(path: str | Path) -> Trajectory:
-    """EuRoC ``state_groundtruth_estimate0/data.csv``: ns, p xyz, q wxyz, v xyz, biases."""
+    """EuRoC ``state_groundtruth_estimate0/data.csv``: ns, p xyz, q wxyz, v xyz, biases.
+
+    Also reads the 8-column ``mocap0/data.csv`` (ns, p xyz, q wxyz, no velocity) that TUM-VI
+    ships in the same layout; truth velocity then comes from differencing the position."""
     data = np.loadtxt(path, delimiter=",", comments="#", ndmin=2)
-    return Trajectory(data[:, 0] * 1e-9, data[:, 1:4], data[:, 8:11])
+    vel = data[:, 8:11] if data.shape[1] >= 11 else None
+    return Trajectory(data[:, 0] * 1e-9, data[:, 1:4], vel)
 
 
 def associate(est: Trajectory, gt: Trajectory) -> tuple[Trajectory, np.ndarray, np.ndarray]:
@@ -191,6 +199,8 @@ class FlightStats:
     vel_sq_err: tuple[list[float], int] | None = None
     time_offset_s: float = 0.0
     path_m_per_s: float = 0.0
+    # Per distance (m): |error change| (3-D) over each stretch of that length flown.
+    rel_err_m: dict[float, list[float]] = field(default_factory=dict)
 
 
 def measure_flight(name: str, est: Trajectory, gt: Trajectory, p: FitParams) -> FlightStats:
@@ -256,6 +266,14 @@ def measure_flight(name: str, est: Trajectory, gt: Trajectory, p: FitParams) -> 
             cap_abs = np.abs(d).ravel().tolist()
             cap_abs_hover = np.abs(d[slow]).ravel().tolist()
 
+    rel_err: dict[float, list[float]] = {}
+    for dist in p.rel_dist_m:
+        j = np.searchsorted(path, path + dist)
+        ok = j < len(path)
+        if ok.any():
+            d = e_clean[j[ok]] - e_clean[np.flatnonzero(ok)]
+            rel_err[dist] = np.linalg.norm(d, axis=1).tolist()
+
     vel_sq = None
     if vel is not None:
         dv = vel @ rot.T - gt_vel
@@ -277,6 +295,7 @@ def measure_flight(name: str, est: Trajectory, gt: Trajectory, p: FitParams) -> 
         vel_sq_err=vel_sq,
         time_offset_s=time_offset(t, aligned, gt_vel),
         path_m_per_s=float(path[-1]) / duration,
+        rel_err_m=rel_err,
     )
 
 
@@ -408,6 +427,15 @@ def summarise(flights: list[FlightStats], p: FitParams,
     if vel:
         s = sum(float(np.mean(m)) * n for m, n in vel)
         changes["vel_noise_std_mps"] = math.sqrt(s / sum(n for _, n in vel))
+    rel: dict[str, Any] = {}
+    for dist in p.rel_dist_m:
+        errs = np.concatenate([np.asarray(f.rel_err_m.get(dist, [])) for f in flights] or [[]])
+        if errs.size:
+            rel[f"{dist:g}"] = {"rms_pct": 100.0 * math.sqrt(float((errs**2).mean())) / dist,
+                                "median_pct": 100.0 * float(np.median(errs)) / dist,
+                                "p95_pct": 100.0 * float(np.percentile(errs, 95)) / dist,
+                                "stretches": int(errs.size),
+                                "flights": sum(1 for f in flights if f.rel_err_m.get(dist))}
     kept = sorted({f for f in asdict(base)} - set(changes))
     proposal = replace(base, **changes)
     return {
@@ -419,6 +447,7 @@ def summarise(flights: list[FlightStats], p: FitParams,
         "current": asdict(base),
         "kept": kept,
         "fits": fits,
+        "drift_per_distance": rel,
         "gaps_s": gaps,
         "jumps_m": jumps,
         "jump_remaining": remaining,
@@ -446,6 +475,10 @@ def _flight_row(f: FlightStats, p: FitParams) -> dict[str, Any]:
     for lag in p.report_lags_s:
         if lag in sf:
             row[f"drift_rms_{lag:g}s_m"] = math.sqrt(sf[lag])
+    for dist, errs in f.rel_err_m.items():
+        if errs:
+            row[f"drift_rms_{dist:g}m_pct"] = 100.0 * math.sqrt(float(np.mean(np.square(errs))
+                                                                     )) / dist
     return row
 
 
@@ -500,6 +533,12 @@ def format_report(result: dict[str, Any]) -> str:
         for lag, c in fit["drift_rms_m"].items():
             lines.append(f"  {lag:>4s} s: {c['measured']:.3f} / {c['model']:.3f} / "
                          f"{c['current_default']:.3f} m  ({c['pairs']})")
+    if result.get("drift_per_distance"):
+        lines.append("drift per distance flown, 3-D, % of the distance "
+                     "(rms / median / p95, stretches, flights):")
+        for dist, c in result["drift_per_distance"].items():
+            lines.append(f"  {dist:>4s} m: {c['rms_pct']:.2f} / {c['median_pct']:.2f} / "
+                         f"{c['p95_pct']:.2f} %  ({c['stretches']}, {c['flights']})")
     lines.append(f"proposal from {result['used_windows']} windows, cap from "
                  f"{result['cap_windows']} windows (current -> fitted):")
     for k, v in result["proposal"].items():
